@@ -141,7 +141,7 @@ class TestChatCompletions:
         assert "choices" in data
 
     def test_cost_header(self):
-        """Verify X-Cost-Estimate header is returned."""
+        """Verify X-Estimated-Cost header is returned."""
         data = json.dumps({
             "messages": [{"role": "user", "content": "hi"}],
         }).encode("utf-8")
@@ -152,11 +152,11 @@ class TestChatCompletions:
         )
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
-                cost = resp.headers.get("X-Cost-Estimate")
+                cost = resp.headers.get("X-Estimated-Cost")
                 assert cost is not None
                 assert resp.status == 200
         except urllib.error.HTTPError as e:
-            cost = e.headers.get("X-Cost-Estimate") if hasattr(e, 'headers') else None
+            cost = e.headers.get("X-Estimated-Cost") if hasattr(e, 'headers') else None
             # Provider failure is acceptable — we're testing the header, not availability
             if e.code in (502, 503):
                 assert cost is not None  # header still set

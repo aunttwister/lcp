@@ -369,6 +369,11 @@ class LCPHandler(BaseHTTPRequestHandler):
         try:
             body = self._read_body()
 
+            # Validate body has messages
+            if not isinstance(body.get("messages"), list) or len(body.get("messages", [])) == 0:
+                self._send_json({"error": "missing required field: messages"}, 400)
+                return
+
             # Tool stripping
             body, blocked_tools = strip_forbidden_tools(body, profile_cfg.get("forbidden_tools"))
 
@@ -461,7 +466,17 @@ class LCPHandler(BaseHTTPRequestHandler):
             cost_info = {"prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0,
                          "cache_miss_tokens": 0, "cost": 0, "latency_ms": 0}
             record_cost(self.engine, profile, "unknown", "unknown", cost_info, False, "all_providers_failed", [])
-            self._send_json({"error": str(e)}, 502)
+            # Send error response with cost estimate header if available
+            body_bytes = json.dumps({"error": str(e)}).encode("utf-8")
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", len(body_bytes))
+            if hasattr(self, '_pending_headers') and self._pending_headers:
+                estimation_cost = self._pending_headers.get("X-Estimated-Cost", "0")
+                self.send_header("X-Estimated-Cost", estimation_cost)
+                self.send_header("X-LCP-Cache", "MISS")
+            self.end_headers()
+            self.wfile.write(body_bytes)
         except Exception as e:
             logger.error("unhandled_error", error=str(e), traceback=traceback.format_exc()[-500:])
             self._send_json({"error": "internal error"}, 500)

@@ -85,7 +85,7 @@ class TestDoGet:
         LCPHandler.config = MagicMock()
         LCPHandler.config.pricing = []
         LCPHandler.config.providers = {}
-        LCPHandler.config.profiles = {"l2": {}, "l1": {}}
+        LCPHandler.config.profiles = {"l2": {"chain": [], "forbidden_tools": []}, "l1": {"chain": [], "forbidden_tools": []}}
         LCPHandler.config.circuit_breaker = {
             "failures_dead": 5, "dead_cooldown_seconds": 300,
             "failures_degraded": 3, "degraded_cooldown_seconds": 60,
