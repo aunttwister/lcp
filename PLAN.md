@@ -1,262 +1,277 @@
-# LLM Control Plane — Project Plan
+# Task: LLM Control Plane (lcp)
 
-> Self-hosted LLM gateway proxy for Hermes Agent. Provider routing, cost tracking, tool permission enforcement, circuit breaking.
+Created: 2026-06-18
+Status: in_progress (Phases 1-4 ✅ resolved, 5-7 in_progress, 8 open)
+Merged from: llm-gateway-router (completed Phases 1-3), llm-cost-tracking, os-sandboxing
+Name chosen: llm-control-plane (lcp) — "control plane" as in the networking architecture term: routes traffic, enforces policy, manages state.
+Active consideration: Replace with https://github.com/theopenco/llmgateway (TypeScript, 1.3K stars) — see replacement task.
 
-**Repo:** `github.com/aunttwister/smallm-gw`
-**Stack:** Python 3.11+, SQLite + Alembic, stdlib `http.server`, Docker, Chart.js
-**Dev instance:** `http://localhost:8735/` (container `llm-control-plane-dev`)
-**Prod instance:** `http://localhost:8734/` (container `llm-cost-tracker`, single-file proxy — DO NOT TOUCH)
+## North Star
+
+A self-hosted LLM management gateway that a homelab operator or small team deploys to:
+- **Control costs** — per-user credit limits, per-team budgets, cost breakdown
+- **Enforce permissions** — tool stripping per profile/team (no open-source gateway has this)
+- **Track utilization** — who's using what, time-series analytics
+- **Route intelligently** — provider chains with circuit breaker, automatic fallback
+
+**What's already live** (Phases 1-3, deployed on production host):
+- Python stdlib HTTP proxy, single Docker container, port :8734, SQLite
+- URL-path profile routing (`/l2`, `/l1`, `/career`, `/cron`)
+- Tool stripping per profile (L2: write_file/patch/cronjob blocked; L1: everything except read; Cron: all tools blocked)
+- Provider chains with automatic fallback (opencode → deepseek)
+- Circuit breaker with provider health tracking
+- Cost tracking per profile with cache hit/miss breakdown
+- Server-rendered HTML dashboard at :8734/
+- /health and /v1/models endpoints
+
+## Legacy Completed Phases (from llm-gateway-router)
+
+### Phase 1: URL-path gateway + tool stripping + fallback ✅
+**Status: resolved** (completed June 15-16)
+**Resolution:** Deployed on production host (`/opt/lcp/`). Docker container on :8734 with 4 profiles:
+- `/l2` → strip write_file/patch/cronjob → chain: opencode(v4-pro) → deepseek(v4-pro)
+- `/l1` → strip terminal/write_file/patch/execute_code/cronjob/memory → chain: opencode(v4-flash) → deepseek(v4-flash)
+- `/career` → strip all except web_search/session_search → deepseek(v4-flash)
+- `/cron` → strip ALL tools → deepseek(v4-flash)
+
+### Phase 2: Provider health tracking ✅
+**Status: resolved** (completed June 16)
+**Resolution:** Circuit breaker with track failures, skip unhealthy providers. /health endpoint shows provider status.
+
+### Phase 3: Cost dashboard ✅
+**Status: resolved** (completed June 16-17)
+**Resolution:** Server-rendered HTML page at :8734/ showing daily costs per profile. SQLite database with cost data including cache hit/miss breakdown.
 
 ---
 
-## Architecture
+## Remaining Phases (Productization)
 
-```
-Hermes Agent → LCP Gateway (:8735) → [OpenCode Zen/Go → DeepSeek fallback]
-                     │
-                     ├── Tool stripping (per-profile forbidden_tools)
-                     ├── Circuit breaker (degraded/dead cooldowns)
-                     ├── Prompt cache (hash-based, in-memory)
-                     ├── Token verification (provider vs local estimate)
-                     ├── Cost tracking (SQLite, per-request)
-                     └── Dashboard (server-rendered HTML + Chart.js)
-```
+### Phase 4: Config-Driven Chains & Code Quality ✅
+**Problem:** Providers hardcoded in Python dict. No YAML config. Code is a single script.
+**Status:** resolved (2026-06-19 — previously marked "open" but all items were already deployed)
+**Resolution:** All 4 goals achieved:
+1. ✅ YAML config (`config/gateway.yaml`) — profiles, providers, chains, forbidden_tools, pricing, circuit_breaker
+2. ✅ Separate modules: `config.py`, `router.py`, `cost_estimator.py`, `models.py`, `prompt_cache.py`, `token_verifier.py`, `logging_config.py`, `exceptions.py`
+3. ✅ Structured logging (`logging_config.py` → structlog), LCPError hierarchy (`exceptions.py`)
+4. ✅ Config hot-reload (5-second polling, no restart needed)
 
-**Key design decisions:**
-- **No external deps** except Python stdlib + SQLite + Chart.js CDN
-- **Single Docker container**, no Redis, no PostgreSQL, no TypeScript
-- **Fails-open tool blocking** (legacy `strip_forbidden_tools`) → migrating to **fails-closed** (Phase 7)
-- **Config hot-reload**: edit `config/gateway.yaml` + `touch` → live in seconds
-- **Dashboard**: server-rendered HTML f-strings, no frontend build step
+### Phase 5: Multi-Tenant — Users, Teams, Credit Limits
+**Problem:** No user/team model. No API key auth. No credit enforcement.
+**Status:** in_progress — schema defined, NOT wired to runtime
+**Features this addresses:** ① Credit limits per user (admin-set), ② Teams
+**What exists:** SQLite schema deployed in dev DB (`teams`, `users` tables with FK, `audit_logs` table). Dev DB seeded with 3 teams + 6 users.
+**What's missing:**
+1. ✅ SQLite schema: `teams` (id, name, monthly_budget), `users` (id, team_id, credit_limit, api_key_hash, is_admin)
+2. ❌ API key authentication (profiles still use URL paths — no `Authorization: Bearer lcp-...` parsing)
+3. ❌ Admin API to set/change credit limits per user
+4. ❌ Credit enforcement: reject request when user over their limit
+5. ❌ Team budget enforcement: reject when team over monthly budget
+6. ❌ Admin can create/manage teams and assign users
 
----
+### Phase 6: Dashboard Upgrade — Time Series & Utilization
+**Problem:** Current dashboard is server-rendered HTML showing daily totals. No time series, no per-user breakdown.
+**Status:** in_progress — 6a complete, 6b+6c in progress
+**Features this addresses:** ⑤ Nice dashboards with time series data
 
-## Phases
+**6a — Sidebar Drawer + Fixed Charts ✅ (2026-07-01)**
+- Collapsible 240px sidebar, push-mode desktop, overlay mobile
+- Profile nav links with active state
+- localStorage persistence for collapsed state
+- Chart fix: removed `height="80"`, added `.chart-container { min-height: 280px; }`
 
-### Phase 1-2: Scaffold ✅
-- Project layout, Dockerfile, `docker-compose.yml`
-- `config/gateway.yaml` with profiles, providers, pricing, circuit breaker
-- Alembic migrations, SQLAlchemy models
+**6b — Per-Profile View Flipping (next)**
+- "Per Profile" toggle flips charts from single stacked bar → grouped bars per profile
+- Summary cards switch from totals → per-profile cards
+- URL state preserved (`?view=per-profile`)
 
-### Phase 3: Models ✅
-- `models.py`: `Request` table (14 columns: id, timestamp, profile, model, provider, prompt_tokens, completion_tokens, cache_hit_tokens, cache_miss_tokens, cost, latency_ms, success, error_type, tools_blocked)
-- `cost_estimator.py`: tiktoken-based token counting
-- `prompt_cache.py`: hash-based semantic cache with TTL
-- `token_verifier.py`: provider usage vs local estimate comparison
-- `router.py`: dynamic flash↔pro routing by token count
+**6c — Provider Configuration UI ✅ (2026-07-02)**
+- Sidebar tree: Profiles → Providers → Models with health dots
+- Provider edit modal: click edit icon → edit URL/key env/models + test connection + save
+- Provider CRUD modal (from sidebar "Providers" link): add/delete providers, drag-and-drop fallback chains per profile, "Save All Chains"
+- Dashboard cleanup: Provider Health section removed, sidebar tree replaces it
 
-### Phase 4: Server ✅
-- `main.py` (~2,985 lines): `ThreadingHTTPServer` + `LCPHandler`
-- Routes: `/health`, `/v1/models`, `/errors`, `/cache/stats`, `/metrics`, `/export`, `/api/daily-costs`, `/api/recent-requests`, `/` (dashboard)
-- Chat proxy: `/{profile}/chat/completions` → `try_chain()` → provider forwarding
-- `strip_forbidden_tools()`: per-profile deny-list, fails open
-- `calculate_cost()`: token usage → USD using pricing table
-- `record_cost()`: SQLite INSERT with full cost breakdown
-- Circuit breaker state machine: healthy → degraded → dead → cooldown → probe
-- `proxy.py` (1,377 lines): standalone single-file version (legacy prod)
+**What's missing (blocked on Phase 5):**
+4. ❌ Per-user utilization: request counts, token consumption, cost breakdown
+5. ❌ Budget/credit status: progress bars showing usage vs limit
+6. ❌ Single-page admin view with all teams and users
+7. ❌ Latency distribution / error-rate-over-time charts (can be done independently)
 
-### Phase 5: Intelligence ❌ NOT STARTED
-**Multi-tenant auth, API keys, credit enforcement.**
+### Phase 7: Permission Matrix — Fails-Closed Rule Engine
+**Problem:** Current tool stripping uses flat `forbidden_tools` lists per profile. Fails open: any new tool added to Hermes passes through silently. No cross-cutting blocks. Maintainer must update every profile when a new dangerous tool is added.
+**Status:** in_progress — design approved, implementation pending
+**Inspiration:** [`@gotgenes/pi-permission-system`](https://www.npmjs.com/package/@gotgenes/pi-permission-system) (agent-side permission enforcement for Pi coding agent). Adopted: fails-closed default-deny, cross-cutting layers, last-match-wins evaluation. Rejected: `ask` state (no UI in gateway), bash command parsing (gateway doesn't see bash), file-path matching (gateway only sees tool names in API body).
 
-- Alembic schema exists (users, teams, API keys tables)
-- No code yet
-- Scope: per-user API keys, team credit limits, usage quotas, key revocation
-- This is the biggest remaining piece
+**Design (2026-06-27):**
 
-### Phase 6: Observability ✅
-**Dashboard, charts, provider management.**
+Three architectural changes from current `forbidden_tools`:
 
-- **6a**: Sidebar tree (Profiles → Providers → Models), Chart.js time-series (daily costs), collapsible sidebar with mobile overlay
-- **6b**: Per-profile chart toggles, aggregate/per-profile/per-model view flipping, server-side data pivot
-- **6c**: Provider Configuration CRUD (modal dialog):
-  - Add/edit/delete providers
-  - 6 built-in presets (DeepSeek, OpenCode, OpenAI, Anthropic, Groq, xAI)
-  - Test Connection button (real API call)
-  - Per-profile fallback chain management (drag-and-drop reorder via SortableJS)
-  - Profile API key management (generate/revoke per profile)
-  - All persisted to `gateway.yaml` with atomic write + hot-reload
+1. **Fails-closed** — default `deny` for all profiles. A tool passes ONLY if explicitly listed in `allow`. New Hermes tools are blocked by default until admin whitelists them.
+2. **Cross-cutting `blocked_globally` layer** — deny rules that no profile can override. `cronjob: deny` here means even an admin profile can't schedule through the gateway.
+3. **Last-match-wins per profile** — broad catch-all first (`"*": deny`), specific overrides after. Deterministic, predictable.
 
-### Phase 7: Permission Matrix 🔶 DESIGN APPROVED — NOT IMPLEMENTED
-**Replace `strip_forbidden_tools()` with fails-closed rule engine.**
+Binary model only (`allow` / `deny`). No `ask` — gateway is headless, no UI to prompt.
 
-Design reference: `references/pi-permission-system-analysis.md` (based on `@gotgenes/pi-permission-system` v16.2.1)
+**Config structure (proposed `gateway.yaml` section):**
 
-**Approved design:**
-```
+```yaml
 permission_matrix:
-  blocked_globally:           # Cross-cutting — no profile can override
+  # Layer 1: Cross-cutting — cannot be overridden by any profile
+  blocked_globally:
     - cronjob
-    - skill_manage
+    - skill_manage        # No profile modifies skills through gateway
+
+  # Layer 2: Per-profile rules — last-match-wins within block
   profiles:
+    l1:
+      default: deny
+      allow:
+        - read_file
+        - search_files
+        - session_search
     l2:
-      rules:
-        - "*": deny            # Fails-closed default
-        - terminal: allow
-        - execute_code: allow
-        - read_file: allow
-        - search_files: allow
-        - web: allow
-        - ...
-      tools:
+      default: deny
+      allow:
+        - read_file
+        - search_files
+        - session_search
+        - write_file
+        - patch
         - terminal
+        - memory
         - execute_code
-        ...
+        - delegate_task
+        - skill_view
+        - clarify
+        - todo
+    career:
+      default: deny
+      allow:
+        - web_search
+        - session_search
+    cron:
+      default: deny
+      allow: []           # Cron calls zero tools through gateway
 ```
 
-**Key principles:**
-- **Fails-closed**: default `deny` per profile. New Hermes tools blocked until whitelisted.
-- **Binary model**: `allow` / `deny` only. No `ask` — gateway is headless.
-- **`blocked_globally`**: deny rules no profile can override.
-- **Last-match-wins** per profile: broad catch-all first (`"*": deny`), specific overrides after.
+**vs current `forbidden_tools` approach:**
 
-**Implementation order:**
-1. Config parser: extend `config.py` → `apply_permission_matrix()`
-2. Tool gate: replace `strip_forbidden_tools()` call site in `main.py`
-3. Config migration: convert existing `forbidden_tools` → allow-list for all 4 profiles
-4. Dashboard: read-only permission matrix view per profile
-5. Admin API (future): PUT endpoint to edit rules per profile (requires Phase 5 auth)
+| Aspect | Current (forbidden_tools) | New (permission_matrix) |
+|---|---|---|
+| Default | Pass-through (fails open) | Deny (fails closed) |
+| New tool added to Hermes | Silently passes through | Blocked until whitelisted |
+| Cross-cutting blocks | Repeat `cronjob` in every profile | `blocked_globally` once |
+| Profile maintenance | Maintain growing deny list per profile | Maintain explicit allow list |
+| Audit surface | "What tools are blocked?" | "What can this profile do?" — easier to reason about |
 
-### Phase 8: Agent Infrastructure ❌ NOT STARTED
-**OS-level sandboxing + git token broker.**
+**To build:**
+1. **Config parser:** Extend `config.py` to load `permission_matrix` from `gateway.yaml`, merge global + profile layers, produce final `allow` set per profile
+2. **Tool gate:** Replace `strip_forbidden_tools()` with `apply_permission_matrix()` — fails-closed, checks global deny first, then profile allow list
+3. **Config migration:** Convert existing `forbidden_tools` to allow-list format for all 4 profiles (l2, l1, career, cron)
+4. **Admin dashboard section:** Read-only view showing per-profile permission matrix (Phase 6 dashboard upgrade)
+5. **Admin API (future):** PUT endpoint to edit allow/deny rules per profile (requires Phase 5 auth first)
 
-- Gateway provides "what tools can this agent use" policy enforcement
-- OS sandboxing via systemd cgroups handled by separate `os-sandboxing` task
-- GitHub token broker: gateway issues scoped, time-limited repo tokens per agent profile
-- Heavy effort, separate from gateway core
+**Remaining Phase 7 items (not permission matrix):**
+6. **Rate limiting:** Token bucket per user + global rate cap
+7. **Audit log:** Wire up runtime logging — every request logged with user, model, tokens, cost, tools blocked, latency (schema exists: `audit_logs` table)
+8. **Notifications:** Webhook/email alerts on budget exhaustion, provider failure
+9. **Access control:** Admin vs viewer roles on dashboard
 
----
+### Phase 8: Agent Permission Infrastructure — Daemon Socket
+**Problem:** Daemon socket permissions are an adjacent service to the gateway. The gateway provides tool policy; the OS enforces sandboxing.
+**Status:** open
+**Features this addresses:** ③ Daemon socket permission limiting
+**Approach:**
+1. Gateway provides the "what tools can this agent use" enforcement. The OS-level sandboxing (systemd service with restricted capabilities, cgroups) is a separate task (from `os-sandboxing` — completed).
 
-## Project Layout
+## Feature → Phase Mapping
+
+| Feature | Phase | What gets built |
+|---|---|---|
+| ① Credit limits per user (admin-set) | Phase 5 | User model + credit_limit column + enforcement |
+| ② Teams/groups | Phase 5 | Team model + team budgets + user assignment |
+| ③ Daemon socket permission limiting | Phase 8 | Integration point — gateway provides tool policy, OS enforces sandbox |
+| ⑤ Nice dashboards / time series | Phase 6 | Chart.js embedded charts + per-user utilization views |
+
+## Current Architecture (Phases 1-4)
 
 ```
-/opt/lcp/
-├── Dockerfile                  # Python 3.11-alpine, pip + apk build deps
-├── docker-compose.yml          # Single service: llm-control-plane-dev (:8735→:8734)
-├── pyproject.toml              # pytest config
-├── alembic.ini                 # DB migration config
-├── config/
-│   └── gateway.yaml            # Profiles, providers, pricing, circuit breaker (hot-reload)
-├── alembic/
-│   ├── env.py
-│   └── versions/
-│       └── 001_initial_schema.py
-├── src/
-│   ├── main.py                 # HTTP server (~2,985 lines) — all routes + dashboard
-│   ├── config.py               # YAML loading, hot-reload, pricing table
-│   ├── models.py               # SQLAlchemy models, get_engine(db_path), get_session(engine)
-│   ├── cost_estimator.py       # tiktoken-based token counting
-│   ├── prompt_cache.py         # Hash-based semantic cache with TTL
-│   ├── router.py               # Dynamic routing: flash↔pro by token count
-│   ├── token_verifier.py       # Provider usage vs local estimate comparison
-│   ├── exceptions.py           # LCPError hierarchy
-│   └── logging_config.py       # structlog setup
-├── proxy.py                    # Standalone single-file version (legacy prod on :8734)
-├── aggregate.py                # Daily cost aggregation script
-└── tests/                      # 13 files, 118 tests (100% passing as of 2026-07-10)
-    ├── test_config.py          # 11 tests
-    ├── test_main.py            # 12 tests (tool stripping, cost calc, health keys)
-    ├── test_main_core.py       # 8 tests (record_cost, forward_request, try_chain)
-    ├── test_main_health.py     # 9 tests (circuit breaker state machine)
-    ├── test_handler_inprocess.py  # 13 tests (do_GET/do_POST in-process)
-    ├── test_integration.py     # 17 tests (HTTP against live :8735)
-    ├── test_models.py          # 7 tests
-    ├── test_cost_estimator.py  # 7 tests
-    ├── test_exceptions.py      # 11 tests
-    ├── test_prompt_cache.py    # 6 tests
-    ├── test_router.py          # 6 tests
-    ├── test_token_verifier.py  # 6 tests
-    └── test_logging_config.py  # 4 tests
+                          ┌─────────────────────────────────┐
+Hermes profiles ────────► │  LLM Gateway (:8734)             │
+                          │                                  │
+L2 → /l2/chat/completions│  URL Router     Tool Stripper     │
+L1 → /l1/chat/completions│  (profile→chain) (blocked tools)  │
+Career → /career/...     │                                  │
+Cron → /cron/...         │  Circuit Breaker   Cost Tracker   │
+                          │  (provider health) (SQLite)      │
+                          │                                  │
+                          │  Dashboard (:8734/)              │
+                          │  (daily costs per profile)       │
+                          └─────────────────────────────────┘
+                                      │
+                          ┌───────────┼───────────┐
+                          ▼           ▼           ▼
+                      DeepSeek    OpenCode     (more)
 ```
 
----
+## Target Architecture (Phases 4-8)
 
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/` | HTML dashboard (all profiles) |
-| GET | `/{profile}/dashboard` | Per-profile dashboard |
-| GET | `/health` | JSON health + per-provider circuit breaker state |
-| GET | `/v1/models` | Available models (OpenAI-compat) |
-| GET | `/errors` | Recent errors |
-| GET | `/cache/stats` | Prompt cache hit/miss stats |
-| GET | `/metrics` | Prometheus-compatible |
-| GET | `/export?limit=N` | CSV cost data export |
-| GET | `/api/daily-costs` | JSON daily costs |
-| GET | `/api/recent-requests` | JSON recent requests |
-| GET | `/api/providers` | List providers + chains |
-| POST | `/api/providers` | Create/update provider |
-| GET | `/api/providers/presets` | 6 built-in provider presets |
-| POST | `/api/providers/test` | Test provider connection |
-| PUT | `/api/providers/<name>` | Update provider |
-| DELETE | `/api/providers/<name>` | Remove provider |
-| PUT | `/api/chains/<profile>` | Reorder fallback chain |
-| GET | `/api/profiles` | List profiles |
-| POST | `/api/profiles` | Create new profile |
-| GET | `/api/keys` | List API keys |
-| POST | `/api/keys` | Generate new key |
-| DELETE | `/api/keys/<id>` | Revoke key |
-| POST | `/{profile}/chat/completions` | Chat proxy (profile-scoped) |
-| POST | `/{profile}/v1/chat/completions` | Chat proxy (v1 compat) |
-
----
-
-## Test Conventions
-
-```bash
-cd /opt/lcp
-
-# Full suite (118 tests)
-python3 -m pytest tests/ -v --tb=short
-
-# With coverage
-python3 -m pytest tests/ -v --cov=src --cov-report=term-missing
-
-# Integration only (requires live dev container on :8735)
-LCP_TEST_URL=http://localhost:8735 python3 -m pytest tests/test_integration.py -v
-
-# In-process only (no container needed)
-python3 -m pytest tests/test_handler_inprocess.py tests/test_main.py tests/test_main_core.py tests/test_main_health.py -v
+```
+                          ┌──────────────────────────────────────┐
+Agent authenticates ────► │  LLM Management Gateway (:8734)       │
+with API key              │                                      │
+                          │  ┌────────────────────────────────┐  │
+                          │  │ Auth Layer (API key → user map) │  │
+                          │  ├────────────────────────────────┤  │
+                          │  │ Credit Enforcer                 │  │
+                          │  │ (user credit + team budget)     │  │
+                          │  ├────────────────────────────────┤  │
+                          │  │ Permission Engine (Phase 1)     │  │
+                          │  │ (tool allow/deny per team)      │  │
+                          │  ├────────────────────────────────┤  │
+                          │  │ Router + Circuit Breaker (Ph1)  │  │
+                          │  │ (YAML config, provider health)  │  │
+                          │  ├────────────────────────────────┤  │
+                          │  │ Cost Tracker (Phases 1-2)       │  │
+                          │  │ (SQLite: tokens, $, cache)      │  │
+                          │  ├────────────────────────────────┤  │
+                          │  │ Audit Log (Phase 7)             │  │
+                          │  │ (every request + tools blocked) │  │
+                          │  └────────────────────────────────┘  │
+                          │                                      │
+                          │  Dashboard (:8734/)                  │
+                          │  ┌────────────────────────────────┐  │
+                          │  │ Time-series costs (Phase 6)     │  │
+                          │  │ Per-user utilization (Phase 6)  │  │
+                          │  │ Provider health (Phase 6)       │  │
+                          │  │ Budget/credit status (Phase 5)  │  │
+                          │  │ Admin panel (Phase 5)           │  │
+                          │  └────────────────────────────────┘  │
+                          └──────────────────────────────────────┘
 ```
 
-**Rebuild after source changes:**
-```bash
-cd /opt/lcp
-docker compose build --no-cache && docker compose up -d --force-recreate
-```
+## Stack (unchanged from Phases 1-3)
 
----
+| Concern | Choice | Why |
+|---|---|---|
+| Language | Python (stdlib + http.server) | Already working, fast enough for proxy |
+| Database | SQLite | Single-node, zero infra, millions of rows fine |
+| Dashboard | Chart.js (CDN) + server-rendered HTML | No build step, single binary |
+| Auth | API key hashing (hashlib) | Simple, effective, no JWT complexity |
+| Config | YAML | Human-readable, hot-reloadable |
+| Deploy | Single Docker container, port :8734 | Already deployed on bridge |
 
-## Known Pitfalls (learned the hard way)
+**We do NOT add** PostgreSQL, Redis, pnpm, Next.js, or anything from the TypeScript ecosystem. SQLite handles our scale. One binary, one port.
 
-See `skill: llm-control-plane` for the full 31-pitfall catalog. Highlights:
+## Open Source Strategy (if applicable)
 
-1. **Code is baked into image** — must rebuild after any source change (exception: `gateway.yaml` is bind-mounted, hot-reload via `touch`)
-2. **`HTTPServer` is single-threaded** — dashboard deadlocks. Always use `ThreadingHTTPServer`
-3. **Cloudflare WAF blocks default Python User-Agent** — `forward_request()` MUST set `User-Agent: LLMControlPlane/1.0`
-4. **`strip_forbidden_tools(body, None)` = block ALL tools** — `None` is not "allow all"
-5. **`.filter()` after `.limit()` destroys dashboards** — `.limit()` must be the final method before `.all()`
-6. **Query params break API routing → 404** — strip query string before path matching
-7. **OpenCode provider is perma-dead** (Cloudflare 403) — all L2 traffic falls through to DeepSeek
+- **License:** MIT or AGPLv3 — prevents enterprise upsell like llmgateway
+- **Differentiator vs llmgateway & LiteLLM:** "The only LLM gateway that understands agent tool permissions"
+- **Positioning:** Lean (no PG/Redis), agent-native (tool stripping), truly open source (no enterprise tears)
 
----
+## Related Tasks
 
-## Next Steps (priority order)
-
-1. **Phase 7 — Permission Matrix** (medium effort, highest impact)
-   - Replace fails-open `strip_forbidden_tools()` with fails-closed `apply_permission_matrix()`
-   - Config migration: convert existing 4 profiles to allow-list format
-   - Dashboard view only (admin API requires Phase 5)
-
-2. **Phase 5 — Multi-tenant Auth** (heavy effort)
-   - Users, teams, API keys, credit limits
-   - Schema exists, code not started
-
-3. **Phase 8 — Agent Infrastructure** (heavy effort, separate system)
-   - OS sandboxing, git token broker
-   - Depends on Phase 7 for policy enforcement
-
-4. **Test gap coverage**
-   - Dashboard HTML rendering tests (0 tests for 14.5KB f-string template)
-   - Provider CRUD endpoint tests (`/api/providers`, presets, test-connection, chain reorder)
-   - Profile config modal tests (`/api/profiles`, `/api/keys`)
+| Task | Status | Relationship |
+|---|---|---|
+| llm-cost-tracking | ✅ completed | Absorbed into llm-gateway-router Phase 1 |
+| os-sandboxing | ✅ completed | Parallel task — OS-level sandboxing, complements Phase 8 |
+| llm-gateway-router | ✅ completed | Phases 1-3 absorbed here |
