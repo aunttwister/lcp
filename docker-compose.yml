@@ -1,0 +1,17 @@
+services:
+  llm-control-plane-dev:
+    build: .
+    container_name: llm-control-plane-dev
+    restart: unless-stopped
+    ports:
+      - "8735:8734"
+    volumes:
+      - lcp_dev_data:/app/data
+    env_file:
+      - .env
+    environment:
+      - COST_DB=/app/data/costs.db
+      - LISTEN_PORT=8734
+
+volumes:
+  lcp_dev_data:

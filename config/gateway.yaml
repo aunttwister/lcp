@@ -1,0 +1,117 @@
+# ── LLM Control Plane Configuration ────────────────────────────────────────────
+# Hot-reloadable. Changes take effect within 5 seconds without restart.
+
+server:
+  port: 8734
+  default_profile: l2
+
+# Profiles define: forbidden tools + provider chain per profile
+profiles:
+  l2:
+    forbidden_tools:
+      - write_file
+      - patch
+      - cronjob
+    chain:
+      - provider: opencode
+        model: deepseek-v4-pro
+        base_url: https://opencode.ai/zen/go/v1
+      - provider: deepseek
+        model: deepseek-v4-pro
+        base_url: https://api.deepseek.com/v1
+
+  l1:
+    forbidden_tools:
+      - write_file
+      - patch
+      - terminal
+      - execute_code
+      - cronjob
+      - process
+      - delegate_task
+      - memory
+      - send_message
+      - vision_analyze
+    chain:
+      - provider: opencode
+        model: deepseek-v4-flash
+        base_url: https://opencode.ai/zen/go/v1
+      - provider: deepseek
+        model: deepseek-v4-flash
+        base_url: https://api.deepseek.com/v1
+
+  career:
+    forbidden_tools:
+      - write_file
+      - patch
+      - terminal
+      - execute_code
+      - cronjob
+      - process
+      - delegate_task
+      - memory
+      - vision_analyze
+      - read_file
+      - search_files
+      - skill_manage
+      - todo
+    chain:
+      - provider: deepseek
+        model: deepseek-v4-flash
+        base_url: https://api.deepseek.com/v1
+
+  cron:
+    forbidden_tools: null  # ALL tools forbidden
+    chain:
+      - provider: deepseek
+        model: deepseek-v4-flash
+        base_url: https://api.deepseek.com/v1
+
+# Provider API keys (loaded from env vars at runtime — these are references, not values)
+providers:
+  opencode:
+    api_key_env: OPENCODE_API_KEY
+    api_base: https://opencode.ai/zen/go/v1
+    models:
+      - deepseek-v4-pro
+      - deepseek-v4-flash
+  deepseek:
+    api_key_env: DEEPSEEK_API_KEY
+    api_base: https://api.deepseek.com/v1
+    models:
+      - deepseek-v4-pro
+      - deepseek-v4-flash
+
+# Pricing per 1M tokens
+pricing:
+  - provider: deepseek
+    model: deepseek-v4-pro
+    cache_hit: 0.003625
+    cache_miss: 0.435
+    output: 0.87
+  - provider: deepseek
+    model: deepseek-v4-flash
+    cache_hit: 0.0028
+    cache_miss: 0.14
+    output: 0.28
+  - provider: opencode
+    model: deepseek-v4-pro
+    cache_hit: 0.003625
+    cache_miss: 0.435
+    output: 0.87
+  - provider: opencode
+    model: deepseek-v4-flash
+    cache_hit: 0.0028
+    cache_miss: 0.14
+    output: 0.28
+
+# Circuit breaker
+circuit_breaker:
+  failures_degraded: 3
+  failures_dead: 6
+  degraded_cooldown_seconds: 30
+  dead_cooldown_seconds: 120
+
+database:
+  path: /app/data/costs.db
+  wal_mode: true

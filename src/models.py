@@ -1,0 +1,110 @@
+"""SQLAlchemy models for the LLM Control Plane."""
+
+from datetime import datetime, timezone
+
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    create_engine,
+)
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+# ── Phase 1-3 tables (already live in production) ──────────────────────────
+
+class Request(Base):
+    """Per-request cost tracking."""
+    __tablename__ = "requests"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(String, nullable=False)
+    profile = Column(String, nullable=False, default="unknown")
+    model = Column(String, nullable=False)
+    provider = Column(String, nullable=False)
+    prompt_tokens = Column(Integer, default=0)
+    completion_tokens = Column(Integer, default=0)
+    cache_hit_tokens = Column(Integer, default=0)
+    cache_miss_tokens = Column(Integer, default=0)
+    cost = Column(Float, default=0.0)
+    latency_ms = Column(Integer, default=0)
+    success = Column(Integer, default=1)  # 1=success, 0=failure
+    error_type = Column(String, nullable=True)
+    tools_blocked = Column(String, nullable=True)  # comma-separated list
+
+
+# ── Phase 5 tables (schema defined now, populated later) ────────────────────
+
+class Team(Base):
+    """Teams that users belong to."""
+    __tablename__ = "teams"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, unique=True, nullable=False)
+    monthly_budget = Column(Float, default=0.0)
+    created_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class User(Base):
+    """Users who authenticate with API keys."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
+    username = Column(String, unique=True, nullable=False)
+    api_key_hash = Column(String, nullable=False)
+    credit_limit = Column(Float, default=100.0)
+    is_admin = Column(Integer, default=0)
+    created_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
+# ── Phase 7 tables ─────────────────────────────────────────────────────────
+
+class AuditLog(Base):
+    """Every request logged for compliance."""
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(String, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
+    action = Column(String, nullable=False)  # "request", "auth_fail", "credit_exhausted"
+    detail = Column(Text, nullable=True)  # JSON blob with full context
+    ip_address = Column(String, nullable=True)
+
+
+# ── Engine + session factory ───────────────────────────────────────────────
+
+def get_engine(db_path: str):
+    """Create SQLAlchemy engine with WAL mode for SQLite."""
+    engine = create_engine(f"sqlite:///{db_path}", echo=False)
+    # Enable WAL mode on connect
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def set_wal(dbapi_connection, connection_record):
+        dbapi_connection.execute("PRAGMA journal_mode=WAL")
+
+    return engine
+
+
+def init_db(db_path: str, create_all: bool = True):
+    """Initialize database — create engine, optionally create all tables."""
+    engine = get_engine(db_path)
+    if create_all:
+        Base.metadata.create_all(engine)
+    return engine
+
+
+def get_session(engine) -> Session:
+    """Create a new session."""
+    SessionLocal = sessionmaker(bind=engine)
+    return SessionLocal()

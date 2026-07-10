@@ -1,0 +1,18 @@
+[project]
+name = "llm-control-plane"
+version = "0.4.0"
+description = "LLM Control Plane — routes, enforces tool permissions, tracks costs, manages users/teams"
+requires-python = ">=3.11"
+dependencies = [
+    "structlog>=24.1",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "pyyaml>=6.0",
+    "tiktoken>=0.7",
+]
+
+[project.scripts]
+lcp = "src.main:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
