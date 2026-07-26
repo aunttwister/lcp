@@ -1,8 +1,8 @@
-"""Custom exception hierarchy for the LLM Control Plane."""
+"""Custom exception hierarchy for the smallm gateway."""
 
 
 class LCPError(Exception):
-    """Base exception for all LCP errors."""
+    """Base exception for all smallm gateway errors."""
 
 
 class ConfigError(LCPError):

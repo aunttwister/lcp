@@ -1,7 +1,7 @@
 [project]
-name = "llm-control-plane"
-version = "0.4.0"
-description = "LLM Control Plane — routes, enforces tool permissions, tracks costs, manages users/teams"
+name = "smallm-gw"
+version = "0.5.0"
+description = "smallm gateway — routes, enforces tool permissions, tracks costs, manages API keys & budgets"
 requires-python = ">=3.11"
 dependencies = [
     "structlog>=24.1",
@@ -19,7 +19,7 @@ dev = [
 ]
 
 [project.scripts]
-lcp = "src.main:main"
+smallm = "src.main:main"
 
 [tool.setuptools.package-dir]
 "" = "src"

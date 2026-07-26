@@ -1,4 +1,4 @@
-"""HTTP server and request handler for the LLM Control Plane.
+"""HTTP server and request handler for the smallm gateway.
 
 Contains the LCPHandler class that dispatches requests to the appropriate
 pipeline, dashboard, and API modules.
@@ -64,7 +64,7 @@ def _estimate_cost_from_tokens(provider, model, cost_info, config):
 
 
 class LCPHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for LLM Control Plane."""
+    """HTTP request handler for smallm gateway."""
 
     # Class-level references set after server init
     config: Any = None
@@ -1035,7 +1035,7 @@ def _render_providers_page(config) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LCP — Providers</title>
+<title>smallm — Providers</title>
 <style>{css}</style>
 </head>
 <body>
@@ -1246,7 +1246,7 @@ def _render_profiles_page(config) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LCP — Profiles</title>
+<title>smallm — Profiles</title>
 <style>{css}</style>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 </head>
@@ -1509,7 +1509,7 @@ def _render_keys_page(config, engine) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LCP — API Keys</title>
+<title>smallm — API Keys</title>
 <style>{css}</style>
 </head>
 <body>
@@ -1768,7 +1768,7 @@ def _render_sidebar_html(config, active_page: str = "") -> str:
 
     sidebar = (
         '<aside class="sidebar" id="sidebar">\n'
-        '  <div class="sidebar-brand">⚡ LCP</div>\n'
+        '  <div class="sidebar-brand">⚡ smallm</div>\n'
         '  <nav class="sidebar-nav">\n'
         f'    <a href="/dashboard"{dash_active}>Dashboard</a>\n'
         f'    <a href="/keys"{keys_active}>API Keys</a>\n'

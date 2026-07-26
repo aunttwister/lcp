@@ -261,7 +261,7 @@ class AlertManager:
             "rule": "test",
             "severity": "info",
             "title": "Test Alert",
-            "message": "This is a test alert from LCP AlertManager.",
+            "message": "This is a test alert from smallm webhook.",
             "status": "firing",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }

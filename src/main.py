@@ -1,4 +1,4 @@
-"""LLM Control Plane — entry point. Loads env, boots server."""
+"""smallm gateway — entry point. Loads env, boots server."""
 
 import os
 from pathlib import Path
@@ -39,7 +39,7 @@ def main():
     server = create_server(config, engine, port)
 
     version = __import__("src").__version__
-    print(f"LLM Control Plane v{version} listening on :{port}")
+    print(f"smallm gateway v{version} listening on :{port}")
 
     try:
         server.serve_forever()

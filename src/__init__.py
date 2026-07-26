@@ -1,3 +1,3 @@
-"""LLM Control Plane — routes, enforces, meters, observes."""
+"""smallm gateway — routes, enforces, meters, observes."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
