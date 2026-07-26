@@ -323,21 +323,20 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   display: flex; align-items: stretch; z-index: 0;
 }
 .sb-action-btn {
-  background: hsl(var(--primary)); color: hsl(var(--primary-foreground));
-  border: none; border-radius: 0 var(--radius) var(--radius) 0;
-  padding: 0 0.625rem; font-size: 0.875rem; font-weight: 600;
+  background: hsl(var(--secondary)); color: hsl(var(--muted-foreground));
+  border: none; border-radius: var(--radius);
+  padding: 0 0.625rem; font-size: 0.8125rem;
   cursor: pointer; white-space: nowrap;
   display: flex; align-items: center;
   height: 100%; min-width: 44px; justify-content: center;
+  transition: background 0.15s;
 }
+.sb-action-btn:hover { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
 .sb-action-btn:active { filter: brightness(0.85); }
 @media (min-width: 769px) {
   .sb-profile-row { overflow: visible; }
   .sb-swipe-actions { display: none; }
   .sb-folder-content { transform: none !important; }
-}
-@media (max-width: 768px) {
-  .sb-settings-link { display: none; }
 }
 .sb-folder.sb-provider.selected {
   background: hsl(var(--primary) / 0.15); color: hsl(var(--foreground));
@@ -357,12 +356,12 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   align-self: stretch;
   font-size: 0.8125rem; color: hsl(var(--muted-foreground));
   text-decoration: none; line-height: 1;
-  border-radius: 0;
-  padding: 0; margin: 0 -0.5rem 0 0;
+  border-radius: var(--radius);
+  padding: 0; margin: 0 -0.7rem 0 0;
 }
-/* Hover — gear slides in for all profiles */
+/* Hover — gear slides in at 1/7 of profile pill width */
 .sb-profile-row:hover .sb-settings-link {
-  width: 34px; opacity: 1;
+  width: calc(100% / 7); opacity: 1;
 }
 /* Hover on active profile — gear matches active background */
 .sb-profile-row:hover .sidebar-nav .sb-folder-content:has(.sb-folder-link.active) .sb-settings-link {
@@ -371,6 +370,15 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 .sidebar-nav .sb-settings-link:hover {
   filter: brightness(0.85);
+}
+/* Mobile: hide hover gear, swipe reveals separate button instead */
+@media (max-width: 768px) {
+  .sidebar-nav .sb-settings-link { display: none; }
+  .sb-folder-content { padding: 0.25rem 0.375rem; }
+  .sb-profile-row.swiped .sb-folder-content {
+    transform: translateX(-44px);
+    border-radius: var(--radius) 0 0 var(--radius);
+  }
 }
 .sb-name { font-family: 'SF Mono', 'Fira Code', monospace; font-weight: 600; font-size: 0.75rem; }
 .sb-children { display: none; padding-left: 1rem; }

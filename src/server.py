@@ -25,7 +25,9 @@ from .api.request_pipeline import (
 from .api.cost_estimator import estimate_from_request
 from .api.prompt_cache import get_prompt_cache
 from .api.token_verifier import get_token_verifier
-from .api.key_manager import get_key_manager
+from .api.key_manager import get_key_manager, init_key_manager
+from .api.budget_manager import get_budget_manager, init_budget_manager
+from .api.alert_manager import get_alert_manager
 from .api.models import get_session, Request as RequestModel
 from .api.exceptions import ToolBlockedError, AllProvidersFailedError
 
@@ -74,6 +76,10 @@ class LCPHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/" or self.path == "/dashboard":
             self._serve_dashboard()
+        elif self.path == "/keys" or self.path == "/keys/dashboard":
+            self._serve_keys_dashboard()
+        elif self.path == "/budgets" or self.path == "/budgets/dashboard":
+            self._serve_budgets_dashboard()
         elif self.path.endswith("/dashboard"):
             # Per-profile: /l2/dashboard, /l1/dashboard, etc.
             profile = self._resolve_profile()
@@ -105,6 +111,19 @@ class LCPHandler(BaseHTTPRequestHandler):
             self._serve_profiles_list()
         elif self.path == "/api/keys":
             self._serve_keys_list()
+        elif self.path.startswith("/api/keys/") and len(self.path.split("/")) == 4:
+            key_id = self.path.split("/")[3]
+            self._serve_key_detail(key_id)
+        elif self.path == "/api/budgets":
+            self._serve_budgets_list()
+        elif self.path == "/api/budgets/status":
+            self._serve_budgets_status()
+        elif self.path == "/api/alerts":
+            self._serve_alerts_list()
+        elif self.path == "/api/alerts/config":
+            self._serve_alerts_config()
+        elif self.path == "/api/alerts/active":
+            self._serve_alerts_active()
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -124,6 +143,20 @@ class LCPHandler(BaseHTTPRequestHandler):
             return
         elif self.path == "/api/keys":
             self._serve_key_create()
+            return
+        elif self.path.startswith("/api/keys/") and self.path.endswith("/rotate"):
+            key_id = self.path.split("/")[3]
+            self._serve_key_rotate(key_id)
+            return
+        elif self.path == "/api/budgets":
+            self._serve_budget_create()
+            return
+        elif self.path == "/api/alerts/webhook/test":
+            self._serve_alerts_test_webhook()
+            return
+        elif self.path.startswith("/api/alerts/") and self.path.endswith("/acknowledge"):
+            alert_id = self.path.split("/")[3]
+            self._serve_alert_acknowledge(alert_id)
             return
 
         # Only handle chat completions
@@ -264,6 +297,11 @@ class LCPHandler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/chains/") and len(self.path.split("/")) == 4:
             profile = self.path.split("/")[3]
             self._serve_chain_reorder(profile)
+        elif self.path.startswith("/api/budgets/") and len(self.path.split("/")) == 4:
+            budget_id = self.path.split("/")[3]
+            self._serve_budget_update(budget_id)
+        elif self.path == "/api/alerts/config":
+            self._serve_alerts_config_update()
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -275,6 +313,9 @@ class LCPHandler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/keys/") and len(self.path.split("/")) == 4:
             key_id = self.path.split("/")[3]
             self._serve_key_delete(key_id)
+        elif self.path.startswith("/api/budgets/") and len(self.path.split("/")) == 4:
+            budget_id = self.path.split("/")[3]
+            self._serve_budget_delete(budget_id)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -672,8 +713,25 @@ class LCPHandler(BaseHTTPRequestHandler):
     # ── API Key Management ────────────────────────────────────────────────
 
     def _serve_keys_list(self):
-        keys = get_key_manager().list_keys()
+        km = get_key_manager()
+        keys = km.list_keys() if km else []
         self._send_json({"keys": keys})
+
+    def _serve_key_detail(self, key_id: str):
+        km = get_key_manager()
+        if not km:
+            self._send_json({"error": "key manager not initialized"}, 500)
+            return
+        try:
+            kid = int(key_id)
+        except ValueError:
+            self._send_json({"error": "invalid key id"}, 400)
+            return
+        key = km.get_key(kid)
+        if key:
+            self._send_json({"key": key})
+        else:
+            self._send_json({"error": "key not found"}, 404)
 
     def _serve_key_create(self):
         try:
@@ -681,20 +739,661 @@ class LCPHandler(BaseHTTPRequestHandler):
         except Exception:
             self._send_json({"error": "invalid JSON body"}, 400)
             return
-        profile = body.get("profile", "").strip()
-        label = body.get("label", "").strip()
-        if not profile:
-            self._send_json({"error": "missing 'profile' field"}, 400)
+        km = get_key_manager()
+        if not km:
+            self._send_json({"error": "key manager not initialized"}, 500)
             return
-        result = get_key_manager().create_key(profile, label)
+        result = km.create_key(
+            name=body.get("name", ""),
+            allowed_profiles=body.get("allowed_profiles", ""),
+            spend_limit=float(body.get("spend_limit", 0) or 0),
+            expires_at=body.get("expires_at", ""),
+            metadata_tags=body.get("metadata_tags", ""),
+        )
         self._send_json(result)
 
-    def _serve_key_delete(self, key_id: str):
-        ok = get_key_manager().revoke_key(key_id)
-        if ok:
-            self._send_json({"ok": True, "deleted": key_id})
+    def _serve_key_rotate(self, key_id: str):
+        km = get_key_manager()
+        if not km:
+            self._send_json({"error": "key manager not initialized"}, 500)
+            return
+        try:
+            kid = int(key_id)
+        except ValueError:
+            self._send_json({"error": "invalid key id"}, 400)
+            return
+        result = km.rotate_key(kid)
+        if result:
+            self._send_json(result)
         else:
             self._send_json({"error": "key not found"}, 404)
+
+    def _serve_key_delete(self, key_id: str):
+        km = get_key_manager()
+        if not km:
+            self._send_json({"error": "key manager not initialized"}, 500)
+            return
+        try:
+            kid = int(key_id)
+        except ValueError:
+            self._send_json({"error": "invalid key id"}, 400)
+            return
+        ok = km.revoke_key(kid)
+        if ok:
+            self._send_json({"ok": True, "deleted": kid})
+        else:
+            self._send_json({"error": "key not found"}, 404)
+
+    # ── Budget Management ──────────────────────────────────────────────────
+
+    def _serve_budgets_list(self):
+        bm = get_budget_manager()
+        budgets = bm.list_budgets() if bm else []
+        self._send_json({"budgets": budgets})
+
+    def _serve_budgets_status(self):
+        bm = get_budget_manager()
+        status = bm.get_budget_status() if bm else []
+        self._send_json({"budgets": status})
+
+    def _serve_budget_create(self):
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        bm = get_budget_manager()
+        if not bm:
+            self._send_json({"error": "budget manager not initialized"}, 500)
+            return
+        if not body.get("name") or not body.get("amount"):
+            self._send_json({"error": "missing 'name' or 'amount'"}, 400)
+            return
+        result = bm.create_budget(
+            name=body["name"],
+            amount=float(body["amount"]),
+            key_id=body.get("key_id"),
+            profile=body.get("profile"),
+            period=body.get("period", "monthly"),
+            threshold_pct=body.get("threshold_pct", "50,80,90"),
+            action=body.get("action", "log"),
+        )
+        self._send_json(result)
+
+    def _serve_budget_update(self, budget_id: str):
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        bm = get_budget_manager()
+        if not bm:
+            self._send_json({"error": "budget manager not initialized"}, 500)
+            return
+        try:
+            bid = int(budget_id)
+        except ValueError:
+            self._send_json({"error": "invalid budget id"}, 400)
+            return
+        result = bm.update_budget(bid, body)
+        if result:
+            self._send_json(result)
+        else:
+            self._send_json({"error": "budget not found"}, 404)
+
+    def _serve_budget_delete(self, budget_id: str):
+        bm = get_budget_manager()
+        if not bm:
+            self._send_json({"error": "budget manager not initialized"}, 500)
+            return
+        try:
+            bid = int(budget_id)
+        except ValueError:
+            self._send_json({"error": "invalid budget id"}, 400)
+            return
+        ok = bm.delete_budget(bid)
+        if ok:
+            self._send_json({"ok": True, "deleted": bid})
+        else:
+            self._send_json({"error": "budget not found"}, 404)
+
+    # ── Alert Management ──────────────────────────────────────────────────
+
+    def _serve_alerts_list(self):
+        am = get_alert_manager()
+        limit = 100
+        status = None
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        if "limit" in params:
+            limit = int(params["limit"][0])
+        if "status" in params:
+            status = params["status"][0]
+        alerts = am.list_alerts(limit=limit, status=status)
+        self._send_json({"alerts": alerts})
+
+    def _serve_alerts_active(self):
+        am = get_alert_manager()
+        self._send_json({"alerts": am.get_active_alerts()})
+
+    def _serve_alerts_config(self):
+        am = get_alert_manager()
+        self._send_json({"config": am.config})
+
+    def _serve_alerts_config_update(self):
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        am = get_alert_manager()
+        config = am.update_config(body)
+        self._send_json({"ok": True, "config": config})
+
+    def _serve_alert_acknowledge(self, alert_id: str):
+        am = get_alert_manager()
+        ok = am.acknowledge(alert_id)
+        if ok:
+            self._send_json({"ok": True, "acknowledged": alert_id})
+        else:
+            self._send_json({"error": "alert not found"}, 404)
+
+    def _serve_alerts_test_webhook(self):
+        am = get_alert_manager()
+        result = am.test_webhook()
+        self._send_json(result)
+
+    # ── Dashboard Pages ──────────────────────────────────────────────────
+
+    def _serve_keys_dashboard(self):
+        """Server-rendered API Keys management page."""
+        html = _render_keys_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_budgets_dashboard(self):
+        """Server-rendered Budgets management page."""
+        html = _render_budgets_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+
+def _render_keys_page(config, engine) -> str:
+    """Render the API Keys management page."""
+    # Load CSS
+    from pathlib import Path
+    _templates_dir = Path(__file__).parent / "ui" / "templates"
+    css = ""
+    try:
+        css = (_templates_dir / "dashboard.css").read_text()
+    except Exception:
+        pass
+
+    return f"""<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LCP — API Keys</title>
+<style>{css}</style>
+</head>
+<body>
+{_render_sidebar_html(config, "keys")}
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+<button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()">☰</button>
+<div class="main-content">
+<h1>API Keys</h1>
+<p class="subtitle">Manage virtual keys for API access</p>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1rem">
+  <button class="btn-sm btn-primary" onclick="showCreateKeyModal()">+ Create Key</button>
+  <input type="text" id="keySearch" placeholder="Search keys..." oninput="filterKeys()"
+    style="padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem;width:200px">
+</div>
+
+<div class="table-wrap">
+<table id="keysTable">
+<thead><tr>
+  <th>Name</th><th>Prefix</th><th>Profiles</th><th>Spend</th><th>Limit</th><th>Status</th><th>Created</th><th>Actions</th>
+</tr></thead>
+<tbody id="keysBody"><tr><td colspan="8" class="empty">Loading...</td></tr></tbody>
+</table>
+</div>
+</div>
+
+<!-- Create Key Modal -->
+<div class="modal-overlay" id="createKeyModal">
+<div class="modal" style="width:min(500px,95vw)">
+  <div class="modal-header">
+    <h2>Create API Key</h2>
+    <button class="modal-close" onclick="closeCreateKeyModal()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div style="display:grid;gap:0.75rem">
+      <div>
+        <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Key Name</label>
+        <input id="newKeyName" placeholder="e.g. Production Key" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+      </div>
+      <div>
+        <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Allowed Profiles (comma-separated, blank=all)</label>
+        <input id="newKeyProfiles" placeholder="l2,l1" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+        <div>
+          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Spend Limit ($, 0=unlimited)</label>
+          <input id="newKeyLimit" type="number" step="0.01" min="0" value="0" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+        </div>
+        <div>
+          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Expires At (optional)</label>
+          <input id="newKeyExpires" type="date" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn-sm btn-primary" onclick="createKey()">Create</button>
+    <button class="btn-sm" onclick="closeCreateKeyModal()">Cancel</button>
+  </div>
+</div>
+</div>
+
+<!-- Show Key Modal (one-time view) -->
+<div class="modal-overlay" id="showKeyModal">
+<div class="modal" style="width:min(450px,95vw)">
+  <div class="modal-header">
+    <h2>Key Created</h2>
+    <button class="modal-close" onclick="closeShowKeyModal()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="phm-label">API Key (copy now — won't be shown again)</div>
+    <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.25rem">
+      <code id="shownKey" style="flex:1;background:hsl(var(--secondary));padding:0.5rem;border-radius:var(--radius);font-size:0.8125rem;word-break:break-all;user-select:all"></code>
+      <button class="btn-sm btn-primary" onclick="copyShownKey()">Copy</button>
+    </div>
+    <div id="shownKeyInfo" style="margin-top:0.5rem;font-size:0.75rem;color:hsl(var(--muted-foreground))"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn-sm" onclick="closeShowKeyModal();loadKeys()">Done</button>
+  </div>
+</div>
+</div>
+
+<script>
+var _hostUrl = window.location.origin;
+
+function api(method, url, body) {{
+  var opts = {{method:method, headers:{{'Content-Type':'application/json'}}}};
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(url, opts).then(function(r) {{ return r.json(); }});
+}}
+
+function loadKeys() {{
+  api('GET', '/api/keys').then(function(d) {{
+    var keys = d.keys || [];
+    var html = '';
+    if (keys.length === 0) {{
+      html = '<tr><td colspan="8" class="empty">No keys yet. Create one above.</td></tr>';
+    }} else {{
+      keys.forEach(function(k) {{
+        var spend = '$' + (k.total_spend || 0).toFixed(4);
+        var limit = k.spend_limit > 0 ? '$' + k.spend_limit.toFixed(2) : '∞';
+        var statusBadge = k.status === 'active'
+          ? '<span class="badge badge-success">active</span>'
+          : '<span class="badge badge-error">revoked</span>';
+        html += '<tr data-search="' + (k.name||'') + ' ' + (k.key_prefix||'') + '">' +
+          '<td>' + (k.name || '—') + '</td>' +
+          '<td class="mono">' + (k.key_prefix || '—') + '</td>' +
+          '<td>' + (k.allowed_profiles || 'all') + '</td>' +
+          '<td class="cost mono">' + spend + '</td>' +
+          '<td class="cost mono">' + limit + '</td>' +
+          '<td>' + statusBadge + '</td>' +
+          '<td class="mono" style="font-size:0.6875rem">' + (k.created_at||'').slice(0,10) + '</td>' +
+          '<td>' +
+            (k.status === 'active'
+              ? '<button class="btn-sm" onclick="rotateKey(' + k.id + ')" title="Rotate">↻</button> '
+                + '<button class="btn-sm btn-danger" onclick="revokeKey(' + k.id + ')" title="Revoke">✕</button>'
+              : '<span style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">' + (k.revoked_at||'').slice(0,10) + '</span>'
+            ) +
+          '</td>' +
+        '</tr>';
+      }});
+    }}
+    document.getElementById('keysBody').innerHTML = html;
+  }});
+}}
+
+function showCreateKeyModal() {{ document.getElementById('createKeyModal').classList.add('open'); }}
+function closeCreateKeyModal() {{ document.getElementById('createKeyModal').classList.remove('open'); }}
+function closeShowKeyModal() {{ document.getElementById('showKeyModal').classList.remove('open'); }}
+
+function createKey() {{
+  var name = document.getElementById('newKeyName').value.trim();
+  var profiles = document.getElementById('newKeyProfiles').value.trim();
+  var limit = parseFloat(document.getElementById('newKeyLimit').value) || 0;
+  var expires = document.getElementById('newKeyExpires').value;
+  api('POST', '/api/keys', {{
+    name: name || 'API Key',
+    allowed_profiles: profiles,
+    spend_limit: limit,
+    expires_at: expires ? expires + 'T00:00:00' : ''
+  }}).then(function(d) {{
+    if (d.key) {{
+      document.getElementById('shownKey').textContent = d.key;
+      document.getElementById('shownKeyInfo').innerHTML =
+        'Name: <b>' + d.name + '</b> · ID: ' + d.id + '<br>' +
+        'Profiles: ' + (d.allowed_profiles || 'all') + ' · Limit: $' + (d.spend_limit || 0);
+      closeCreateKeyModal();
+      document.getElementById('showKeyModal').classList.add('open');
+    }} else {{
+      alert('Error: ' + (d.error || 'unknown'));
+    }}
+  }});
+}}
+
+function copyShownKey() {{
+  var el = document.getElementById('shownKey');
+  navigator.clipboard.writeText(el.textContent).then(function() {{
+    alert('Key copied to clipboard');
+  }});
+}}
+
+function rotateKey(id) {{
+  if (!confirm('Rotate this key? The old key will be revoked and a new one generated.')) return;
+  api('POST', '/api/keys/' + id + '/rotate').then(function(d) {{
+    if (d.key) {{
+      document.getElementById('shownKey').textContent = d.key;
+      document.getElementById('shownKeyInfo').innerHTML =
+        'Rotated from ID: ' + d.old_id + ' → <b>' + d.id + '</b><br>' +
+        'Name: <b>' + d.name + '</b>';
+      document.getElementById('showKeyModal').classList.add('open');
+    }} else {{
+      alert('Error: ' + (d.error || 'unknown'));
+    }}
+  }});
+}}
+
+function revokeKey(id) {{
+  if (!confirm('Revoke this key? It will no longer work for API calls.')) return;
+  api('DELETE', '/api/keys/' + id).then(function(d) {{
+    if (d.ok) loadKeys();
+    else alert('Error: ' + (d.error || 'unknown'));
+  }});
+}}
+
+function filterKeys() {{
+  var q = document.getElementById('keySearch').value.toLowerCase();
+  document.querySelectorAll('#keysBody tr').forEach(function(tr) {{
+    var txt = (tr.getAttribute('data-search') || '').toLowerCase();
+    tr.style.display = txt.includes(q) ? '' : 'none';
+  }});
+}}
+
+// Sidebar toggle
+function toggleSidebar() {{
+  var sb = document.getElementById('sidebar');
+  if (window.innerWidth <= 768) {{
+    sb.classList.toggle('open');
+    document.getElementById('sidebarOverlay').classList.toggle('show');
+  }} else {{
+    sb.classList.toggle('collapsed');
+  }}
+}}
+function closeSidebar() {{
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('show');
+}}
+
+loadKeys();
+</script>
+</body>
+</html>"""
+
+
+def _render_budgets_page(config, engine) -> str:
+    """Render the Budgets management page."""
+    from pathlib import Path
+    _templates_dir = Path(__file__).parent / "ui" / "templates"
+    css = ""
+    try:
+        css = (_templates_dir / "dashboard.css").read_text()
+    except Exception:
+        pass
+
+    return f"""<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LCP — Budgets</title>
+<style>{css}</style>
+</head>
+<body>
+{_render_sidebar_html(config, "budgets")}
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+<button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()">☰</button>
+<div class="main-content">
+<h1>Budgets</h1>
+<p class="subtitle">Set spending limits and get alerts</p>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1rem">
+  <button class="btn-sm btn-primary" onclick="showCreateBudgetModal()">+ Create Budget</button>
+</div>
+
+<div class="table-wrap">
+<table id="budgetsTable">
+<thead><tr>
+  <th>Name</th><th>Key/Profile</th><th>Spend</th><th>Limit</th><th>%</th><th>Period</th><th>Action</th><th>Status</th><th>Actions</th>
+</tr></thead>
+<tbody id="budgetsBody"><tr><td colspan="9" class="empty">Loading...</td></tr></tbody>
+</table>
+</div>
+</div>
+
+<!-- Create Budget Modal -->
+<div class="modal-overlay" id="createBudgetModal">
+<div class="modal" style="width:min(500px,95vw)">
+  <div class="modal-header">
+    <h2>Create Budget</h2>
+    <button class="modal-close" onclick="closeCreateBudgetModal()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div style="display:grid;gap:0.75rem">
+      <div>
+        <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Budget Name</label>
+        <input id="newBudgetName" placeholder="e.g. Monthly L2 Budget" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+        <div>
+          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Amount ($)</label>
+          <input id="newBudgetAmount" type="number" step="0.01" min="0.01" value="100" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+        </div>
+        <div>
+          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Period</label>
+          <select id="newBudgetPeriod" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+            <option value="monthly">Monthly</option>
+            <option value="total">Total (lifetime)</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+        <div>
+          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">API Key (blank=global)</label>
+          <select id="newBudgetKey" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+            <option value="">-- All Keys (Global) --</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Profile (blank=all)</label>
+          <input id="newBudgetProfile" placeholder="l2" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+        </div>
+        <div>
+          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">On Exceed</label>
+          <select id="newBudgetAction" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+            <option value="log">Log only (warn)</option>
+            <option value="block">Block requests</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Alert Thresholds (%)</label>
+        <input id="newBudgetThresholds" value="50,80,90" placeholder="50,80,90" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn-sm btn-primary" onclick="createBudget()">Create</button>
+    <button class="btn-sm" onclick="closeCreateBudgetModal()">Cancel</button>
+  </div>
+</div>
+</div>
+
+<script>
+function api(method, url, body) {{
+  var opts = {{method:method, headers:{{'Content-Type':'application/json'}}}};
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(url, opts).then(function(r) {{ return r.json(); }});
+}}
+
+function loadBudgets() {{
+  // Load keys first to build a name map
+  api('GET', '/api/keys').then(function(kd) {{
+    var keyMap = {{}};
+    (kd.keys || []).forEach(function(k) {{ keyMap[k.id] = k.name; }});
+    // Now load budgets
+    api('GET', '/api/budgets').then(function(d) {{
+      var budgets = d.budgets || [];
+      var html = '';
+      if (budgets.length === 0) {{
+        html = '<tr><td colspan="9" class="empty">No budgets yet. Create one above.</td></tr>';
+      }} else {{
+        budgets.forEach(function(b) {{
+          var pct = b.spend_pct || 0;
+          var pctColor = pct >= 100 ? 'red' : pct >= 80 ? 'amber' : 'green';
+          var statusBadge = b.status === 'exceeded'
+            ? '<span class="badge badge-error">exceeded</span>'
+            : b.status === 'active'
+              ? '<span class="badge badge-success">active</span>'
+              : '<span class="badge">' + b.status + '</span>';
+          var scope;
+          if (b.key_id) {{
+            scope = '🔑 ' + (keyMap[b.key_id] || 'Key #' + b.key_id);
+          }} else if (b.profile) {{
+            scope = '📊 ' + b.profile;
+          }} else {{
+            scope = '🌐 Global';
+          }}
+          html += '<tr>' +
+            '<td><b>' + (b.name || '—') + '</b></td>' +
+            '<td>' + scope + '</td>' +
+            '<td class="cost mono">$' + (b.current_spend || 0).toFixed(4) + '</td>' +
+            '<td class="cost mono">$' + (b.amount || 0).toFixed(2) + '</td>' +
+            '<td class="cost"><span class="' + pctColor + '">' + pct.toFixed(1) + '%</span></td>' +
+            '<td>' + (b.period || '—') + '</td>' +
+            '<td>' + (b.action === 'block' ? '🔒 Block' : '📋 Log') + '</td>' +
+            '<td>' + statusBadge + '</td>' +
+            '<td><button class="btn-sm btn-danger" onclick="deleteBudget(' + b.id + ')">Del</button></td>' +
+          '</tr>';
+        }});
+      }}
+      document.getElementById('budgetsBody').innerHTML = html;
+    }});
+  }});
+}}
+
+function showCreateBudgetModal() {{ 
+  document.getElementById('createBudgetModal').classList.add('open');
+  loadKeysForBudget();
+}}
+function closeCreateBudgetModal() {{ document.getElementById('createBudgetModal').classList.remove('open'); }}
+
+function loadKeysForBudget() {{
+  api('GET', '/api/keys').then(function(d) {{
+    var keys = d.keys || [];
+    var sel = document.getElementById('newBudgetKey');
+    // Keep first "All Keys" option, clear rest
+    sel.innerHTML = '<option value="">-- All Keys (Global) --</option>';
+    keys.forEach(function(k) {{
+      if (k.status === 'active') {{
+        sel.innerHTML += '<option value="' + k.id + '">' + k.name + ' (' + k.key_prefix + ')</option>';
+      }}
+    }});
+  }});
+}}
+
+function createBudget() {{
+  var name = document.getElementById('newBudgetName').value.trim();
+  var amount = parseFloat(document.getElementById('newBudgetAmount').value);
+  var period = document.getElementById('newBudgetPeriod').value;
+  var keyId = document.getElementById('newBudgetKey').value;
+  var profile = document.getElementById('newBudgetProfile').value.trim();
+  var action = document.getElementById('newBudgetAction').value;
+  var thresholds = document.getElementById('newBudgetThresholds').value.trim();
+  if (!name || !amount) {{ alert('Name and amount are required'); return; }}
+  api('POST', '/api/budgets', {{
+    name: name, amount: amount, period: period,
+    key_id: keyId ? parseInt(keyId) : null,
+    profile: profile || null, action: action, threshold_pct: thresholds
+  }}).then(function(d) {{
+    if (d.ok) {{ closeCreateBudgetModal(); loadBudgets(); }}
+    else {{ alert('Error: ' + (d.error || 'unknown')); }}
+  }});
+}}
+
+function deleteBudget(id) {{
+  if (!confirm('Delete this budget?')) return;
+  api('DELETE', '/api/budgets/' + id).then(function(d) {{
+    if (d.ok) loadBudgets();
+    else alert('Error: ' + (d.error || 'unknown'));
+  }});
+}}
+
+function toggleSidebar() {{
+  var sb = document.getElementById('sidebar');
+  if (window.innerWidth <= 768) {{
+    sb.classList.toggle('open');
+    document.getElementById('sidebarOverlay').classList.toggle('show');
+  }} else {{
+    sb.classList.toggle('collapsed');
+  }}
+}}
+function closeSidebar() {{
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('show');
+}}
+
+loadBudgets();
+</script>
+</body>
+</html>"""
+
+
+def _render_sidebar_html(config, active_page: str = "") -> str:
+    """Render the sidebar navigation for standalone pages."""
+    host_url = ""
+    dash_active = ' class="active"' if active_page == "dashboard" else ""
+    keys_active = ' class="active"' if active_page == "keys" else ""
+    budgets_active = ' class="active"' if active_page == "budgets" else ""
+
+    sidebar = (
+        '<aside class="sidebar" id="sidebar">\n'
+        '  <div class="sidebar-brand">⚡ LCP</div>\n'
+        '  <nav class="sidebar-nav">\n'
+        f'    <a href="/dashboard"{dash_active}>Dashboard</a>\n'
+        f'    <a href="/keys"{keys_active}>API Keys</a>\n'
+        f'    <a href="/budgets"{budgets_active}>Budgets</a>\n'
+        '    <div class="nav-label">Profiles</div>\n'
+    )
+    for p in config.profiles.keys():
+        sidebar += f'    <a href="/{p}/dashboard">{p.upper()}</a>\n'
+    sidebar += (
+        '  </nav>\n</aside>'
+    )
+    return sidebar
 
 
 def create_server(config, engine, port=8734):
@@ -707,6 +1406,10 @@ def create_server(config, engine, port=8734):
 
     ConfiguredHandler.config = config
     ConfiguredHandler.engine = engine
+
+    # Initialize key manager and budget manager with engine
+    init_key_manager(engine, "data")
+    init_budget_manager(engine)
 
     server = ThreadingHTTPServer(("0.0.0.0", port), ConfiguredHandler)
     logger.info("server_created", port=port, profiles=list(config.profiles.keys()))

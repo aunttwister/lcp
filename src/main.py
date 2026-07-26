@@ -34,7 +34,6 @@ def main():
     Base.metadata.create_all(engine)
 
     data_dir = os.path.dirname(db_path) if os.path.dirname(db_path) else "data"
-    get_key_manager(data_dir)
 
     port = int(os.environ.get("LISTEN_PORT", str(cfg.get("port", 8734))))
     server = create_server(config, engine, port)

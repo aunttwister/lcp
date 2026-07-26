@@ -25,6 +25,7 @@ from .logging_config import get_logger
 from .models import get_session, Request as RequestModel
 from .prompt_cache import get_prompt_cache
 from .token_verifier import get_token_verifier
+from .budget_manager import get_budget_manager
 
 logger = get_logger("lcp.pipeline")
 
@@ -166,7 +167,9 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
 
 def record_cost(engine, profile: str, model: str, provider: str, cost_info: dict,
                 success: bool, error_type: str | None, tools_blocked: list[str]) -> None:
-    """Record cost data to SQLite."""
+    """Record cost data to SQLite and track against budgets."""
+    cost = cost_info.get("cost", 0)
+
     with get_session(engine) as session:
         req = RequestModel(
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -177,7 +180,7 @@ def record_cost(engine, profile: str, model: str, provider: str, cost_info: dict
             completion_tokens=cost_info.get("completion_tokens", 0),
             cache_hit_tokens=cost_info.get("cache_hit_tokens", 0),
             cache_miss_tokens=cost_info.get("cache_miss_tokens", 0),
-            cost=cost_info.get("cost", 0),
+            cost=cost,
             latency_ms=cost_info.get("latency_ms", 0),
             success=1 if success else 0,
             error_type=error_type,
@@ -185,3 +188,22 @@ def record_cost(engine, profile: str, model: str, provider: str, cost_info: dict
         )
         session.add(req)
         session.commit()
+
+    # Track spend against budgets
+    if success and cost > 0:
+        try:
+            bm = get_budget_manager()
+            if bm:
+                breached = bm.record_spend(cost, profile=profile)
+                if breached:
+                    from .alert_manager import get_alert_manager
+                    am = get_alert_manager()
+                    for b in breached:
+                        am.fire_budget_breach(
+                            budget_name=b["budget_name"],
+                            threshold=b["threshold"],
+                            spend_pct=b["spend_pct"],
+                            budget_id=b["budget_id"],
+                        )
+        except Exception:
+            pass  # Budget tracking is non-critical

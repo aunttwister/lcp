@@ -319,6 +319,8 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         '  <div class="sidebar-brand">⚡ LCP</div>\n'
         '  <nav class="sidebar-nav">\n'
         f'    <a href="/dashboard" class="{dash_active}">Dashboard</a>\n'
+        f'    <a href="/keys">API Keys</a>\n'
+        f'    <a href="/budgets">Budgets</a>\n'
         '    <div class="nav-label">Profiles</div>\n'
     )
     for p, pcfg in config.profiles.items():
@@ -735,7 +737,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
       _swipeCurrentX = e.touches[0].clientX;
       var dx = _swipeCurrentX - _swipeStartX;
       if (dx > 0) {{ return; }} // only left swipe
-      dx = Math.max(dx, -48); // cap at action button width
+      dx = Math.max(dx, -44); // cap at action button width
       row.querySelector('.sb-folder-content').style.transform = 'translateX(' + dx + 'px)';
       row.querySelector('.sb-folder-content').style.transition = 'none';
     }}, {{passive: true}});

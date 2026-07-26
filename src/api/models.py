@@ -81,6 +81,45 @@ class AuditLog(Base):
     ip_address = Column(String, nullable=True)
 
 
+# ── API Key Management ────────────────────────────────────────────────────
+
+class ApiKey(Base):
+    """Virtual API keys for authentication and spend tracking."""
+    __tablename__ = "api_keys"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key_hash = Column(String, unique=True, nullable=False)
+    key_prefix = Column(String, nullable=False)  # first 8 chars for display
+    name = Column(String, nullable=False)
+    allowed_profiles = Column(String, nullable=True)  # comma-separated or null=all
+    spend_limit = Column(Float, default=0.0)  # 0 = unlimited
+    total_spend = Column(Float, default=0.0)
+    status = Column(String, default="active")  # active, revoked
+    created_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+    last_used_at = Column(String, nullable=True)
+    expires_at = Column(String, nullable=True)
+    revoked_at = Column(String, nullable=True)
+    metadata_tags = Column(String, nullable=True)  # JSON string
+
+
+class Budget(Base):
+    """Spending budgets per key and/or profile."""
+    __tablename__ = "budgets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False)
+    key_id = Column(Integer, ForeignKey("api_keys.id"), nullable=True)  # null = global/profile budget
+    profile = Column(String, nullable=True)  # null = all profiles
+    amount = Column(Float, nullable=False)  # budget cap in USD
+    current_spend = Column(Float, default=0.0)
+    period = Column(String, default="monthly")  # monthly, total
+    threshold_pct = Column(String, default="80")  # comma-separated alert thresholds
+    action = Column(String, default="log")  # log, block (hard stop)
+    status = Column(String, default="active")  # active, paused, exceeded
+    created_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+    last_alert_at = Column(String, nullable=True)
+
+
 # ── Engine + session factory ───────────────────────────────────────────────
 
 def get_engine(db_path: str):

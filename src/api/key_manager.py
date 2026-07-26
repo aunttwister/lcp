@@ -1,103 +1,257 @@
-"""API key manager — persistent storage and validation.
+"""API key manager — DB-backed persistent storage and validation.
 
-Keys are stored in a JSON file alongside the SQLite database.
+Keys are stored in the SQLite database via SQLAlchemy.
 Uses SHA-256 hashing for key storage (raw keys shown only once).
+Migrates legacy JSON keys on first load.
 """
 
 import hashlib
 import json
-import os
 import secrets
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from .logging_config import get_logger
+from .models import ApiKey, get_session
 
 logger = get_logger("lcp.keys")
 
 
 class KeyManager:
-    """Manages API keys with JSON file persistence."""
+    """Manages API keys with SQLAlchemy DB persistence."""
 
-    def __init__(self, data_dir: str = "data"):
-        self._path = Path(data_dir) / "api_keys.json"
-        self._data: dict | None = None
+    def __init__(self, engine, data_dir: str = "data"):
+        self._engine = engine
+        self._data_dir = Path(data_dir)
+        self._migrate_legacy_keys()
 
-    def _load(self) -> dict:
-        if self._data is None:
-            if self._path.exists():
-                with open(self._path) as f:
-                    self._data = json.load(f)
-            else:
-                self._data = {"keys": []}
-        return self._data
-
-    def _save(self):
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._path, "w") as f:
-            json.dump(self._data, f, indent=2)
+    def _migrate_legacy_keys(self):
+        """Migrate keys from legacy JSON file to DB if any exist."""
+        legacy_path = self._data_dir / "api_keys.json"
+        if not legacy_path.exists():
+            return
+        try:
+            with open(legacy_path) as f:
+                legacy = json.load(f)
+            keys = legacy.get("keys", [])
+            if not keys:
+                return
+            with get_session(self._engine) as session:
+                for k in keys:
+                    existing = session.query(ApiKey).filter(
+                        ApiKey.key_hash == k.get("hash", "")
+                    ).first()
+                    if existing:
+                        continue
+                    entry = ApiKey(
+                        key_hash=k.get("hash", ""),
+                        key_prefix=k.get("id", "")[:8],
+                        name=k.get("label", f"Key for {k.get('profile', '')}"),
+                        allowed_profiles=k.get("profile", ""),
+                        status="active",
+                        created_at=k.get("created", datetime.now(timezone.utc).isoformat()),
+                        last_used_at=k.get("last_used"),
+                    )
+                    session.add(entry)
+                session.commit()
+            # Rename legacy file after successful migration
+            legacy_path.rename(legacy_path.with_suffix(".json.bak"))
+            logger.info("key_migration_complete", count=len(keys))
+        except Exception as e:
+            logger.error("key_migration_failed", error=str(e))
 
     def list_keys(self) -> list[dict]:
-        """List all keys (without hashes)."""
-        data = self._load()
-        safe = []
-        for k in data.get("keys", []):
-            safe.append({
-                "id": k["id"],
-                "profile": k.get("profile", ""),
-                "label": k.get("label", ""),
-                "created": k.get("created", ""),
-                "last_used": k.get("last_used"),
-            })
-        return safe
+        """List all keys with stats."""
+        with get_session(self._engine) as session:
+            keys = session.query(ApiKey).order_by(ApiKey.id.desc()).all()
+            return [
+                {
+                    "id": k.id,
+                    "key_prefix": k.key_prefix,
+                    "name": k.name,
+                    "allowed_profiles": k.allowed_profiles,
+                    "spend_limit": k.spend_limit,
+                    "total_spend": k.total_spend,
+                    "status": k.status,
+                    "created_at": k.created_at,
+                    "last_used_at": k.last_used_at,
+                    "expires_at": k.expires_at,
+                    "revoked_at": k.revoked_at,
+                    "metadata_tags": k.metadata_tags,
+                }
+                for k in keys
+            ]
 
-    def create_key(self, profile: str, label: str = "") -> dict:
+    def create_key(
+        self,
+        name: str = "",
+        allowed_profiles: str = "",
+        spend_limit: float = 0.0,
+        expires_at: str = "",
+        metadata_tags: str = "",
+    ) -> dict:
         """Create a new API key. Returns dict with raw key (one-time view)."""
         raw_key = "lcp_" + secrets.token_hex(24)
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-        data = self._load()
-        entry = {
-            "id": str(uuid.uuid4())[:8],
-            "profile": profile,
-            "label": label or f"Key for {profile}",
-            "hash": key_hash,
-            "created": datetime.now(timezone.utc).isoformat(),
-            "last_used": None,
-        }
-        data.setdefault("keys", []).append(entry)
-        self._save()
-        logger.info("key_created", profile=profile, key_id=entry["id"])
-        return {"ok": True, "key": raw_key, "id": entry["id"], "profile": profile, "label": entry["label"]}
+        key_prefix = raw_key[:12]  # "lcp_" + 8 hex chars
 
-    def revoke_key(self, key_id: str) -> bool:
-        """Revoke (delete) a key by ID. Returns True if found and deleted."""
-        data = self._load()
-        before = len(data.get("keys", []))
-        data["keys"] = [k for k in data.get("keys", []) if k["id"] != key_id]
-        if len(data["keys"]) == before:
-            return False
-        self._save()
+        with get_session(self._engine) as session:
+            entry = ApiKey(
+                key_hash=key_hash,
+                key_prefix=key_prefix,
+                name=name or f"Key {key_prefix}",
+                allowed_profiles=allowed_profiles or None,
+                spend_limit=spend_limit or 0.0,
+                status="active",
+                created_at=datetime.now(timezone.utc).isoformat(),
+                expires_at=expires_at or None,
+                metadata_tags=metadata_tags or None,
+            )
+            session.add(entry)
+            session.commit()
+            key_id = entry.id
+
+        logger.info("key_created", key_id=key_id, name=name)
+        return {
+            "ok": True,
+            "key": raw_key,
+            "id": key_id,
+            "key_prefix": key_prefix,
+            "name": entry.name,
+            "allowed_profiles": entry.allowed_profiles,
+            "spend_limit": entry.spend_limit,
+        }
+
+    def rotate_key(self, key_id: int) -> dict | None:
+        """Rotate a key: revoke old, create new with same permissions. Returns new key info."""
+        with get_session(self._engine) as session:
+            old = session.query(ApiKey).filter(ApiKey.id == key_id).first()
+            if not old:
+                return None
+
+            # Revoke old key
+            old.status = "revoked"
+            old.revoked_at = datetime.now(timezone.utc).isoformat()
+
+            # Create new key with same settings
+            raw_key = "lcp_" + secrets.token_hex(24)
+            key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+            key_prefix = raw_key[:12]
+
+            new_key = ApiKey(
+                key_hash=key_hash,
+                key_prefix=key_prefix,
+                name=old.name,
+                allowed_profiles=old.allowed_profiles,
+                spend_limit=old.spend_limit,
+                status="active",
+                created_at=datetime.now(timezone.utc).isoformat(),
+                expires_at=old.expires_at,
+                metadata_tags=old.metadata_tags,
+            )
+            session.add(new_key)
+            session.commit()
+            new_id = new_key.id
+
+        logger.info("key_rotated", old_id=key_id, new_id=new_id)
+        return {
+            "ok": True,
+            "key": raw_key,
+            "id": new_id,
+            "key_prefix": key_prefix,
+            "name": new_key.name,
+            "old_id": key_id,
+        }
+
+    def revoke_key(self, key_id: int) -> bool:
+        """Soft-revoke a key by ID. Returns True if found."""
+        with get_session(self._engine) as session:
+            key = session.query(ApiKey).filter(ApiKey.id == key_id).first()
+            if not key:
+                return False
+            key.status = "revoked"
+            key.revoked_at = datetime.now(timezone.utc).isoformat()
+            session.commit()
         logger.info("key_revoked", key_id=key_id)
         return True
 
+    def get_key(self, key_id: int) -> dict | None:
+        """Get a single key by ID."""
+        with get_session(self._engine) as session:
+            k = session.query(ApiKey).filter(ApiKey.id == key_id).first()
+            if not k:
+                return None
+            return {
+                "id": k.id,
+                "key_prefix": k.key_prefix,
+                "name": k.name,
+                "allowed_profiles": k.allowed_profiles,
+                "spend_limit": k.spend_limit,
+                "total_spend": k.total_spend,
+                "status": k.status,
+                "created_at": k.created_at,
+                "last_used_at": k.last_used_at,
+                "expires_at": k.expires_at,
+                "revoked_at": k.revoked_at,
+                "metadata_tags": k.metadata_tags,
+            }
+
     def validate_key(self, raw_key: str) -> dict | None:
-        """Validate an API key. Returns key entry dict if valid, None otherwise."""
+        """Validate an API key. Returns key info dict if valid, None otherwise."""
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-        data = self._load()
-        for k in data.get("keys", []):
-            if k.get("hash") == key_hash:
-                return k
-        return None
+        with get_session(self._engine) as session:
+            k = session.query(ApiKey).filter(
+                ApiKey.key_hash == key_hash,
+                ApiKey.status == "active",
+            ).first()
+            if not k:
+                return None
+            # Check expiry
+            if k.expires_at:
+                try:
+                    exp = datetime.fromisoformat(k.expires_at)
+                    if datetime.now(timezone.utc) > exp:
+                        return None
+                except ValueError:
+                    pass
+            # Update last used
+            k.last_used_at = datetime.now(timezone.utc).isoformat()
+            session.commit()
+            return {
+                "id": k.id,
+                "name": k.name,
+                "allowed_profiles": k.allowed_profiles,
+                "spend_limit": k.spend_limit,
+                "total_spend": k.total_spend,
+            }
+
+    def record_spend(self, key_id: int, cost: float) -> None:
+        """Increment total spend for a key."""
+        if not key_id or cost <= 0:
+            return
+        with get_session(self._engine) as session:
+            k = session.query(ApiKey).filter(ApiKey.id == key_id).first()
+            if k:
+                k.total_spend = (k.total_spend or 0.0) + cost
+                session.commit()
 
 
 # ── Module-level singleton ────────────────────────────────────────────────
 _key_manager: KeyManager | None = None
 
 
-def get_key_manager(data_dir: str = "data") -> KeyManager:
+def get_key_manager(engine=None, data_dir: str = "data") -> KeyManager:
     """Get or create the key manager singleton."""
     global _key_manager
-    if _key_manager is None:
-        _key_manager = KeyManager(data_dir)
+    if _key_manager is None and engine is not None:
+        _key_manager = KeyManager(engine, data_dir)
     return _key_manager
+
+
+def init_key_manager(engine, data_dir: str = "data") -> KeyManager:
+    """Force-initialize the key manager with an engine."""
+    global _key_manager
+    _key_manager = KeyManager(engine, data_dir)
+    return _key_manager
+
