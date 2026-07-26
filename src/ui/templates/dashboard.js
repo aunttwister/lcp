@@ -24,58 +24,12 @@ function closeSidebar() {
   }
 })();
 
-/* ── Swipe-to-reveal for profile rows (mobile) ── */
-var _swipedRow = null;
-var _swipeStartX = 0;
-var _swipeCurrentX = 0;
-var _swipeThreshold = 40;
-
-function closeAllSwipes() {
-  if (_swipedRow) {
-    _swipedRow.classList.remove('swiped');
-    _swipedRow.querySelector('.sb-folder-content').style.transform = '';
-    _swipedRow = null;
-  }
+/* ── Copy URL helper ── */
+function copyUrl(url) {
+  navigator.clipboard.writeText(url).then(function() {
+    // brief visual feedback
+  });
 }
-
-document.addEventListener('touchstart', function(e) {
-  var row = e.target.closest('.sb-profile-row');
-  if (!row) { closeAllSwipes(); return; }
-  if (row !== _swipedRow) closeAllSwipes();
-  _swipeStartX = e.touches[0].clientX;
-  _swipeCurrentX = _swipeStartX;
-}, {passive: true});
-
-document.addEventListener('touchmove', function(e) {
-  var row = e.target.closest('.sb-profile-row');
-  if (!row) return;
-  _swipeCurrentX = e.touches[0].clientX;
-  var dx = _swipeCurrentX - _swipeStartX;
-  if (dx > 0) { return; } // only left swipe
-  dx = Math.max(dx, -72); // cap at action button width
-  row.querySelector('.sb-folder-content').style.transform = 'translateX(' + dx + 'px)';
-  row.querySelector('.sb-folder-content').style.transition = 'none';
-}, {passive: true});
-
-document.addEventListener('touchend', function(e) {
-  var row = e.target.closest('.sb-profile-row');
-  if (!row) return;
-  var dx = _swipeCurrentX - _swipeStartX;
-  row.querySelector('.sb-folder-content').style.transition = '';
-  if (dx < -_swipeThreshold) {
-    row.classList.add('swiped');
-    _swipedRow = row;
-  } else {
-    row.querySelector('.sb-folder-content').style.transform = '';
-    row.classList.remove('swiped');
-    if (_swipedRow === row) _swipedRow = null;
-  }
-});
-
-// Close swipe on click outside
-document.addEventListener('click', function(e) {
-  if (!e.target.closest('.sb-profile-row')) closeAllSwipes();
-});
 
 var ppData = {pp_data_json};
 var pmData = {pm_data_json};

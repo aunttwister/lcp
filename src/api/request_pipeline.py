@@ -25,7 +25,6 @@ from .logging_config import get_logger
 from .models import get_session, Request as RequestModel
 from .prompt_cache import get_prompt_cache
 from .token_verifier import get_token_verifier
-from .budget_manager import get_budget_manager
 
 logger = get_logger("lcp.pipeline")
 
@@ -199,21 +198,4 @@ def record_cost(engine, profile: str, model: str, provider: str, cost_info: dict
         session.add(req)
         session.commit()
 
-    # Track spend against budgets
-    if success and cost > 0:
-        try:
-            bm = get_budget_manager()
-            if bm:
-                breached = bm.record_spend(cost, profile=profile)
-                if breached:
-                    from .alert_manager import get_alert_manager
-                    am = get_alert_manager()
-                    for b in breached:
-                        am.fire_budget_breach(
-                            budget_name=b["budget_name"],
-                            threshold=b["threshold"],
-                            spend_pct=b["spend_pct"],
-                            budget_id=b["budget_id"],
-                        )
-        except Exception:
-            pass  # Budget tracking is non-critical
+    # Track spend against key (when key auth is wired in)

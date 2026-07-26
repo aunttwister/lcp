@@ -226,15 +226,34 @@ class KeyManager:
                 "total_spend": k.total_spend,
             }
 
-    def record_spend(self, key_id: int, cost: float) -> None:
-        """Increment total spend for a key."""
+    def record_spend(self, key_id: int, cost: float) -> dict | None:
+        """Increment total spend for a key. Returns breach info if limit exceeded."""
         if not key_id or cost <= 0:
-            return
+            return None
         with get_session(self._engine) as session:
             k = session.query(ApiKey).filter(ApiKey.id == key_id).first()
-            if k:
-                k.total_spend = (k.total_spend or 0.0) + cost
-                session.commit()
+            if not k:
+                return None
+            prev_spend = k.total_spend or 0.0
+            k.total_spend = prev_spend + cost
+            session.commit()
+
+            # Check spend limit
+            if k.spend_limit and k.spend_limit > 0:
+                prev_pct = (prev_spend / k.spend_limit) * 100
+                new_pct = (k.total_spend / k.spend_limit) * 100
+                # Check 50%, 80%, 90%, 100% thresholds
+                for threshold in [50, 80, 90, 100]:
+                    if prev_pct < threshold <= new_pct:
+                        return {
+                            "key_id": key_id,
+                            "key_name": k.name,
+                            "threshold": threshold,
+                            "spend_pct": round(new_pct, 1),
+                            "current_spend": k.total_spend,
+                            "limit": k.spend_limit,
+                        }
+        return None
 
 
 # ── Module-level singleton ────────────────────────────────────────────────

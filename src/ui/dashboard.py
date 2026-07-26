@@ -308,7 +308,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
                 '</div>'
             )
 
-    # Sidebar navigation — tree: Profiles → Providers → Models
+    # Sidebar navigation — clean, minimal
     def _active(p): return " active" if profile_filter == p else ""
     dash_active = _active(None)
     host = headers.get("Host", "localhost:8735")
@@ -320,68 +320,23 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         '  <nav class="sidebar-nav">\n'
         f'    <a href="/dashboard" class="{dash_active}">Dashboard</a>\n'
         f'    <a href="/keys">API Keys</a>\n'
-        f'    <a href="/budgets">Budgets</a>\n'
+        f'    <a href="/providers">Providers</a>\n'
+        f'    <a href="/profiles">Profiles</a>\n'
         '    <div class="nav-label">Profiles</div>\n'
     )
     for p, pcfg in config.profiles.items():
         active = " active" if profile_filter == p else ""
+        chain = pcfg.get("chain", [])
+        providers_str = ", ".join(s["provider"] for s in chain[:2])
+        if len(chain) > 2:
+            providers_str += f" +{len(chain)-2}"
         sidebar_nav += (
-            f'\n    <div class="sb-tree">'
-            f'\n      <div class="sb-folder sb-profile-row" data-profile="{p}">'
-            f'\n        <div class="sb-swipe-actions">'
-            f'\n          <button class="sb-action-btn" onclick="event.stopPropagation();openProfileConfig(event,\u0027{p}\u0027)" title="Settings">⚙</button>'
-            f'\n        </div>'
-            f'\n        <div class="sb-folder-content">'
-            f'\n          <span class="sb-chevron" onclick="toggleSbFolder(this.closest(\u0027.sb-folder\u0027))">▸</span>'
-            f'\n          <a href="/{p}/dashboard" class="{active} sb-folder-link">{p.upper()}</a>'
-            f'\n          <a href="#" class="sb-settings-link" onclick="openProfileConfig(event,\u0027{p}\u0027);return false" title="Settings">⚙</a>'
-            f'\n        </div>'
-            f'\n      </div>'
-            f'\n      <div class="sb-children">'
-        )
-        for step in pcfg.get("chain", []):
-            pn = step["provider"]
-            bu = step.get("base_url", "")
-            pdata = config.providers.get(pn, {})
-            models = pdata.get("models", [])
-            h = _get_health(pn, bu, p)
-            status = h["status"]
-            dot_class = "dot-healthy" if status == "healthy" else "dot-degraded" if status == "degraded" else "dot-dead"
-            sidebar_nav += (
-                f'\n        <div class="sb-tree">'
-                f'\n          <div class="sb-folder sb-provider" data-profile="{p}" data-provider="{pn}" data-url="{bu}" data-models="{",".join(models)}" data-status="{status}" data-keyenv="{pdata.get("api_key_env", "")}">'
-                f'\n            <span class="sb-chevron" onclick="toggleProvider(event, this.parentElement)">▸</span>'
-                f'\n            <span class="ph-dot {dot_class}" style="display:inline-block;margin-right:4px"></span>'
-                f'\n            <span class="sb-name" onclick="toggleProvider(event, this.parentElement)">{pn}</span>'
-                f'\n            <span class="sb-edit-btn" onclick="editProviderFromSidebar(event, this.parentElement)" title="Edit provider">⚙</span>'
-                f'\n          </div>'
-                f'\n          <div class="sb-children sb-models">'
-            )
-            for m in models:
-                sidebar_nav += f'\n            <div class="sb-leaf"><span class="sb-model">{m}</span></div>'
-            if not models:
-                sidebar_nav += '\n            <div class="sb-leaf" style="color:hsl(var(--muted-foreground));font-style:italic">no models</div>'
-            sidebar_nav += (
-                f'\n          </div>'
-                f'\n        </div>'
-            )
-        if not pcfg.get("chain"):
-            sidebar_nav += '\n        <div class="sb-leaf" style="color:hsl(var(--muted-foreground));font-style:italic">no providers</div>'
-        sidebar_nav += (
-            f'\n      </div>'
-            f'\n      <div class="sb-leaf" style="padding-top:0.125rem">'
-            f'\n        <span class="sb-url" id="url-{p}" title="Gateway URL">/{p}/chat/completions</span>'
-            f'\n        <button class="sb-copy-btn" onclick="copyUrl(\u0027{host_url}/{p}/chat/completions\u0027)" title="Copy URL">copy</button>'
-            f'\n      </div>'
-            f'\n    </div>'
+            f'\n    <a href="/{p}/dashboard" class="{active} sb-profile-link" title="{providers_str}">'
+            f'<span>{p.upper()}</span>'
+            f'<button class="sb-copy-btn" onclick="event.preventDefault();event.stopPropagation();copyUrl(\u0027{host_url}/{p}/chat/completions\u0027)" title="Copy gateway URL">/{p}/chat/completions</button>'
+            f'</a>'
         )
     sidebar_nav += (
-        '\n    <div class="sb-leaf" style="padding-top:0.375rem">'
-        '\n      <button class="btn-sm btn-primary" onclick="addProfile()" style="font-size:0.6875rem;width:100%">+ Add Profile</button>'
-        '\n    </div>'
-        '\n    <div class="nav-label">Configuration</div>'
-        '\n    <a href="#" onclick="openProviderModal();return false">Providers</a>'
-
         '\n  </nav>\n</aside>'
     )
 

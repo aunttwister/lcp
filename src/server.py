@@ -26,7 +26,6 @@ from .api.cost_estimator import estimate_from_request
 from .api.prompt_cache import get_prompt_cache
 from .api.token_verifier import get_token_verifier
 from .api.key_manager import get_key_manager, init_key_manager
-from .api.budget_manager import get_budget_manager, init_budget_manager
 from .api.alert_manager import get_alert_manager
 from .api.models import get_session, Request as RequestModel
 from .api.exceptions import ToolBlockedError, AllProvidersFailedError
@@ -109,8 +108,10 @@ class LCPHandler(BaseHTTPRequestHandler):
             self._serve_dashboard()
         elif self.path == "/keys" or self.path == "/keys/dashboard":
             self._serve_keys_dashboard()
-        elif self.path == "/budgets" or self.path == "/budgets/dashboard":
-            self._serve_budgets_dashboard()
+        elif self.path == "/providers":
+            self._serve_providers_page()
+        elif self.path == "/profiles":
+            self._serve_profiles_page()
         elif self.path.endswith("/dashboard"):
             # Per-profile: /l2/dashboard, /l1/dashboard, etc.
             profile = self._resolve_profile()
@@ -145,10 +146,6 @@ class LCPHandler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/keys/") and len(self.path.split("/")) == 4:
             key_id = self.path.split("/")[3]
             self._serve_key_detail(key_id)
-        elif self.path == "/api/budgets":
-            self._serve_budgets_list()
-        elif self.path == "/api/budgets/status":
-            self._serve_budgets_status()
         elif self.path == "/api/alerts":
             self._serve_alerts_list()
         elif self.path == "/api/alerts/config":
@@ -179,9 +176,6 @@ class LCPHandler(BaseHTTPRequestHandler):
             key_id = self.path.split("/")[3]
             self._serve_key_rotate(key_id)
             return
-        elif self.path == "/api/budgets":
-            self._serve_budget_create()
-            return
         elif self.path == "/api/alerts/webhook/test":
             self._serve_alerts_test_webhook()
             return
@@ -204,6 +198,34 @@ class LCPHandler(BaseHTTPRequestHandler):
         if profile_cfg is None:
             self._send_json({"error": f"profile not found: {profile}"}, 400)
             return
+
+        # Auth check — if profile requires API key, validate Authorization header
+        if profile_cfg.get("auth_required", True):
+            auth_header = self.headers.get("Authorization", "")
+            if not auth_header.startswith("Bearer "):
+                self._send_json({"error": "API key required for this profile. Use Authorization: Bearer <key>"}, 401)
+                return
+            raw_key = auth_header[7:]
+            km = get_key_manager()
+            if km:
+                key_info = km.validate_key(raw_key)
+                if key_info is None:
+                    self._send_json({"error": "invalid or revoked API key"}, 401)
+                    return
+                # Check profile access
+                allowed = key_info.get("allowed_profiles")
+                if allowed:
+                    allowed_list = [p.strip() for p in allowed.split(",") if p.strip()]
+                    if profile not in allowed_list:
+                        self._send_json({"error": f"key does not have access to profile '{profile}'"}, 403)
+                        return
+                # Check spend limit
+                limit = key_info.get("spend_limit", 0)
+                spent = key_info.get("total_spend", 0)
+                if limit > 0 and spent >= limit:
+                    self._send_json({"error": f"spend limit exceeded (${spent:.2f} / ${limit:.2f})"}, 429)
+                    return
+                self._current_key_id = key_info.get("id")
 
         try:
             body = self._read_body()
@@ -321,6 +343,26 @@ class LCPHandler(BaseHTTPRequestHandler):
             # Record cost
             record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools)
 
+            # Track spend on the API key and check limits
+            if hasattr(self, '_current_key_id') and self._current_key_id:
+                try:
+                    km = get_key_manager()
+                    if km:
+                        breach = km.record_spend(self._current_key_id, cost_info["cost"])
+                        if breach:
+                            from .api.alert_manager import get_alert_manager
+                            am = get_alert_manager()
+                            am.fire(
+                                rule="budget_breach",
+                                severity="warning" if breach["threshold"] < 100 else "critical",
+                                title=f"Key '{breach['key_name']}' at {breach['spend_pct']}%",
+                                message=f"Key '{breach['key_name']}' has used {breach['spend_pct']}% of its ${breach['limit']:.2f} limit (${breach['current_spend']:.4f} spent).",
+                                dedup_key=f"key:{self._current_key_id}:t{breach['threshold']}",
+                                metadata=breach,
+                            )
+                except Exception:
+                    pass
+
             # Send response with custom headers
             body_bytes = json.dumps(response_body).encode("utf-8")
             self.send_response(status)
@@ -371,9 +413,9 @@ class LCPHandler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/chains/") and len(self.path.split("/")) == 4:
             profile = self.path.split("/")[3]
             self._serve_chain_reorder(profile)
-        elif self.path.startswith("/api/budgets/") and len(self.path.split("/")) == 4:
-            budget_id = self.path.split("/")[3]
-            self._serve_budget_update(budget_id)
+        elif self.path.startswith("/api/profiles/") and len(self.path.split("/")) == 4:
+            profile = self.path.split("/")[3]
+            self._serve_profile_update(profile)
         elif self.path == "/api/alerts/config":
             self._serve_alerts_config_update()
         else:
@@ -387,9 +429,9 @@ class LCPHandler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/keys/") and len(self.path.split("/")) == 4:
             key_id = self.path.split("/")[3]
             self._serve_key_delete(key_id)
-        elif self.path.startswith("/api/budgets/") and len(self.path.split("/")) == 4:
-            budget_id = self.path.split("/")[3]
-            self._serve_budget_delete(budget_id)
+        elif self.path.startswith("/api/profiles/") and len(self.path.split("/")) == 4:
+            profile = self.path.split("/")[3]
+            self._serve_profile_delete(profile)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -760,6 +802,7 @@ class LCPHandler(BaseHTTPRequestHandler):
                 "chain": pcfg.get("chain", []),
                 "url": f"{base}/{pname}/chat/completions",
                 "forbidden": pcfg.get("forbidden_tools", []),
+                "auth_required": pcfg.get("auth_required", True),
             }
         self._send_json({"profiles": profiles})
 
@@ -783,6 +826,35 @@ class LCPHandler(BaseHTTPRequestHandler):
         }
         cfg.save()
         self._send_json({"ok": True, "profile": name})
+
+    def _serve_profile_update(self, name: str):
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        cfg = self.config
+        if name not in cfg.profiles:
+            self._send_json({"error": f"profile '{name}' not found"}, 404)
+            return
+        pcfg = cfg.raw["profiles"][name]
+        if "forbidden_tools" in body:
+            pcfg["forbidden_tools"] = body["forbidden_tools"]
+        if "chain" in body:
+            pcfg["chain"] = body["chain"]
+        if "auth_required" in body:
+            pcfg["auth_required"] = body["auth_required"]
+        cfg.save()
+        self._send_json({"ok": True, "profile": name})
+
+    def _serve_profile_delete(self, name: str):
+        cfg = self.config
+        if name not in cfg.profiles:
+            self._send_json({"error": f"profile '{name}' not found"}, 404)
+            return
+        del cfg.raw["profiles"][name]
+        cfg.save()
+        self._send_json({"ok": True, "deleted": name})
 
     # ── API Key Management ────────────────────────────────────────────────
 
@@ -858,79 +930,6 @@ class LCPHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": "key not found"}, 404)
 
-    # ── Budget Management ──────────────────────────────────────────────────
-
-    def _serve_budgets_list(self):
-        bm = get_budget_manager()
-        budgets = bm.list_budgets() if bm else []
-        self._send_json({"budgets": budgets})
-
-    def _serve_budgets_status(self):
-        bm = get_budget_manager()
-        status = bm.get_budget_status() if bm else []
-        self._send_json({"budgets": status})
-
-    def _serve_budget_create(self):
-        try:
-            body = self._read_body()
-        except Exception:
-            self._send_json({"error": "invalid JSON body"}, 400)
-            return
-        bm = get_budget_manager()
-        if not bm:
-            self._send_json({"error": "budget manager not initialized"}, 500)
-            return
-        if not body.get("name") or not body.get("amount"):
-            self._send_json({"error": "missing 'name' or 'amount'"}, 400)
-            return
-        result = bm.create_budget(
-            name=body["name"],
-            amount=float(body["amount"]),
-            key_id=body.get("key_id"),
-            profile=body.get("profile"),
-            period=body.get("period", "monthly"),
-            threshold_pct=body.get("threshold_pct", "50,80,90"),
-            action=body.get("action", "log"),
-        )
-        self._send_json(result)
-
-    def _serve_budget_update(self, budget_id: str):
-        try:
-            body = self._read_body()
-        except Exception:
-            self._send_json({"error": "invalid JSON body"}, 400)
-            return
-        bm = get_budget_manager()
-        if not bm:
-            self._send_json({"error": "budget manager not initialized"}, 500)
-            return
-        try:
-            bid = int(budget_id)
-        except ValueError:
-            self._send_json({"error": "invalid budget id"}, 400)
-            return
-        result = bm.update_budget(bid, body)
-        if result:
-            self._send_json(result)
-        else:
-            self._send_json({"error": "budget not found"}, 404)
-
-    def _serve_budget_delete(self, budget_id: str):
-        bm = get_budget_manager()
-        if not bm:
-            self._send_json({"error": "budget manager not initialized"}, 500)
-            return
-        try:
-            bid = int(budget_id)
-        except ValueError:
-            self._send_json({"error": "invalid budget id"}, 400)
-            return
-        ok = bm.delete_budget(bid)
-        if ok:
-            self._send_json({"ok": True, "deleted": bid})
-        else:
-            self._send_json({"error": "budget not found"}, 404)
-
     # ── Alert Management ──────────────────────────────────────────────────
 
     def _serve_alerts_list(self):
@@ -988,18 +987,517 @@ class LCPHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(html.encode("utf-8"))
 
-    def _serve_budgets_dashboard(self):
-        """Server-rendered Budgets management page."""
-        html = _render_budgets_page(self.config, self.engine)
+    def _serve_providers_page(self):
+        """Server-rendered Providers management page."""
+        html = _render_providers_page(self.config)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_profiles_page(self):
+        """Server-rendered Profiles management page."""
+        html = _render_profiles_page(self.config)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
         self.wfile.write(html.encode("utf-8"))
 
 
+def _render_providers_page(config) -> str:
+    """Render the Providers management page."""
+    from pathlib import Path
+    _templates_dir = Path(__file__).parent / "ui" / "templates"
+    css = ""
+    try:
+        css = (_templates_dir / "dashboard.css").read_text()
+    except Exception:
+        pass
+
+    prov_rows = ""
+    for name, pdata in config.providers.items():
+        models = ", ".join(pdata.get("models", []))
+        prov_rows += (
+            f'<tr>'
+            f'<td><b>{name}</b></td>'
+            f'<td class="mono" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{pdata.get("api_base", "—")}</td>'
+            f'<td>{pdata.get("api_key_env", "—")}</td>'
+            f'<td>{models or "—"}</td>'
+            f'<td><button class="btn-sm" onclick="editProvider(\'{name}\')">Edit</button> '
+            f'<button class="btn-sm btn-danger" onclick="deleteProvider(\'{name}\')">Del</button></td>'
+            f'</tr>'
+        )
+    if not prov_rows:
+        prov_rows = '<tr><td colspan="5" class="empty">No providers configured.</td></tr>'
+
+    return f"""<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LCP — Providers</title>
+<style>{css}</style>
+</head>
+<body>
+{_render_sidebar_html(config, "providers")}
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+<button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()">☰</button>
+<div class="main-content">
+<h1>Providers</h1>
+<p class="subtitle">Manage LLM API providers and their models</p>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1rem">
+  <button class="btn-sm btn-primary" onclick="showAddProvForm()">+ Add Provider</button>
+  <select id="provPreset" onchange="loadPreset()" style="padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+    <option value="">-- Quick-add preset --</option>
+  </select>
+</div>
+
+<div class="prov-form" id="provForm" style="display:none">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+    <div>
+      <label>Provider Name</label>
+      <input id="provName" placeholder="e.g. openai">
+    </div>
+    <div>
+      <label>API Base URL</label>
+      <input id="provUrl" placeholder="https://api.openai.com/v1">
+    </div>
+    <div>
+      <label>API Key Env Var</label>
+      <input id="provKeyEnv" placeholder="OPENAI_API_KEY">
+    </div>
+    <div>
+      <label>Models (comma-separated)</label>
+      <input id="provModels" placeholder="gpt-4o, gpt-4o-mini">
+    </div>
+  </div>
+  <div style="display:flex;gap:0.5rem;margin-top:0.75rem">
+    <button class="btn-sm btn-success" id="provTestBtn" onclick="testProvider()">Test Connection</button>
+    <button class="btn-sm btn-primary" id="provSaveBtn" onclick="saveProvider()" disabled>Save Provider</button>
+    <button class="btn-sm" onclick="hideAddProvForm()">Cancel</button>
+  </div>
+  <div id="testResult" class="test-result" style="display:none"></div>
+</div>
+
+<div class="table-wrap" style="margin-top:0.75rem">
+<table>
+<thead><tr>
+  <th>Name</th><th>Base URL</th><th>Key Env</th><th>Models</th><th>Actions</th>
+</tr></thead>
+<tbody id="providersBody">{prov_rows}</tbody>
+</table>
+</div>
+</div>
+
+<script>
+function api(method, url, body) {{
+  var opts = {{method:method, headers:{{'Content-Type':'application/json'}}}};
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(url, opts).then(function(r) {{ return r.json(); }});
+}}
+
+function loadPresets() {{
+  api('GET', '/api/providers/presets').then(function(d) {{
+    var sel = document.getElementById('provPreset');
+    Object.keys(d.presets || {{}}).forEach(function(k) {{
+      sel.innerHTML += '<option value="' + k + '">' + k + '</option>';
+    }});
+  }});
+}}
+
+function loadPreset() {{
+  var key = document.getElementById('provPreset').value;
+  if (!key) return;
+  api('GET', '/api/providers/presets').then(function(d) {{
+    var p = (d.presets || {{}})[key];
+    if (!p) return;
+    document.getElementById('provName').value = key;
+    document.getElementById('provUrl').value = p.api_base || '';
+    document.getElementById('provModels').value = (p.models || []).join(', ');
+    document.getElementById('provKeyEnv').value = 'LCP_' + key.toUpperCase() + '_API_KEY';
+    showAddProvForm();
+    document.getElementById('provSaveBtn').disabled = false;
+  }});
+}}
+
+function showAddProvForm() {{
+  document.getElementById('provForm').style.display = 'block';
+  document.getElementById('provName').value = '';
+  document.getElementById('provUrl').value = '';
+  document.getElementById('provKeyEnv').value = '';
+  document.getElementById('provModels').value = '';
+  document.getElementById('testResult').style.display = 'none';
+  document.getElementById('provSaveBtn').disabled = true;
+}}
+
+function hideAddProvForm() {{
+  document.getElementById('provForm').style.display = 'none';
+}}
+
+function testProvider() {{
+  var resultEl = document.getElementById('testResult');
+  resultEl.style.display = 'block';
+  resultEl.textContent = 'Testing...';
+  resultEl.style.color = 'hsl(var(--amber-fg))';
+  api('POST', '/api/providers/test', {{
+    api_base: document.getElementById('provUrl').value,
+    api_key: '',
+    model: (document.getElementById('provModels').value || 'default').split(',')[0].trim()
+  }}).then(function(d) {{
+    if (d.ok) {{
+      resultEl.textContent = 'Connected — model: ' + d.model;
+      resultEl.style.color = 'hsl(var(--green-fg))';
+      document.getElementById('provSaveBtn').disabled = false;
+    }} else {{
+      resultEl.textContent = 'Failed: ' + (d.error || 'unknown');
+      resultEl.style.color = 'hsl(var(--red-fg))';
+    }}
+  }});
+}}
+
+function editProvider(name) {{
+  api('GET', '/api/providers').then(function(d) {{
+    var p = (d.providers || {{}})[name];
+    if (!p) return;
+    showAddProvForm();
+    document.getElementById('provName').value = name;
+    document.getElementById('provUrl').value = p.api_base || '';
+    document.getElementById('provKeyEnv').value = p.api_key_env || '';
+    document.getElementById('provModels').value = (p.models || []).join(', ');
+    document.getElementById('provSaveBtn').disabled = false;
+  }});
+}}
+
+function saveProvider() {{
+  var name = document.getElementById('provName').value.trim();
+  if (!name) {{ alert('Provider name is required'); return; }}
+  var body = {{
+    name: name,
+    api_base: document.getElementById('provUrl').value.trim(),
+    api_key_env: document.getElementById('provKeyEnv').value.trim(),
+    models: document.getElementById('provModels').value.split(',').map(function(s) {{ return s.trim(); }}).filter(Boolean)
+  }};
+  api('POST', '/api/providers', body).then(function(d) {{
+    if (d.ok) {{ location.reload(); }}
+    else {{ alert('Error: ' + (d.error || 'unknown')); }}
+  }});
+}}
+
+function deleteProvider(name) {{
+  if (!confirm('Delete provider "' + name + '"? This removes it from all profile chains.')) return;
+  api('DELETE', '/api/providers/' + name).then(function(d) {{
+    if (d.ok) location.reload();
+    else alert('Error: ' + (d.error || 'unknown'));
+  }});
+}}
+
+function toggleSidebar() {{
+  var sb = document.getElementById('sidebar');
+  if (window.innerWidth <= 768) {{
+    sb.classList.toggle('open');
+    document.getElementById('sidebarOverlay').classList.toggle('show');
+  }} else {{
+    sb.classList.toggle('collapsed');
+  }}
+}}
+function closeSidebar() {{
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('show');
+}}
+
+loadPresets();
+</script>
+</body>
+</html>"""
+
+
+def _render_profiles_page(config) -> str:
+    """Render the Profiles management page."""
+    from pathlib import Path
+    _templates_dir = Path(__file__).parent / "ui" / "templates"
+    css = ""
+    try:
+        css = (_templates_dir / "dashboard.css").read_text()
+    except Exception:
+        pass
+
+    profile_rows = ""
+    for pname, pcfg in config.profiles.items():
+        chain = pcfg.get("chain", [])
+        steps = " → ".join(f"{s['provider']}/{s['model']}" for s in chain) if chain else "—"
+        forbidden = ", ".join(pcfg.get("forbidden_tools", []) or []) or "none"
+        auth_required = pcfg.get("auth_required", True)
+        auth_badge = "key" if auth_required else "public"
+        profile_rows += (
+            f'<tr>'
+            f'<td><b>{pname.upper()}</b></td>'
+            f'<td style="font-size:0.6875rem">{auth_badge}</td>'
+            f'<td style="font-size:0.75rem">{steps}</td>'
+            f'<td style="font-size:0.6875rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{forbidden}">{forbidden}</td>'
+            f'<td class="mono" style="font-size:0.6875rem">/{pname}/chat/completions</td>'
+            f'<td><button class="btn-sm" onclick="editProfile(\'{pname}\')">Edit</button> '
+            f'<button class="btn-sm btn-danger" onclick="deleteProfile(\'{pname}\')">Del</button></td>'
+            f'</tr>'
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LCP — Profiles</title>
+<style>{css}</style>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+</head>
+<body>
+{_render_sidebar_html(config, "profiles")}
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+<button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()">☰</button>
+<div class="main-content">
+<h1>Profiles</h1>
+<p class="subtitle">Manage routing profiles, fallback chains, and tool restrictions</p>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1rem">
+  <button class="btn-sm btn-primary" onclick="addProfile()">+ Add Profile</button>
+</div>
+
+<div class="table-wrap">
+<table>
+<thead><tr>
+  <th>Profile</th><th>Auth</th><th>Chain</th><th>Blocked Tools</th><th>Gateway URL</th><th>Actions</th>
+</tr></thead>
+<tbody id="profilesBody">{profile_rows}</tbody>
+</table>
+</div>
+</div>
+
+<!-- Profile Edit Modal -->
+<div class="modal-overlay" id="profileEditModal">
+<div class="modal" style="width:min(600px,95vw)">
+  <div class="modal-header">
+    <h2 id="pemProfileTitle">Edit Profile</h2>
+    <button class="modal-close" onclick="closeProfileEdit()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div style="margin-bottom:0.75rem">
+      <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Access Control</label>
+      <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.8125rem">
+        <input type="checkbox" id="pemAuthRequired" onchange="this.nextElementSibling.textContent = this.checked ? 'API key required' : 'No key required (public)'">
+        <span>API key required</span>
+      </label>
+    </div>
+    <div style="margin-bottom:0.75rem">
+      <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Blocked Tools</label>
+      <div id="pemToolsList" style="display:flex;flex-wrap:wrap;gap:0.25rem;margin-bottom:0.375rem"></div>
+      <div style="display:flex;gap:0.375rem">
+        <input id="pemNewTool" placeholder="tool_name" style="flex:1;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+        <button class="btn-sm btn-primary" onclick="addBlockedTool()">+ Add</button>
+      </div>
+    </div>
+    <div>
+      <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Fallback Chain (drag to reorder)</label>
+      <ul class="chain-list" id="pemChainList"></ul>
+      <button class="btn-sm btn-primary" onclick="addChainStep()" style="margin-top:0.25rem">+ Add Step</button>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <span id="pemSaveStatus" style="font-size:0.6875rem;color:hsl(var(--muted-foreground));margin-right:auto"></span>
+    <button class="btn-sm btn-primary" onclick="saveProfileEdit()">Save</button>
+    <button class="btn-sm" onclick="closeProfileEdit()">Cancel</button>
+  </div>
+</div>
+</div>
+
+<script>
+function api(method, url, body) {{
+  var opts = {{method:method, headers:{{'Content-Type':'application/json'}}}};
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(url, opts).then(function(r) {{ return r.json(); }});
+}}
+
+function addProfile() {{
+  var name = prompt('Profile name (lowercase, e.g. "admin"):');
+  if (!name) return;
+  api('POST', '/api/profiles', {{ name: name }}).then(function(d) {{
+    if (d.ok) location.reload();
+    else alert('Error: ' + (d.error || 'unknown'));
+  }});
+}}
+
+function deleteProfile(name) {{
+  if (!confirm('Delete profile "' + name + '"? This cannot be undone.')) return;
+  api('DELETE', '/api/profiles/' + name).then(function(d) {{
+    if (d.ok) location.reload();
+    else alert('Error: ' + (d.error || 'unknown'));
+  }});
+}}
+
+var _editProfileName = '';
+var _editProfileTools = [];
+var _editProfileChain = [];
+var _allProviders = {{}};
+var _allChains = {{}};
+
+function editProfile(name) {{
+  _editProfileName = name;
+  api('GET', '/api/providers').then(function(d) {{
+    _allProviders = d.providers || {{}};
+    _allChains = d.profile_chains || {{}};
+    _editProfileChain = JSON.parse(JSON.stringify(_allChains[name] || []));
+    api('GET', '/api/profiles').then(function(pd) {{
+      var prof = (pd.profiles || {{}})[name] || {{}};
+      _editProfileTools = (prof.forbidden || []).slice();
+      document.getElementById('pemProfileTitle').textContent = 'Edit Profile: ' + name.toUpperCase();
+      var authReq = prof.auth_required !== false; // default true
+      document.getElementById('pemAuthRequired').checked = authReq;
+      document.getElementById('pemAuthRequired').nextElementSibling.textContent = authReq ? 'API key required' : 'No key required (public)';
+      renderPemTools();
+      renderPemChain();
+      document.getElementById('profileEditModal').classList.add('open');
+    }});
+  }});
+}}
+
+function closeProfileEdit() {{
+  document.getElementById('profileEditModal').classList.remove('open');
+}}
+
+function renderPemTools() {{
+  var html = '';
+  _editProfileTools.forEach(function(t, i) {{
+    html += '<span style="display:inline-flex;align-items:center;gap:0.1875rem;padding:0.125rem 0.5rem;background:hsl(var(--red-bg));color:hsl(var(--red-fg));border-radius:9999px;font-size:0.6875rem;font-weight:600">' +
+      t +
+      '<button onclick="removeBlockedTool(' + i + ')" style="background:none;border:none;color:inherit;cursor:pointer;font-size:0.75rem;padding:0;line-height:1">✕</button>' +
+    '</span>';
+  }});
+  if (!html) html = '<span style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">no tools blocked</span>';
+  document.getElementById('pemToolsList').innerHTML = html;
+}}
+
+function addBlockedTool() {{
+  var t = document.getElementById('pemNewTool').value.trim();
+  if (!t) return;
+  if (_editProfileTools.indexOf(t) >= 0) return;
+  _editProfileTools.push(t);
+  document.getElementById('pemNewTool').value = '';
+  renderPemTools();
+}}
+
+function removeBlockedTool(idx) {{
+  _editProfileTools.splice(idx, 1);
+  renderPemTools();
+}}
+
+function renderPemChain() {{
+  var provNames = Object.keys(_allProviders);
+  var html = '';
+  if (_editProfileChain.length === 0) {{
+    html = '<li class="empty" style="padding:0.5rem;font-size:0.6875rem">No providers in chain</li>';
+  }} else {{
+    _editProfileChain.forEach(function(s, i) {{
+      html += '<li class="chain-item" data-idx="' + i + '">';
+      html += '<span class="drag-handle">⋮⋮</span>';
+      html += '<select onchange="_editProfileChain[' + i + '].provider = this.value; renderPemChain();" style="background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:4px;color:hsl(var(--foreground));padding:0.125rem 0.375rem;font-size:0.6875rem">';
+      provNames.forEach(function(pn) {{
+        var sel = s.provider === pn ? ' selected' : '';
+        html += '<option value="' + pn + '"' + sel + '>' + pn + '</option>';
+      }});
+      html += '</select>';
+      var models = _allProviders[s.provider]?.models || [];
+      html += '<select onchange="_editProfileChain[' + i + '].model = this.value" style="background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:4px;color:hsl(var(--foreground));padding:0.125rem 0.375rem;font-size:0.6875rem">';
+      models.forEach(function(m) {{
+        var sel = s.model === m ? ' selected' : '';
+        html += '<option value="' + m + '"' + sel + '>' + m + '</option>';
+      }});
+      html += '</select>';
+      html += '<button class="btn-sm" style="margin-left:auto" onclick="_editProfileChain.splice(' + i + ',1);renderPemChain();">✕</button>';
+      html += '</li>';
+    }});
+  }}
+  document.getElementById('pemChainList').innerHTML = html;
+  var listEl = document.getElementById('pemChainList');
+  if (listEl && typeof Sortable !== 'undefined') {{
+    new Sortable(listEl, {{
+      animation: 150, handle: '.drag-handle',
+      onEnd: function() {{
+        var items = document.querySelectorAll('#pemChainList .chain-item');
+        var newChain = [];
+        items.forEach(function(item) {{
+          var idx = parseInt(item.getAttribute('data-idx'));
+          newChain.push(_editProfileChain[idx]);
+        }});
+        _editProfileChain = newChain;
+        renderPemChain();
+      }}
+    }});
+  }}
+}}
+
+function addChainStep() {{
+  var provs = Object.keys(_allProviders);
+  if (provs.length === 0) {{ alert('Add a provider first'); return; }}
+  var p = provs[0];
+  var m = (_allProviders[p]?.models || [])[0] || 'default';
+  _editProfileChain.push({{provider: p, model: m}});
+  renderPemChain();
+}}
+
+function saveProfileEdit() {{
+  var statusEl = document.getElementById('pemSaveStatus');
+  statusEl.textContent = 'Saving...';
+  statusEl.style.color = 'hsl(var(--amber-fg))';
+  var chain = _editProfileChain.map(function(s) {{
+    var bu = '';
+    var old = _allChains[_editProfileName] || [];
+    old.forEach(function(o) {{
+      if (o.provider === s.provider && o.model === s.model) bu = o.base_url || '';
+    }});
+    return {{provider: s.provider, model: s.model, base_url: bu}};
+  }});
+  var promises = [
+    api('PUT', '/api/chains/' + _editProfileName, {{chain: chain}}),
+    api('PUT', '/api/profiles/' + _editProfileName, {{
+      forbidden_tools: _editProfileTools,
+      auth_required: document.getElementById('pemAuthRequired').checked
+    }})
+  ];
+  Promise.all(promises).then(function(results) {{
+    var allOk = results.every(function(r) {{ return r.ok; }});
+    if (allOk) {{
+      statusEl.textContent = 'Saved';
+      statusEl.style.color = 'hsl(var(--green-fg))';
+      setTimeout(function() {{ location.reload(); }}, 800);
+    }} else {{
+      statusEl.textContent = 'Save failed';
+      statusEl.style.color = 'hsl(var(--red-fg))';
+    }}
+  }}).catch(function(e) {{
+    statusEl.textContent = 'Error: ' + e;
+    statusEl.style.color = 'hsl(var(--red-fg))';
+  }});
+}}
+
+function toggleSidebar() {{
+  var sb = document.getElementById('sidebar');
+  if (window.innerWidth <= 768) {{
+    sb.classList.toggle('open');
+    document.getElementById('sidebarOverlay').classList.toggle('show');
+  }} else {{
+    sb.classList.toggle('collapsed');
+  }}
+}}
+function closeSidebar() {{
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('show');
+}}
+</script>
+</body>
+</html>"""
+
+
 def _render_keys_page(config, engine) -> str:
     """Render the API Keys management page."""
-    # Load CSS
     from pathlib import Path
     _templates_dir = Path(__file__).parent / "ui" / "templates"
     css = ""
@@ -1054,8 +1552,9 @@ def _render_keys_page(config, engine) -> str:
         <input id="newKeyName" placeholder="e.g. Production Key" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
       </div>
       <div>
-        <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Allowed Profiles (comma-separated, blank=all)</label>
-        <input id="newKeyProfiles" placeholder="l2,l1" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
+        <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Allowed Profiles</label>
+        <div id="newKeyProfilesPills" style="display:flex;flex-wrap:wrap;gap:0.375rem"></div>
+        <div style="font-size:0.625rem;color:hsl(var(--muted-foreground));margin-top:0.25rem">Click to toggle · none selected = all profiles</div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
         <div>
@@ -1076,7 +1575,7 @@ def _render_keys_page(config, engine) -> str:
 </div>
 </div>
 
-<!-- Show Key Modal (one-time view) -->
+<!-- Show Key Modal -->
 <div class="modal-overlay" id="showKeyModal">
 <div class="modal" style="width:min(450px,95vw)">
   <div class="modal-header">
@@ -1141,18 +1640,54 @@ function loadKeys() {{
   }});
 }}
 
-function showCreateKeyModal() {{ document.getElementById('createKeyModal').classList.add('open'); }}
-function closeCreateKeyModal() {{ document.getElementById('createKeyModal').classList.remove('open'); }}
+function showCreateKeyModal() {{ 
+  document.getElementById('createKeyModal').classList.add('open');
+  _selectedProfiles = [];
+  loadProfilesForKeys();
+}}
+function closeCreateKeyModal() {{ 
+  document.getElementById('createKeyModal').classList.remove('open');
+  _selectedProfiles = [];
+}}
 function closeShowKeyModal() {{ document.getElementById('showKeyModal').classList.remove('open'); }}
+
+function loadProfilesForKeys() {{
+  api('GET', '/api/profiles').then(function(d) {{
+    var profiles = Object.keys(d.profiles || {{}});
+    var html = '';
+    profiles.forEach(function(p) {{
+      html += '<span class="profile-pill" data-profile="' + p + '" onclick="toggleProfilePill(this)" style="padding:0.25rem 0.625rem;border-radius:9999px;font-size:0.75rem;font-weight:600;cursor:pointer;border:1px solid hsl(var(--card-border));background:hsl(var(--secondary)/0.3);color:hsl(var(--muted-foreground));transition:all 0.15s;user-select:none">' + p.toUpperCase() + '</span>';
+    }});
+    if (!html) html = '<span style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">No profiles configured</span>';
+    document.getElementById('newKeyProfilesPills').innerHTML = html;
+  }});
+}}
+
+var _selectedProfiles = [];
+
+function toggleProfilePill(el) {{
+  var p = el.getAttribute('data-profile');
+  var idx = _selectedProfiles.indexOf(p);
+  if (idx >= 0) {{
+    _selectedProfiles.splice(idx, 1);
+    el.style.background = 'hsl(var(--secondary)/0.3)';
+    el.style.color = 'hsl(var(--muted-foreground))';
+    el.style.borderColor = 'hsl(var(--card-border))';
+  }} else {{
+    _selectedProfiles.push(p);
+    el.style.background = 'hsl(var(--primary))';
+    el.style.color = 'hsl(var(--primary-foreground))';
+    el.style.borderColor = 'hsl(var(--primary))';
+  }}
+}}
 
 function createKey() {{
   var name = document.getElementById('newKeyName').value.trim();
-  var profiles = document.getElementById('newKeyProfiles').value.trim();
   var limit = parseFloat(document.getElementById('newKeyLimit').value) || 0;
   var expires = document.getElementById('newKeyExpires').value;
   api('POST', '/api/keys', {{
     name: name || 'API Key',
-    allowed_profiles: profiles,
+    allowed_profiles: _selectedProfiles.join(','),
     spend_limit: limit,
     expires_at: expires ? expires + 'T00:00:00' : ''
   }}).then(function(d) {{
@@ -1170,8 +1705,7 @@ function createKey() {{
 }}
 
 function copyShownKey() {{
-  var el = document.getElementById('shownKey');
-  navigator.clipboard.writeText(el.textContent).then(function() {{
+  navigator.clipboard.writeText(document.getElementById('shownKey').textContent).then(function() {{
     alert('Key copied to clipboard');
   }});
 }}
@@ -1207,7 +1741,6 @@ function filterKeys() {{
   }});
 }}
 
-// Sidebar toggle
 function toggleSidebar() {{
   var sb = document.getElementById('sidebar');
   if (window.innerWidth <= 768) {{
@@ -1228,230 +1761,12 @@ loadKeys();
 </html>"""
 
 
-def _render_budgets_page(config, engine) -> str:
-    """Render the Budgets management page."""
-    from pathlib import Path
-    _templates_dir = Path(__file__).parent / "ui" / "templates"
-    css = ""
-    try:
-        css = (_templates_dir / "dashboard.css").read_text()
-    except Exception:
-        pass
-
-    return f"""<!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LCP — Budgets</title>
-<style>{css}</style>
-</head>
-<body>
-{_render_sidebar_html(config, "budgets")}
-<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
-<button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()">☰</button>
-<div class="main-content">
-<h1>Budgets</h1>
-<p class="subtitle">Set spending limits and get alerts</p>
-
-<div style="display:flex;gap:0.5rem;margin-bottom:1rem">
-  <button class="btn-sm btn-primary" onclick="showCreateBudgetModal()">+ Create Budget</button>
-</div>
-
-<div class="table-wrap">
-<table id="budgetsTable">
-<thead><tr>
-  <th>Name</th><th>Key/Profile</th><th>Spend</th><th>Limit</th><th>%</th><th>Period</th><th>Action</th><th>Status</th><th>Actions</th>
-</tr></thead>
-<tbody id="budgetsBody"><tr><td colspan="9" class="empty">Loading...</td></tr></tbody>
-</table>
-</div>
-</div>
-
-<!-- Create Budget Modal -->
-<div class="modal-overlay" id="createBudgetModal">
-<div class="modal" style="width:min(500px,95vw)">
-  <div class="modal-header">
-    <h2>Create Budget</h2>
-    <button class="modal-close" onclick="closeCreateBudgetModal()">✕</button>
-  </div>
-  <div class="modal-body">
-    <div style="display:grid;gap:0.75rem">
-      <div>
-        <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Budget Name</label>
-        <input id="newBudgetName" placeholder="e.g. Monthly L2 Budget" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
-        <div>
-          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Amount ($)</label>
-          <input id="newBudgetAmount" type="number" step="0.01" min="0.01" value="100" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
-        </div>
-        <div>
-          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Period</label>
-          <select id="newBudgetPeriod" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
-            <option value="monthly">Monthly</option>
-            <option value="total">Total (lifetime)</option>
-          </select>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
-        <div>
-          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">API Key (blank=global)</label>
-          <select id="newBudgetKey" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
-            <option value="">-- All Keys (Global) --</option>
-          </select>
-        </div>
-        <div>
-          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Profile (blank=all)</label>
-          <input id="newBudgetProfile" placeholder="l2" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
-        </div>
-        <div>
-          <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">On Exceed</label>
-          <select id="newBudgetAction" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
-            <option value="log">Log only (warn)</option>
-            <option value="block">Block requests</option>
-          </select>
-        </div>
-      </div>
-      <div>
-        <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Alert Thresholds (%)</label>
-        <input id="newBudgetThresholds" value="50,80,90" placeholder="50,80,90" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem">
-      </div>
-    </div>
-  </div>
-  <div class="modal-footer">
-    <button class="btn-sm btn-primary" onclick="createBudget()">Create</button>
-    <button class="btn-sm" onclick="closeCreateBudgetModal()">Cancel</button>
-  </div>
-</div>
-</div>
-
-<script>
-function api(method, url, body) {{
-  var opts = {{method:method, headers:{{'Content-Type':'application/json'}}}};
-  if (body) opts.body = JSON.stringify(body);
-  return fetch(url, opts).then(function(r) {{ return r.json(); }});
-}}
-
-function loadBudgets() {{
-  // Load keys first to build a name map
-  api('GET', '/api/keys').then(function(kd) {{
-    var keyMap = {{}};
-    (kd.keys || []).forEach(function(k) {{ keyMap[k.id] = k.name; }});
-    // Now load budgets
-    api('GET', '/api/budgets').then(function(d) {{
-      var budgets = d.budgets || [];
-      var html = '';
-      if (budgets.length === 0) {{
-        html = '<tr><td colspan="9" class="empty">No budgets yet. Create one above.</td></tr>';
-      }} else {{
-        budgets.forEach(function(b) {{
-          var pct = b.spend_pct || 0;
-          var pctColor = pct >= 100 ? 'red' : pct >= 80 ? 'amber' : 'green';
-          var statusBadge = b.status === 'exceeded'
-            ? '<span class="badge badge-error">exceeded</span>'
-            : b.status === 'active'
-              ? '<span class="badge badge-success">active</span>'
-              : '<span class="badge">' + b.status + '</span>';
-          var scope;
-          if (b.key_id) {{
-            scope = '🔑 ' + (keyMap[b.key_id] || 'Key #' + b.key_id);
-          }} else if (b.profile) {{
-            scope = '📊 ' + b.profile;
-          }} else {{
-            scope = '🌐 Global';
-          }}
-          html += '<tr>' +
-            '<td><b>' + (b.name || '—') + '</b></td>' +
-            '<td>' + scope + '</td>' +
-            '<td class="cost mono">$' + (b.current_spend || 0).toFixed(4) + '</td>' +
-            '<td class="cost mono">$' + (b.amount || 0).toFixed(2) + '</td>' +
-            '<td class="cost"><span class="' + pctColor + '">' + pct.toFixed(1) + '%</span></td>' +
-            '<td>' + (b.period || '—') + '</td>' +
-            '<td>' + (b.action === 'block' ? '🔒 Block' : '📋 Log') + '</td>' +
-            '<td>' + statusBadge + '</td>' +
-            '<td><button class="btn-sm btn-danger" onclick="deleteBudget(' + b.id + ')">Del</button></td>' +
-          '</tr>';
-        }});
-      }}
-      document.getElementById('budgetsBody').innerHTML = html;
-    }});
-  }});
-}}
-
-function showCreateBudgetModal() {{ 
-  document.getElementById('createBudgetModal').classList.add('open');
-  loadKeysForBudget();
-}}
-function closeCreateBudgetModal() {{ document.getElementById('createBudgetModal').classList.remove('open'); }}
-
-function loadKeysForBudget() {{
-  api('GET', '/api/keys').then(function(d) {{
-    var keys = d.keys || [];
-    var sel = document.getElementById('newBudgetKey');
-    // Keep first "All Keys" option, clear rest
-    sel.innerHTML = '<option value="">-- All Keys (Global) --</option>';
-    keys.forEach(function(k) {{
-      if (k.status === 'active') {{
-        sel.innerHTML += '<option value="' + k.id + '">' + k.name + ' (' + k.key_prefix + ')</option>';
-      }}
-    }});
-  }});
-}}
-
-function createBudget() {{
-  var name = document.getElementById('newBudgetName').value.trim();
-  var amount = parseFloat(document.getElementById('newBudgetAmount').value);
-  var period = document.getElementById('newBudgetPeriod').value;
-  var keyId = document.getElementById('newBudgetKey').value;
-  var profile = document.getElementById('newBudgetProfile').value.trim();
-  var action = document.getElementById('newBudgetAction').value;
-  var thresholds = document.getElementById('newBudgetThresholds').value.trim();
-  if (!name || !amount) {{ alert('Name and amount are required'); return; }}
-  api('POST', '/api/budgets', {{
-    name: name, amount: amount, period: period,
-    key_id: keyId ? parseInt(keyId) : null,
-    profile: profile || null, action: action, threshold_pct: thresholds
-  }}).then(function(d) {{
-    if (d.ok) {{ closeCreateBudgetModal(); loadBudgets(); }}
-    else {{ alert('Error: ' + (d.error || 'unknown')); }}
-  }});
-}}
-
-function deleteBudget(id) {{
-  if (!confirm('Delete this budget?')) return;
-  api('DELETE', '/api/budgets/' + id).then(function(d) {{
-    if (d.ok) loadBudgets();
-    else alert('Error: ' + (d.error || 'unknown'));
-  }});
-}}
-
-function toggleSidebar() {{
-  var sb = document.getElementById('sidebar');
-  if (window.innerWidth <= 768) {{
-    sb.classList.toggle('open');
-    document.getElementById('sidebarOverlay').classList.toggle('show');
-  }} else {{
-    sb.classList.toggle('collapsed');
-  }}
-}}
-function closeSidebar() {{
-  document.getElementById('sidebar').classList.remove('open');
-  document.getElementById('sidebarOverlay').classList.remove('show');
-}}
-
-loadBudgets();
-</script>
-</body>
-</html>"""
-
-
 def _render_sidebar_html(config, active_page: str = "") -> str:
     """Render the sidebar navigation for standalone pages."""
-    host_url = ""
     dash_active = ' class="active"' if active_page == "dashboard" else ""
     keys_active = ' class="active"' if active_page == "keys" else ""
-    budgets_active = ' class="active"' if active_page == "budgets" else ""
+    providers_active = ' class="active"' if active_page == "providers" else ""
+    profiles_active = ' class="active"' if active_page == "profiles" else ""
 
     sidebar = (
         '<aside class="sidebar" id="sidebar">\n'
@@ -1459,7 +1774,8 @@ def _render_sidebar_html(config, active_page: str = "") -> str:
         '  <nav class="sidebar-nav">\n'
         f'    <a href="/dashboard"{dash_active}>Dashboard</a>\n'
         f'    <a href="/keys"{keys_active}>API Keys</a>\n'
-        f'    <a href="/budgets"{budgets_active}>Budgets</a>\n'
+        f'    <a href="/providers"{providers_active}>Providers</a>\n'
+        f'    <a href="/profiles"{profiles_active}>Profiles</a>\n'
         '    <div class="nav-label">Profiles</div>\n'
     )
     for p in config.profiles.keys():
@@ -1481,9 +1797,8 @@ def create_server(config, engine, port=8734):
     ConfiguredHandler.config = config
     ConfiguredHandler.engine = engine
 
-    # Initialize key manager and budget manager with engine
+    # Initialize key manager with engine
     init_key_manager(engine, "data")
-    init_budget_manager(engine)
 
     server = ThreadingHTTPServer(("0.0.0.0", port), ConfiguredHandler)
     logger.info("server_created", port=port, profiles=list(config.profiles.keys()))

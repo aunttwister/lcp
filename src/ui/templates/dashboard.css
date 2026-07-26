@@ -291,83 +291,20 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 @media (max-width: 768px) { .provider-mgmt { grid-template-columns: 1fr; } }
 
-/* ── Sidebar Tree ── */
-.sb-tree { }
-.sb-folder {
-  display: flex; align-items: center; gap: 0.25rem;
-  padding: 0.25rem 0.5rem; border-radius: var(--radius);
-  cursor: pointer; transition: all 0.1s;
-  font-size: 0.75rem; color: hsl(var(--muted-foreground));
+/* ── Sidebar profile links ── */
+.sb-profile-link {
+  display: flex !important; align-items: center; justify-content: space-between;
+  gap: 0.375rem;
 }
-.sb-folder:hover { background: hsl(var(--secondary) / 0.5); color: hsl(var(--foreground)); }
-
-/* ── Swipe-to-reveal (mobile) ── */
-.sb-profile-row {
-  overflow: hidden; padding: 0 !important;
-  position: relative;
+.sb-profile-link .sb-copy-btn {
+  font-size: 0.5625rem; font-weight: 600; font-family: 'SF Mono', 'Fira Code', monospace;
+  color: hsl(var(--muted-foreground)); background: hsl(var(--secondary) / 0.4);
+  border: 1px solid hsl(var(--card-border) / 0.4); border-radius: 4px;
+  padding: 0.0625rem 0.3125rem; cursor: pointer; white-space: nowrap;
+  opacity: 0; transition: opacity 0.15s;
 }
-.sb-folder-content {
-  display: flex; align-items: center; gap: 0.25rem;
-  padding: 0.25rem 0.5rem; border-radius: var(--radius);
-  background: hsl(var(--background));
-  position: relative; z-index: 1;
-  transition: transform 0.2s ease;
-  width: 100%; box-sizing: border-box;
-}
-.sb-profile-row.swiped .sb-folder-content {
-  transform: translateX(-48px);
-  border-radius: var(--radius) 0 0 var(--radius);
-}
-.sb-swipe-actions {
-  position: absolute; right: 0; top: 0; bottom: 0;
-  display: flex; align-items: stretch; z-index: 0;
-}
-.sb-action-btn {
-  background: hsl(var(--secondary)); color: hsl(var(--muted-foreground));
-  border: none; border-radius: var(--radius);
-  padding: 0 0.625rem; font-size: 0.8125rem;
-  cursor: pointer; white-space: nowrap;
-  display: flex; align-items: center;
-  height: 100%; min-width: 44px; justify-content: center;
-  transition: background 0.15s;
-}
-.sb-action-btn:hover { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
-.sb-action-btn:active { filter: brightness(0.85); }
-@media (min-width: 769px) {
-  .sb-profile-row { overflow: visible; }
-  .sb-swipe-actions { display: none; }
-  .sb-folder-content { transform: none !important; }
-}
-.sb-folder.sb-provider.selected {
-  background: hsl(var(--primary) / 0.15); color: hsl(var(--foreground));
-  border: 1px solid hsl(var(--primary) / 0.3);
-}
-.sb-chevron {
-  font-size: 0.5rem; transition: transform 0.15s; flex-shrink: 0; width: 10px; text-align: center;
-}
-.sb-folder.open > .sb-chevron { transform: rotate(90deg); }
-.sb-folder-link { padding: 0; background: none; flex: 1; }
-.sb-folder-link:hover { background: none; }
-.sidebar-nav .sb-settings-link {
-  width: 0; min-width: 0; overflow: hidden; opacity: 0;
-  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s ease, background 0.2s ease;
-  flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  align-self: stretch;
-  font-size: 0.8125rem; color: hsl(var(--muted-foreground));
-  text-decoration: none; line-height: 1;
-  border-radius: var(--radius);
-  padding: 0; margin: 0 -0.7rem 0 0;
-}
-/* Hover — gear slides in at 1/7 of profile pill width */
-.sb-profile-row:hover .sb-settings-link {
-  width: calc(100% / 7); opacity: 1;
-}
-/* Hover on active profile — gear matches active background */
-.sb-profile-row:hover .sidebar-nav .sb-folder-content:has(.sb-folder-link.active) .sb-settings-link {
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
-}
+.sb-profile-link:hover .sb-copy-btn { opacity: 1; }
+.sb-copy-btn:hover { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); border-color: hsl(var(--primary)); }
 .sidebar-nav .sb-settings-link:hover {
   filter: brightness(0.85);
 }
