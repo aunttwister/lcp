@@ -18,6 +18,11 @@ __pycache__/
 Thumbs.db
 
 # Docker volumes
+
+# SQLite databases
+data/*.db
+data/*.db-shm
+data/*.db-wal
 lcp_dev_data/
 
 # Data
