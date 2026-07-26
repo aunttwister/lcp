@@ -598,7 +598,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
       <div class="sub">{_fmt_num(cache_hit_tokens)} hit / {_fmt_num(cache_miss_tokens)} miss</div>
     </div>
     <div class="card">
-      <div class="label">💰 Cache Savings</div>
+      <div class="label">Cache Savings</div>
       <div class="value good">${total_cache_savings:.4f}</div>
       <div class="sub">prefix caching discount</div>
     </div>
