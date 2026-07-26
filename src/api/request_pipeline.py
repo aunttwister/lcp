@@ -107,47 +107,68 @@ def normalize_tools_for_cache(tools: list[dict]) -> list[dict]:
 def sanitize_messages(messages: list[dict]) -> list[dict]:
     """Fix malformed conversation histories before forwarding to providers.
 
-    Removes assistant messages that declare tool_calls without a matching
-    tool response message, which causes providers like DeepSeek to reject
-    the request with 'missing field tool_call_id'.
+    Two cases handled:
+      1. Dangling assistant tool_calls (no matching tool response) ->
+         remove the tool_calls AND the orphaned tool responses.
+      2. Orphaned tool messages (tool_call_id not declared by any assistant) ->
+         remove the orphaned tool messages.
+
+    This prevents deepseek 400 errors:
+      - 'missing field tool_call_id' (tool msg without id)
+      - 'tool must be a response to preceding tool_calls' (tool msg with no
+        assistant that declared the call)
     """
     if not messages:
         return messages
 
-    expected_tool_calls = {}
+    # Build set of all tool_call_ids declared by assistant messages
+    declared_ids = set()
     for msg in messages:
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
             for tc in msg["tool_calls"]:
                 tc_id = tc.get("id", tc.get("tool_call_id"))
                 if tc_id:
-                    expected_tool_calls[tc_id] = True
+                    declared_ids.add(tc_id)
 
-    fulfilled_ids = set()
+    # Build set of tool_call_ids referenced by tool messages
+    referenced_ids = set()
     for msg in messages:
         if msg.get("role") == "tool" and msg.get("tool_call_id"):
-            fulfilled_ids.add(msg["tool_call_id"])
+            referenced_ids.add(msg["tool_call_id"])
 
-    dangling_ids = set(expected_tool_calls.keys()) - fulfilled_ids
-    if not dangling_ids:
+    # Dangling = declared by assistant but never answered by tool msg
+    dangling_declared = declared_ids - referenced_ids
+    # Orphaned = referenced by tool msg but never declared by assistant
+    orphaned_referenced = referenced_ids - declared_ids
+
+    if not dangling_declared and not orphaned_referenced:
         return messages
+
+    ids_to_remove = dangling_declared | orphaned_referenced
 
     sanitized = []
     for msg in messages:
+        if msg.get("role") == "tool" and msg.get("tool_call_id") in ids_to_remove:
+            # Drop orphaned tool response
+            continue
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
             kept_calls = [
                 tc for tc in msg["tool_calls"]
-                if tc.get("id", tc.get("tool_call_id")) not in dangling_ids
+                if tc.get("id", tc.get("tool_call_id")) not in ids_to_remove
             ]
             if kept_calls:
                 sanitized.append({**msg, "tool_calls": kept_calls})
             elif msg.get("content"):
                 sanitized.append({**msg, "tool_calls": None})
+            # else: drop assistant msg that only had dangling tool_calls
         else:
             sanitized.append(msg)
 
     logger.warning(
         "messages_sanitized",
-        dangling_tool_calls=len(dangling_ids),
+        dangling_declared=len(dangling_declared),
+        orphaned_referenced=len(orphaned_referenced),
+        removed_ids=len(ids_to_remove),
         original_len=len(messages),
         sanitized_len=len(sanitized),
     )
