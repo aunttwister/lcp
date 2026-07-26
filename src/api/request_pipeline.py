@@ -74,6 +74,8 @@ def normalize_messages_for_cache(messages: list[dict]) -> list[dict]:
     (trailing whitespace, different tool ordering) breaks the cache.
     This normalizes so identical logical prompts produce identical
     token sequences — maximizing cache-hit rate.
+
+    IMPORTANT: Preserves tool_call_id on tool messages — providers require it.
     """
     normalized = []
     for msg in messages:
@@ -81,7 +83,15 @@ def normalize_messages_for_cache(messages: list[dict]) -> list[dict]:
         content = msg.get("content", "")
         if role == "system" and isinstance(content, str):
             content = content.rstrip()
-        normalized.append({"role": role, "content": content})
+        if role == "tool":
+            # Preserve tool_call_id — providers require it for validation
+            normalized.append({
+                "role": role,
+                "content": content,
+                "tool_call_id": msg.get("tool_call_id", ""),
+            })
+        else:
+            normalized.append({"role": role, "content": content})
     return normalized
 
 
