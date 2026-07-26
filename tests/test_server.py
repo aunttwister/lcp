@@ -322,6 +322,24 @@ class TestProfileEndpoints:
         h.do_DELETE()
         assert _status(h) == 200
 
+    def test_chain_reorder(self, temp_db):
+        body = json.dumps({"chain": [{"provider": "deepseek", "model": "deepseek-v4-flash"}, {"provider": "opencode", "model": "deepseek-v4-pro"}]})
+        h = TestHandler(path="/api/chains/l2", method="PUT", engine=temp_db, body=body)
+        h.do_PUT()
+        assert _status(h) == 200
+
+    def test_create_profile_missing_name(self, temp_db):
+        body = json.dumps({"notname": ""})
+        h = TestHandler(path="/api/profiles", method="POST", engine=temp_db, body=body)
+        h.do_POST()
+        assert _status(h) == 400
+
+    def test_create_profile_duplicate(self, temp_db):
+        body = json.dumps({"name": "l2"})
+        h = TestHandler(path="/api/profiles", method="POST", engine=temp_db, body=body)
+        h.do_POST()
+        assert _status(h) == 409
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Static endpoint tests
@@ -394,6 +412,16 @@ class TestStaticEndpoints:
         h = TestHandler(path="/nonexistent", engine=temp_db)
         h.do_GET()
         assert _status(h) == 404
+
+    def test_dashboard_with_profile_filter(self, temp_db):
+        h = TestHandler(path="/l2/dashboard", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
+
+    def test_per_profile_dashboard(self, temp_db):
+        h = TestHandler(path="/l1/dashboard", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
 
 
 # ═══════════════════════════════════════════════════════════════════════
