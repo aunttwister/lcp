@@ -18,7 +18,6 @@ from .api.circuit_breaker import get_circuit_breaker
 from .ui.dashboard import render_dashboard
 from .api.request_pipeline import (
     strip_forbidden_tools,
-    sanitize_messages,
     calculate_cost,
     try_chain,
     record_cost,
@@ -238,9 +237,6 @@ class LCPHandler(BaseHTTPRequestHandler):
 
             # Tool stripping
             body, blocked_tools = strip_forbidden_tools(body, profile_cfg.get("forbidden_tools"))
-
-            # Sanitize messages — remove dangling tool_calls without matching tool responses
-            body["messages"] = sanitize_messages(body.get("messages", []))
 
             # Pre-request cost estimation
             pricing = self.config.get_pricing(

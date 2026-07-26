@@ -314,6 +314,12 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
         if "tools" in body and body["tools"]:
             body["tools"] = normalize_tools_for_cache(body["tools"])
 
+        # Sanitize AFTER normalization — normalization strips tool_calls from
+        # assistant messages, so any tool messages left behind become orphaned.
+        # Running here ensures we see the final message shape before forwarding.
+        if "messages" in body:
+            body["messages"] = sanitize_messages(body["messages"])
+
         # Add API key env to step config
         step_with_key = {**step, "api_key_env": config.providers[provider_name]["api_key_env"]}
 
