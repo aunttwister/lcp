@@ -33,6 +33,37 @@ from .api.exceptions import ToolBlockedError, AllProvidersFailedError
 
 logger = get_logger("lcp.server")
 
+# ── SSE helpers ──────────────────────────────────────────────────────────────
+
+def _extract_last_sse_chunk(raw_bytes):
+    """Parse the last data chunk from an SSE response buffer."""
+    try:
+        text = raw_bytes.decode("utf-8", errors="replace")
+        last_data = None
+        for line in text.split("\n"):
+            if line.startswith("data:"):
+                data_str = line[5:].strip()
+                if data_str and data_str != "[DONE]":
+                    last_data = json.loads(data_str)
+        return last_data
+    except Exception:
+        return None
+
+
+def _estimate_cost_from_tokens(provider, model, cost_info, config):
+    """Calculate cost from token counts using configured pricing."""
+    pricing = config.get_pricing(provider, model)
+    cache_hit = cost_info.get("cache_hit_tokens", 0)
+    cache_miss = cost_info.get("cache_miss_tokens", 0)
+    output = cost_info.get("completion_tokens", 0)
+    return round(
+        (cache_hit / 1_000_000) * pricing["cache_hit"]
+        + (cache_miss / 1_000_000) * pricing["cache_miss"]
+        + (output / 1_000_000) * pricing["output"],
+        8,
+    )
+
+
 class LCPHandler(BaseHTTPRequestHandler):
     """HTTP request handler for LLM Control Plane."""
 
@@ -220,6 +251,8 @@ class LCPHandler(BaseHTTPRequestHandler):
 
             t0 = time.time()
 
+            streaming = body.get("stream", False)
+
             # Try provider chain
             response_body, status, provider, model = try_chain(
                 profile, profile_cfg, body, self.config
@@ -227,7 +260,48 @@ class LCPHandler(BaseHTTPRequestHandler):
 
             latency_ms = int((time.time() - t0) * 1000)
 
-            # Cache the response
+            # ── Streaming response: pass through SSE directly ──
+            if streaming:
+                sse_bytes = response_body  # raw bytes from upstream
+                self.send_response(status)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.send_header("X-LCP-Cache", "MISS")
+                self.send_header("X-Estimated-Cost", str(estimation["estimated_total_cost"]))
+                self.end_headers()
+                self.wfile.write(sse_bytes)
+                self.wfile.flush()
+
+                # Extract usage from last SSE chunk for cost tracking
+                last_chunk = _extract_last_sse_chunk(sse_bytes)
+                if last_chunk and "usage" in last_chunk:
+                    cost_info = {
+                        "prompt_tokens": last_chunk["usage"].get("prompt_tokens", 0),
+                        "completion_tokens": last_chunk["usage"].get("completion_tokens", 0),
+                        "cache_hit_tokens": last_chunk["usage"].get("prompt_cache_hit_tokens", 0),
+                        "cache_miss_tokens": last_chunk["usage"].get("prompt_cache_miss_tokens", 0),
+                        "cost": 0,
+                        "latency_ms": latency_ms,
+                    }
+                    cost_info["cost"] = _estimate_cost_from_tokens(
+                        provider, model, cost_info, self.config
+                    )
+                    record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools)
+
+                logger.info(
+                    "request_complete",
+                    profile=profile,
+                    provider=provider,
+                    model=model,
+                    latency_ms=latency_ms,
+                    tools_blocked=len(blocked_tools),
+                    cache="MISS",
+                    stream=True,
+                )
+                return
+
+            # ── Non-streaming: buffer and return JSON ──
             cache.set(profile, model, body, response_body)
 
             # Token verification

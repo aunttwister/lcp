@@ -94,12 +94,19 @@ def calculate_cost(provider: str, model: str, body: dict, response_body: dict | 
 
 # ── Request Forwarding ───────────────────────────────────────────────────────
 
-def forward_request(provider_cfg: dict, body: dict, config) -> tuple[dict, int]:
-    """Forward a request to a provider. Returns (response_body_dict, status_code)."""
+def forward_request(provider_cfg: dict, body: dict, config):
+    """Forward a request to a provider.
+
+    If body['stream'] is True, returns (raw_sse_bytes, status_code) with raw_sse_bytes being
+    the full SSE response as bytes.
+    Otherwise returns (response_body_dict, status_code).
+    """
     api_key = os.environ.get(provider_cfg.get("api_key_env", ""))
     if not api_key:
         provider_name = provider_cfg["provider"]
         api_key = config.get_provider_key(provider_name)
+
+    streaming = body.get("stream", False)
 
     url = f"{provider_cfg['base_url']}/chat/completions"
     data = json.dumps(body).encode("utf-8")
@@ -112,7 +119,10 @@ def forward_request(provider_cfg: dict, body: dict, config) -> tuple[dict, int]:
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
-            response_body = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read()
+            if streaming:
+                return raw, resp.status
+            response_body = json.loads(raw.decode("utf-8"))
             return response_body, resp.status
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")[:500]
