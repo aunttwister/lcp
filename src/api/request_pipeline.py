@@ -92,6 +92,58 @@ def normalize_tools_for_cache(tools: list[dict]) -> list[dict]:
     return sorted(tools, key=lambda t: t.get("function", {}).get("name", ""))
 
 
+# ── Message Sanitization ─────────────────────────────────────────────────────
+
+def sanitize_messages(messages: list[dict]) -> list[dict]:
+    """Fix malformed conversation histories before forwarding to providers.
+
+    Removes assistant messages that declare tool_calls without a matching
+    tool response message, which causes providers like DeepSeek to reject
+    the request with 'missing field tool_call_id'.
+    """
+    if not messages:
+        return messages
+
+    expected_tool_calls = {}
+    for msg in messages:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                tc_id = tc.get("id", tc.get("tool_call_id"))
+                if tc_id:
+                    expected_tool_calls[tc_id] = True
+
+    fulfilled_ids = set()
+    for msg in messages:
+        if msg.get("role") == "tool" and msg.get("tool_call_id"):
+            fulfilled_ids.add(msg["tool_call_id"])
+
+    dangling_ids = set(expected_tool_calls.keys()) - fulfilled_ids
+    if not dangling_ids:
+        return messages
+
+    sanitized = []
+    for msg in messages:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            kept_calls = [
+                tc for tc in msg["tool_calls"]
+                if tc.get("id", tc.get("tool_call_id")) not in dangling_ids
+            ]
+            if kept_calls:
+                sanitized.append({**msg, "tool_calls": kept_calls})
+            elif msg.get("content"):
+                sanitized.append({**msg, "tool_calls": None})
+        else:
+            sanitized.append(msg)
+
+    logger.warning(
+        "messages_sanitized",
+        dangling_tool_calls=len(dangling_ids),
+        original_len=len(messages),
+        sanitized_len=len(sanitized),
+    )
+    return sanitized
+
+
 # ── Cost Calculation ─────────────────────────────────────────────────────────
 
 def compute_cache_savings(provider_name: str, model: str, cache_hit_tokens: int,
