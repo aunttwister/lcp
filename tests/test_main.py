@@ -113,28 +113,6 @@ class TestCalculateCost:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# _health_key — function refactored into CircuitBreaker internals
-# ═══════════════════════════════════════════════════════════════════════
-
-@pytest.mark.skip(reason="_health_key is now internal to CircuitBreaker class")
-class TestHealthKey:
-    def test_returns_tuple(self):
-        key = _health_key("deepseek", "https://api.deepseek.com", "l2")
-        assert isinstance(key, tuple)
-        assert len(key) == 3
-
-    def test_same_args_same_key(self):
-        k1 = _health_key("deepseek", "url1", "l2")
-        k2 = _health_key("deepseek", "url1", "l2")
-        assert k1 == k2
-
-    def test_different_args_different_key(self):
-        k1 = _health_key("deepseek", "url1", "l2")
-        k2 = _health_key("openai", "url1", "l2")
-        assert k1 != k2
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # HTTP endpoint tests (in-process server)
 # ═══════════════════════════════════════════════════════════════════════
 # Skip these — server requires full plumbing and Docker. Test utility

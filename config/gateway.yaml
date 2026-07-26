@@ -34,6 +34,7 @@ profiles:
     - provider: deepseek
       model: deepseek-v4-flash
       base_url: https://api.deepseek.com/v1
+    auth_required: false
   career:
     forbidden_tools:
     - write_file
@@ -53,13 +54,14 @@ profiles:
     - provider: deepseek
       model: deepseek-v4-flash
       base_url: https://api.deepseek.com/v1
-    auth_required: true
+    auth_required: false
   cron:
     chain:
     - provider: deepseek
       model: deepseek-v4-flash
       base_url: https://api.deepseek.com/v1
     forbidden_tools: null
+    auth_required: false
 providers:
   opencode:
     api_key_env: OPENCODE_API_KEY

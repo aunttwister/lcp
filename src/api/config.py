@@ -71,6 +71,8 @@ class Config:
                 return True
         except FileNotFoundError:
             pass
+        except Exception:
+            logger.warning("config_reload_failed", exc_info=True)
         return False
 
     # ── Accessors ──────────────────────────────────────────────────────────

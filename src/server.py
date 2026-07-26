@@ -1455,16 +1455,14 @@ function saveProfileEdit() {{
     }});
     return {{provider: s.provider, model: s.model, base_url: bu}};
   }});
-  var promises = [
-    api('PUT', '/api/chains/' + _editProfileName, {{chain: chain}}),
-    api('PUT', '/api/profiles/' + _editProfileName, {{
+  // Save chain first, then profile — sequentially to avoid race on config file
+  api('PUT', '/api/chains/' + _editProfileName, {{chain: chain}}).then(function(chainResult) {{
+    return api('PUT', '/api/profiles/' + _editProfileName, {{
       forbidden_tools: _editProfileTools,
       auth_required: document.getElementById('pemAuthRequired').checked
-    }})
-  ];
-  Promise.all(promises).then(function(results) {{
-    var allOk = results.every(function(r) {{ return r.ok; }});
-    if (allOk) {{
+    }});
+  }}).then(function(profResult) {{
+    if (profResult.ok) {{
       statusEl.textContent = 'Saved';
       statusEl.style.color = 'hsl(var(--green-fg))';
       setTimeout(function() {{ location.reload(); }}, 800);
@@ -1473,7 +1471,7 @@ function saveProfileEdit() {{
       statusEl.style.color = 'hsl(var(--red-fg))';
     }}
   }}).catch(function(e) {{
-    statusEl.textContent = 'Error: ' + e;
+    statusEl.textContent = 'Save failed: ' + (e.message || e);
     statusEl.style.color = 'hsl(var(--red-fg))';
   }});
 }}
