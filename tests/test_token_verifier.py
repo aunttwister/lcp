@@ -1,8 +1,7 @@
 """Tests for token_verifier.py"""
 import pytest
 import sys
-sys.path.insert(0, "/opt/lcp")
-from src.token_verifier import TokenVerifier, get_token_verifier
+from src.api.token_verifier import TokenVerifier, get_token_verifier
 
 def test_normal_response():
     v = TokenVerifier(threshold=0.5)

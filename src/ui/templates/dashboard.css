@@ -204,6 +204,7 @@ thead th {
 tbody td { padding: 0.5rem 0.75rem; border-bottom: 1px solid hsl(var(--card-border) / 0.35); }
 tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .cost { text-align: right; }
+.saved { color: hsl(142.1, 70.6%, 45.3%); }
 .mono { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 0.75rem; }
 .badge {
   display: inline-block; padding: 0.0625rem 0.5rem; border-radius: 9999px;

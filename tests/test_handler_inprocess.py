@@ -8,12 +8,11 @@ import os
 import tempfile
 import pytest
 import sys
-sys.path.insert(0, "/opt/lcp")
 
 from unittest.mock import patch, MagicMock
 
-from src.main import LCPHandler
-from src.models import get_engine, Base
+from src.server import LCPHandler
+from src.api.models import get_engine, Base
 
 
 class _TestHandler(LCPHandler):

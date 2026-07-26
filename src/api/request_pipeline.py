@@ -65,7 +65,74 @@ def strip_forbidden_tools(body: dict, forbidden: list[str] | None) -> tuple[dict
     return body, blocked
 
 
+# ── Prefix Cache Normalization ───────────────────────────────────────────────
+
+def normalize_messages_for_cache(messages: list[dict]) -> list[dict]:
+    """Make the cacheable prefix deterministic across requests.
+
+    DeepSeek/OpenAI cache from token 0. Any difference in the prefix
+    (trailing whitespace, different tool ordering) breaks the cache.
+    This normalizes so identical logical prompts produce identical
+    token sequences — maximizing cache-hit rate.
+    """
+    normalized = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "system" and isinstance(content, str):
+            content = content.rstrip()
+        normalized.append({"role": role, "content": content})
+    return normalized
+
+
+def normalize_tools_for_cache(tools: list[dict]) -> list[dict]:
+    """Sort tool definitions by function name for deterministic ordering."""
+    if not tools:
+        return tools
+    return sorted(tools, key=lambda t: t.get("function", {}).get("name", ""))
+
+
 # ── Cost Calculation ─────────────────────────────────────────────────────────
+
+def compute_cache_savings(provider_name: str, model: str, cache_hit_tokens: int,
+                          config) -> float:
+    """Estimate dollars saved via provider prefix caching.
+
+    For 'cost' savings type: cache_hit_tokens × (miss_price − hit_price).
+    For other types (latency/none): returns 0.0.
+    """
+    if cache_hit_tokens <= 0:
+        return 0.0
+    cc = config.get_provider_cache_config(provider_name)
+    if cc.get("savings") != "cost":
+        return 0.0
+    try:
+        pricing = config.get_pricing(provider_name, model)
+        return (cache_hit_tokens / 1_000_000) * (
+            pricing["cache_miss"] - pricing["cache_hit"]
+        )
+    except Exception:
+        return 0.0
+
+
+def read_cache_hit_tokens(provider_name: str, response_body: dict | None,
+                          config) -> int:
+    """Read cache-hit tokens from provider response, using configured field name.
+
+    Falls back to the standard 'prompt_cache_hit_tokens' field when the config
+    doesn't declare a provider-specific field (or when called from tests with
+    a minimal mock config).
+    """
+    if response_body is None:
+        return 0
+    usage = response_body.get("usage", {})
+    field = "prompt_cache_hit_tokens"  # default for DeepSeek/OpenAI
+    if hasattr(config, "get_provider_cache_config"):
+        cc = config.get_provider_cache_config(provider_name)
+        if isinstance(cc, dict) and cc.get("hit_field"):
+            field = cc["hit_field"]
+    return usage.get(field, 0)
+
 
 def calculate_cost(provider: str, model: str, body: dict, response_body: dict | None,
                    config) -> dict:
@@ -75,8 +142,8 @@ def calculate_cost(provider: str, model: str, body: dict, response_body: dict | 
     usage = response_body.get("usage", {}) if response_body else {}
     prompt_tokens = usage.get("prompt_tokens", 0)
     completion_tokens = usage.get("completion_tokens", 0)
-    cache_hit = usage.get("prompt_cache_hit_tokens", 0)
-    cache_miss = usage.get("prompt_cache_miss_tokens", prompt_tokens)
+    cache_hit = read_cache_hit_tokens(provider, response_body, config)
+    cache_miss = usage.get("prompt_cache_miss_tokens", prompt_tokens - cache_hit if prompt_tokens > cache_hit else 0)
 
     cache_hit_cost = (cache_hit / 1_000_000) * pricing["cache_hit"]
     cache_miss_cost = (cache_miss / 1_000_000) * pricing["cache_miss"]
@@ -156,6 +223,13 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
 
         # Set model in body
         body["model"] = model
+
+        # Normalize for prefix caching — deterministic message/tool ordering
+        # so repeated logical prompts hit the provider's KV-cache.
+        if "messages" in body:
+            body["messages"] = normalize_messages_for_cache(body["messages"])
+        if "tools" in body and body["tools"]:
+            body["tools"] = normalize_tools_for_cache(body["tools"])
 
         # Add API key env to step config
         step_with_key = {**step, "api_key_env": config.providers[provider_name]["api_key_env"]}

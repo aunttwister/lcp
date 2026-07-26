@@ -1,8 +1,7 @@
 """Tests for prompt_cache.py"""
 import pytest
 import sys
-sys.path.insert(0, "/opt/lcp")
-from src.prompt_cache import PromptCache, get_prompt_cache
+from src.api.prompt_cache import PromptCache, get_prompt_cache
 
 def test_set_and_get():
     cache = PromptCache(max_entries=100, ttl_seconds=3600)

@@ -116,6 +116,15 @@ class Config:
                 return p
         raise ConfigError(f"No pricing found for {provider}/{model}")
 
+    def get_provider_cache_config(self, provider_name: str) -> dict:
+        """Return cache config for a provider, or empty dict if not configured.
+
+        Returns: {"strategy": "prefix"|"none", "savings": "cost"|"latency"|"none",
+                   "hit_field": "prompt_cache_hit_tokens"|...|null}
+        """
+        p = self.providers.get(provider_name, {})
+        return p.get("cache", {"strategy": "none", "savings": "none", "hit_field": None})
+
     @property
     def raw(self) -> dict:
         return self._data

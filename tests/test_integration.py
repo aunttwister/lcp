@@ -1,7 +1,7 @@
-"""Integration tests against the live dev instance on port 8735.
+"""Integration tests against the live dev instance on port 8734.
 
-These cover main.py's HTTP handler methods (do_GET, do_POST) that make up
-~35% of main.py statements and are untestable via pure unit tests.
+Set LCP_TEST_URL to override (e.g. http://localhost:8735 for Docker).
+Run with: pytest -m integration
 """
 import json
 import os
@@ -11,7 +11,9 @@ import urllib.error
 import csv
 import io
 
-BASE_URL = os.environ.get("LCP_TEST_URL", "http://localhost:8735")
+BASE_URL = os.environ.get("LCP_TEST_URL", "http://localhost:8734")
+
+pytestmark = pytest.mark.integration
 
 
 def _get(path, expect_status=200):

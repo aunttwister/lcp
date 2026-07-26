@@ -3,9 +3,8 @@ import os
 import tempfile
 import pytest
 import sys
-sys.path.insert(0, "/opt/lcp")
 from sqlalchemy import create_engine
-from src.models import Base, Request, get_engine, get_session
+from src.api.models import Base, Request, get_engine, get_session
 
 def test_table_name():
     assert Request.__tablename__ == "requests"

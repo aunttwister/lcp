@@ -3,11 +3,10 @@ import os
 import tempfile
 import pytest
 import sys
-sys.path.insert(0, "/opt/lcp")
 from unittest.mock import patch, MagicMock
 
-from src.main import record_cost
-from src.models import get_engine, Base
+from src.api.request_pipeline import record_cost
+from src.api.models import get_engine, Base
 
 
 @pytest.fixture
@@ -84,7 +83,7 @@ class TestRecordCost:
 
 class TestForwardRequest:
     def test_forwards_with_auth(self, mock_config):
-        from src.main import forward_request
+        from src.api.request_pipeline import forward_request
         provider_cfg = {
             "provider": "testco",
             "api_key_env": "TEST_KEY",
@@ -104,7 +103,7 @@ class TestForwardRequest:
             assert result_body["choices"][0]["message"]["content"] == "hello"
 
     def test_handles_urlerror(self, mock_config):
-        from src.main import forward_request, ProviderTimeoutError
+        from src.api.request_pipeline import forward_request, ProviderTimeoutError
         provider_cfg = {
             "provider": "badco",
             "api_key_env": "TEST_KEY",
@@ -121,7 +120,7 @@ class TestForwardRequest:
                 forward_request(provider_cfg, body, mock_config)
 
     def test_handles_http_429(self, mock_config):
-        from src.main import forward_request, ProviderRateLimitError
+        from src.api.request_pipeline import forward_request, ProviderRateLimitError
         provider_cfg = {
             "provider": "ratelimited",
             "api_key_env": "TEST_KEY",
@@ -147,7 +146,7 @@ class TestForwardRequest:
 
 class TestTryChain:
     def test_no_providers_in_chain(self, mock_config):
-        from src.main import try_chain, AllProvidersFailedError
+        from src.api.request_pipeline import try_chain, AllProvidersFailedError
         profile_cfg = {"chain": [], "forbidden_tools": []}
         body = {"messages": [{"role": "user", "content": "hi"}]}
         mock_config.providers = {}
@@ -157,7 +156,7 @@ class TestTryChain:
 
     def test_all_providers_fail_in_chain(self, mock_config):
         """When all providers fail, AllProvidersFailedError is raised."""
-        from src.main import try_chain, AllProvidersFailedError
+        from src.api.request_pipeline import try_chain, AllProvidersFailedError
         profile_cfg = {
             "chain": [
                 {"provider": "bad1", "base_url": "https://bad1.com/v1", "model": "m1"},
@@ -182,7 +181,7 @@ class TestTryChain:
 
     def test_chain_with_fallback(self, mock_config):
         """Chain falls through when first provider fails, succeeds on second."""
-        from src.main import try_chain
+        from src.api.request_pipeline import try_chain
 
         # Each chain step must have provider+base_url+model inline
         profile_cfg = {

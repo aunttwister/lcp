@@ -3,14 +3,14 @@
 import os
 import tempfile
 import time
+from unittest.mock import patch
 
 import pytest
 import yaml
 
 import sys
-sys.path.insert(0, "/opt/lcp")
 
-from src.config import Config, ConfigError
+from src.api.config import Config, ConfigError
 
 
 def _write_config(data: dict) -> str:
@@ -143,3 +143,184 @@ class TestConfigAccessors:
             assert cfg.database["path"] == "/app/data/costs.db"
         finally:
             os.unlink(path)
+
+
+class TestConfigEdgeCases:
+    """Tests for validation edge cases and lesser-tested methods."""
+
+    def test_empty_config_raises(self):
+        path = _write_config({})
+        try:
+            with pytest.raises(ConfigError):
+                Config(path)
+        finally:
+            os.unlink(path)
+
+    def test_empty_yaml_file_raises(self, temp_dir):
+        path = temp_dir / "empty.yaml"
+        path.write_text("")
+        with pytest.raises(ConfigError, match="Empty"):
+            Config(str(path))
+
+    def test_missing_providers_section(self):
+        data = _base_config()
+        del data["providers"]
+        path = _write_config(data)
+        try:
+            with pytest.raises(ConfigError, match="providers"):
+                Config(path)
+        finally:
+            os.unlink(path)
+
+    def test_missing_circuit_breaker_section(self):
+        data = _base_config()
+        del data["circuit_breaker"]
+        path = _write_config(data)
+        try:
+            with pytest.raises(ConfigError, match="circuit_breaker"):
+                Config(path)
+        finally:
+            os.unlink(path)
+
+    def test_missing_database_section(self):
+        data = _base_config()
+        del data["database"]
+        path = _write_config(data)
+        try:
+            with pytest.raises(ConfigError, match="database"):
+                Config(path)
+        finally:
+            os.unlink(path)
+
+    def test_missing_default_profile(self):
+        data = _base_config()
+        del data["server"]["default_profile"]
+        path = _write_config(data)
+        try:
+            with pytest.raises(ConfigError, match="default_profile"):
+                Config(path)
+        finally:
+            os.unlink(path)
+
+    def test_default_profile_not_exists(self):
+        data = _base_config()
+        data["server"]["default_profile"] = "nope"
+        path = _write_config(data)
+        try:
+            with pytest.raises(ConfigError, match="not found in profiles"):
+                Config(path)
+        finally:
+            os.unlink(path)
+
+    def test_profile_missing_chain(self):
+        data = _base_config()
+        del data["profiles"]["l2"]["chain"]
+        path = _write_config(data)
+        try:
+            with pytest.raises(ConfigError, match="missing 'chain'"):
+                Config(path)
+        finally:
+            os.unlink(path)
+
+    def test_profile_empty_chain(self):
+        data = _base_config()
+        data["profiles"]["l2"]["chain"] = []
+        path = _write_config(data)
+        try:
+            with pytest.raises(ConfigError, match="empty 'chain'"):
+                Config(path)
+        finally:
+            os.unlink(path)
+
+    def test_raw_property(self):
+        path = _write_config(_base_config())
+        try:
+            cfg = Config(path)
+            assert cfg.raw["server"]["port"] == 8734
+        finally:
+            os.unlink(path)
+
+    def test_get_provider_key_with_env(self):
+        path = _write_config(_base_config())
+        try:
+            cfg = Config(path)
+            with patch.dict(os.environ, {"OPENAI_KEY": "sk-test123"}):
+                key = cfg.get_provider_key("openai")
+                assert key == "sk-test123"
+        finally:
+            os.unlink(path)
+
+    def test_get_provider_key_missing_env(self):
+        path = _write_config(_base_config())
+        try:
+            cfg = Config(path)
+            # Ensure env var is not set
+            with patch.dict(os.environ, {}, clear=True):
+                with pytest.raises(ConfigError, match="not set"):
+                    cfg.get_provider_key("openai")
+        finally:
+            os.unlink(path)
+
+    def test_get_pricing_not_found(self):
+        path = _write_config(_base_config())
+        try:
+            cfg = Config(path)
+            with pytest.raises(ConfigError, match="No pricing found"):
+                cfg.get_pricing("unknown", "unknown")
+        finally:
+            os.unlink(path)
+
+    def test_save_and_reload(self, temp_dir):
+        data = _base_config()
+        path = temp_dir / "config.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        cfg = Config(str(path))
+        # Modify and save
+        cfg.raw["server"]["port"] = 9999
+        cfg.save()
+        # Reload from disk
+        cfg2 = Config(str(path))
+        assert cfg2.server["port"] == 9999
+        # Clean up
+        os.unlink(str(path))
+
+    def test_check_reload_no_change(self, temp_dir):
+        data = _base_config()
+        path = temp_dir / "config2.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        cfg = Config(str(path))
+        # No change on disk, should not reload
+        assert cfg.check_reload() is False
+        os.unlink(str(path))
+
+    def test_check_reload_file_gone(self, temp_dir):
+        data = _base_config()
+        path = temp_dir / "config3.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        cfg = Config(str(path))
+        os.unlink(str(path))  # Delete the file
+        # File gone — should not raise
+        assert cfg.check_reload() is False
+
+    def test_reload_method(self, temp_dir):
+        data = _base_config()
+        path = temp_dir / "config4.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        cfg = Config(str(path))
+        cfg.reload()  # should not raise
+        os.unlink(str(path))
+
+    def test_init_config_with_env(self, temp_dir):
+        data = _base_config()
+        path = temp_dir / "gateway.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        with patch.dict(os.environ, {"LCP_CONFIG": str(path)}):
+            from src.api.config import get_config
+            cfg = get_config()
+            assert cfg.server["port"] == 8734
+        os.unlink(str(path))

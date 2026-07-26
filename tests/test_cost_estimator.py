@@ -1,8 +1,7 @@
 """Tests for cost_estimator.py"""
 import pytest
 import sys
-sys.path.insert(0, "/opt/lcp")
-from src.cost_estimator import count_tokens, estimate_tokens, estimate_from_request
+from src.api.cost_estimator import count_tokens, estimate_tokens, estimate_from_request
 
 def test_count_tokens_simple():
     n = count_tokens([{"role": "user", "content": "hello world"}])

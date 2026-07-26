@@ -80,22 +80,27 @@ def render_dashboard(config, engine, headers, profile_filter=None):
             )
 
             # ── Active days ──
-            active_days = (
-                session.query(
-                    func.count(func.distinct(func.substr(RequestModel.timestamp, 1, 10)))
-                ).scalar() or 0
+            active_days_q = session.query(
+                func.count(func.distinct(func.substr(RequestModel.timestamp, 1, 10)))
             )
+            if profile_filter:
+                active_days_q = active_days_q.filter(
+                    RequestModel.profile == profile_filter
+                )
+            active_days = active_days_q.scalar() or 0
 
             # ── Per-profile cost ──
-            profile_rows = (
-                session.query(
-                    RequestModel.profile,
-                    func.sum(RequestModel.cost).label("total_cost"),
-                    func.count(RequestModel.id).label("count"),
+            profile_rows_q = session.query(
+                RequestModel.profile,
+                func.sum(RequestModel.cost).label("total_cost"),
+                func.count(RequestModel.id).label("count"),
+            ).filter(RequestModel.success == 1)
+            if profile_filter:
+                profile_rows_q = profile_rows_q.filter(
+                    RequestModel.profile == profile_filter
                 )
-                .filter(RequestModel.success == 1)
-                .group_by(RequestModel.profile)
-                .all()
+            profile_rows = (
+                profile_rows_q.group_by(RequestModel.profile).all()
             )
 
             # ── Daily Costs (all time, grouped by date+profile+model+provider) ──
@@ -190,7 +195,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
             ts_lats = [float(r.avg_lat) for r in ts_rows]
 
             # Per-profile time series (grouped bar chart data)
-            pp_rows = (
+            pp_rows_q = (
                 session.query(
                     func.substr(RequestModel.timestamp, 1, 10).label("date"),
                     RequestModel.profile,
@@ -198,7 +203,13 @@ def render_dashboard(config, engine, headers, profile_filter=None):
                     func.coalesce(func.avg(RequestModel.latency_ms), 0).label("avg_lat"),
                 )
                 .filter(RequestModel.success == 1)
-                .group_by(func.substr(RequestModel.timestamp, 1, 10), RequestModel.profile)
+            )
+            if profile_filter:
+                pp_rows_q = pp_rows_q.filter(
+                    RequestModel.profile == profile_filter
+                )
+            pp_rows = (
+                pp_rows_q.group_by(func.substr(RequestModel.timestamp, 1, 10), RequestModel.profile)
                 .order_by(func.substr(RequestModel.timestamp, 1, 10).asc())
                 .limit(14 * len(config.profiles))
                 .all()
@@ -217,7 +228,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
                 pp_data["profiles"][r.profile]["lats"][idx] = float(r.avg_lat)
 
             # Per-model time series (grouped by model)
-            pm_rows = (
+            pm_rows_q = (
                 session.query(
                     func.substr(RequestModel.timestamp, 1, 10).label("date"),
                     RequestModel.model,
@@ -225,7 +236,13 @@ def render_dashboard(config, engine, headers, profile_filter=None):
                     func.coalesce(func.avg(RequestModel.latency_ms), 0).label("avg_lat"),
                 )
                 .filter(RequestModel.success == 1)
-                .group_by(func.substr(RequestModel.timestamp, 1, 10), RequestModel.model)
+            )
+            if profile_filter:
+                pm_rows_q = pm_rows_q.filter(
+                    RequestModel.profile == profile_filter
+                )
+            pm_rows = (
+                pm_rows_q.group_by(func.substr(RequestModel.timestamp, 1, 10), RequestModel.model)
                 .order_by(func.substr(RequestModel.timestamp, 1, 10).asc())
                 .all()
             )
@@ -259,6 +276,28 @@ def render_dashboard(config, engine, headers, profile_filter=None):
 
     cache = get_prompt_cache()
     cache_stats = cache.stats
+
+    # ── Cache savings helper ──
+    # Estimate dollars saved via provider prefix caching.
+    # cache_hit tokens are billed at ~0.8% of miss rate.
+    def _savings_for_model(model: str, hit_tokens: int) -> float:
+        if hit_tokens <= 0:
+            return 0.0
+        for p_name, p_cfg in config.providers.items():
+            if model in p_cfg.get("models", []):
+                try:
+                    pricing = config.get_pricing(p_name, model)
+                    return (hit_tokens / 1_000_000) * (
+                        pricing["cache_miss"] - pricing["cache_hit"]
+                    )
+                except Exception:
+                    pass
+        return 0.0
+
+    total_cache_savings = sum(
+        _savings_for_model(r.model, r.cache_hit)
+        for r in daily_rows
+    ) if daily_rows else 0.0
 
     # ── Helper: format large numbers ──
     def _fmt_num(n):
@@ -354,6 +393,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     # Daily Costs table
     daily_html = ""
     for r in daily_rows:
+        daily_saved = _savings_for_model(r.model, r.cache_hit)
         daily_html += (
             f'<tr><td class="mono">{r.date}</td><td>{r.profile}</td>'
             f'<td class="mono">{r.model}</td><td>{r.provider}</td>'
@@ -361,7 +401,8 @@ def render_dashboard(config, engine, headers, profile_filter=None):
             f'<td class="cost">{_fmt_num(r.cache_hit)}</td>'
             f'<td class="cost">{_fmt_num(r.cache_miss)}</td>'
             f'<td class="cost">{_fmt_num(r.output)}</td>'
-            f'<td class="cost mono">${float(r.cost):.6f}</td></tr>\n'
+            f'<td class="cost mono">${float(r.cost):.6f}</td>'
+            f'<td class="cost mono saved">${daily_saved:.6f}</td></tr>\n'
         )
 
     # Recent Requests table
@@ -379,12 +420,14 @@ def render_dashboard(config, engine, headers, profile_filter=None):
             chain = prof_cfg.get("chain", [])
             if chain and chain[0]["provider"] != r.provider:
                 status_badges += '<span class="badge badge-fallback">FB</span>'
+        req_saved = _savings_for_model(r.model, r.cache_hit_tokens)
         recent_html += (
             f'<tr><td class="mono">{time_str}</td><td>{r.profile}</td>'
             f'<td class="mono">{r.model}</td><td>{r.provider}</td>'
             f'<td class="cost">{status_badges}</td>'
             f'<td class="cost">{r.latency_ms/1000:.1f}s</td>'
-            f'<td class="cost mono">${r.cost:.6f}</td></tr>\n'
+            f'<td class="cost mono">${r.cost:.6f}</td>'
+            f'<td class="cost mono saved">${req_saved:.6f}</td></tr>\n'
         )
 
     # Recent Errors table
@@ -555,6 +598,11 @@ def render_dashboard(config, engine, headers, profile_filter=None):
       <div class="sub">{_fmt_num(cache_hit_tokens)} hit / {_fmt_num(cache_miss_tokens)} miss</div>
     </div>
     <div class="card">
+      <div class="label">💰 Cache Savings</div>
+      <div class="value good">${total_cache_savings:.4f}</div>
+      <div class="sub">prefix caching discount</div>
+    </div>
+    <div class="card">
       <div class="label">Output Tokens</div>
       <div class="value">{_fmt_num(summary.output_tokens or 0)}</div>
       <div class="sub">prompt: {_fmt_num(summary.prompt_tokens or 0)}</div>
@@ -603,9 +651,9 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     <div class="section-content">
     <div class="table-wrap">
     <table>
-    <thead><tr><th>Time</th><th>Profile</th><th>Model</th><th>Provider</th><th class="cost">Status</th><th class="cost">Dur</th><th class="cost">Cost</th></tr></thead>
+    <thead><tr><th>Time</th><th>Profile</th><th>Model</th><th>Provider</th><th class="cost">Status</th><th class="cost">Dur</th><th class="cost">Cost</th><th class="cost">Saved</th></tr></thead>
     <tbody>
-    {recent_html or '<tr><td colspan="7" class="empty">No requests yet</td></tr>'}
+    {recent_html or '<tr><td colspan="8" class="empty">No requests yet</td></tr>'}
     </tbody>
     </table>
     </div>

@@ -1,8 +1,7 @@
 """Tests for logging_config.py"""
 import pytest
 import sys
-sys.path.insert(0, "/opt/lcp")
-from src.logging_config import setup_logging, get_logger
+from src.api.logging_config import setup_logging, get_logger
 
 def test_setup_info():
     setup_logging("INFO")

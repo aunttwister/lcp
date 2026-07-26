@@ -1,8 +1,7 @@
 """Tests for router.py"""
 import pytest
 import sys
-sys.path.insert(0, "/opt/lcp")
-from src.router import DynamicRouter, get_dynamic_router
+from src.api.router import DynamicRouter, get_dynamic_router
 
 def test_disabled_returns_pro():
     router = DynamicRouter(enabled=False)

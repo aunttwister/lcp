@@ -1,8 +1,7 @@
 """Tests for exceptions.py"""
 import pytest
 import sys
-sys.path.insert(0, "/opt/lcp")
-from src.exceptions import (
+from src.api.exceptions import (
     LCPError, ConfigError, AuthError, CreditExhaustedError,
     ProviderError, ProviderTimeoutError, ProviderRateLimitError,
     ProviderAuthError, AllProvidersFailedError, ToolBlockedError,
