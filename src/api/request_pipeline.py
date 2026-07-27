@@ -149,7 +149,8 @@ def sanitize_messages(messages: list[dict]) -> list[dict]:
     sanitized = []
     for msg in messages:
         if msg.get("role") == "tool" and msg.get("tool_call_id") in ids_to_remove:
-            # Drop orphaned tool response
+            # Convert orphaned tool response to user message (preserve context)
+            sanitized.append({"role": "user", "content": msg.get("content", "")})
             continue
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
             kept_calls = [
@@ -168,6 +169,7 @@ def sanitize_messages(messages: list[dict]) -> list[dict]:
         "messages_sanitized",
         dangling_declared=len(dangling_declared),
         orphaned_referenced=len(orphaned_referenced),
+        converted_to_user=len(orphaned_referenced),
         removed_ids=len(ids_to_remove),
         original_len=len(messages),
         sanitized_len=len(sanitized),

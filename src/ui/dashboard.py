@@ -319,7 +319,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
             continue
         for step in prof_cfg["chain"]:
             pn = step["provider"]
-            bu = step["base_url"]
+            bu = step.get("base_url") or ""
             h = _get_health(pn, bu, prof_name)
             status = h["status"]
             dot_class = (
