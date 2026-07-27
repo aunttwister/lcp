@@ -282,21 +282,30 @@ class LCPHandler(BaseHTTPRequestHandler):
 
             latency_ms = int((time.time() - t0) * 1000)
 
-            # ── Streaming response: pass through SSE directly ──
+            # ── Streaming response: forward SSE chunks in real time ──
             if streaming:
-                sse_bytes = response_body  # raw bytes from upstream
                 self.send_response(status)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "keep-alive")
+                self.send_header("Connection", "close")
                 self.send_header("X-LCP-Cache", "MISS")
                 self.send_header("X-Estimated-Cost", str(estimation["estimated_total_cost"]))
                 self.end_headers()
-                self.wfile.write(sse_bytes)
-                self.wfile.flush()
+
+                # Stream chunks from upstream to client as they arrive.
+                # response_body is a generator yielding raw bytes from the provider.
+                sse_parts = []
+                for chunk in response_body:
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                    sse_parts.append(chunk)
+
+                # Connection will be closed after this handler returns
+                # (Connection: close header).
 
                 # Extract usage from last SSE chunk for cost tracking
-                last_chunk = _extract_last_sse_chunk(sse_bytes)
+                full_sse = b"".join(sse_parts)
+                last_chunk = _extract_last_sse_chunk(full_sse)
                 if last_chunk and "usage" in last_chunk:
                     cost_info = {
                         "prompt_tokens": last_chunk["usage"].get("prompt_tokens", 0),

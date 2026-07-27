@@ -259,8 +259,8 @@ def calculate_cost(provider: str, model: str, body: dict, response_body: dict | 
 def forward_request(provider_cfg: dict, body: dict, config):
     """Forward a request to a provider.
 
-    If body['stream'] is True, returns (raw_sse_bytes, status_code) with raw_sse_bytes being
-    the full SSE response as bytes.
+    If body['stream'] is True, returns (chunk_iterable, status_code) where
+    chunk_iterable yields raw bytes as they arrive from the upstream.
     Otherwise returns (response_body_dict, status_code).
     """
     api_key = os.environ.get(provider_cfg.get("api_key_env", ""))
@@ -280,10 +280,23 @@ def forward_request(provider_cfg: dict, body: dict, config):
 
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        resp = urllib.request.urlopen(req, timeout=180)
+        if streaming:
+            # Return a closure that yields chunks and closes the response when done.
+            # This avoids buffering the entire SSE stream in memory.
+            def chunk_reader():
+                try:
+                    while True:
+                        chunk = resp.read(8192)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    resp.close()
+            return chunk_reader(), resp.status
+        else:
             raw = resp.read()
-            if streaming:
-                return raw, resp.status
+            resp.close()
             response_body = json.loads(raw.decode("utf-8"))
             return response_body, resp.status
     except urllib.error.HTTPError as e:
