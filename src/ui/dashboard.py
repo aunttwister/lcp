@@ -351,11 +351,14 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     def _active(p): return " active" if profile_filter == p else ""
     dash_active = _active(None)
     host = headers.get("Host", "localhost:8735")
-    scheme = "https" if headers.get("X-Forwarded-Proto") == "https" else "http"
+    scheme = "https" if (
+        headers.get("X-Forwarded-Proto", "").split(",")[0].strip() == "https"
+        or headers.get("X-Forwarded-Scheme") == "https"
+    ) else "http"
     host_url = f"{scheme}://{host}"
     sidebar_nav = (
         '<aside class="sidebar" id="sidebar">\n'
-        '  <div class="sidebar-brand">⚡ smallm</div>\n'
+        '  <div class="sidebar-brand">smallm</div>\n'
         '  <nav class="sidebar-nav">\n'
         f'    <a href="/dashboard" class="{dash_active}">Dashboard</a>\n'
         f'    <a href="/keys">API Keys</a>\n'

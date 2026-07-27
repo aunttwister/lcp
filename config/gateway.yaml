@@ -66,8 +66,10 @@ profiles:
     chain:
     - provider: opencode
       model: deepseek-v4-pro
+      base_url: https://opencode.ai/zen/go/v1
     - provider: deepseek
       model: deepseek-v4-flash
+      base_url: https://api.deepseek.com/v1
     forbidden_tools: []
     auth_required: true
 providers:

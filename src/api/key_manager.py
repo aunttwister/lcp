@@ -211,6 +211,8 @@ class KeyManager:
             if k.expires_at:
                 try:
                     exp = datetime.fromisoformat(k.expires_at)
+                    if exp.tzinfo is None:
+                        exp = exp.replace(tzinfo=timezone.utc)
                     if datetime.now(timezone.utc) > exp:
                         return None
                 except ValueError:

@@ -590,9 +590,12 @@ class LCPHandler(BaseHTTPRequestHandler):
     def _serve_dashboard(self, profile_filter: str | None = None):
         """Server-rendered dashboard."""
         host = self.headers.get("Host", "localhost:8734")
-        scheme = "https" if self.headers.get("X-Forwarded-Proto") == "https" else "http"
+        scheme = "https" if (
+            self.headers.get("X-Forwarded-Proto", "").split(",")[0].strip() == "https"
+            or self.headers.get("X-Forwarded-Scheme") == "https"
+        ) else "http"
         host_url = f"{scheme}://{host}"
-        html = render_dashboard(self.config, self.engine, {"Host": host}, profile_filter)
+        html = render_dashboard(self.config, self.engine, {"Host": host, "X-Forwarded-Proto": scheme}, profile_filter)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
@@ -781,9 +784,13 @@ class LCPHandler(BaseHTTPRequestHandler):
         merged = []
         for s in new_chain:
             entry = {"provider": s.get("provider"), "model": s.get("model")}
-            key = (entry["provider"], entry["model"])
-            if key in old_by_prov and old_by_prov[key]:
-                entry["base_url"] = old_by_prov[key]
+            # Prefer base_url from incoming request, fall back to existing chain
+            if s.get("base_url"):
+                entry["base_url"] = s["base_url"]
+            else:
+                key = (entry["provider"], entry["model"])
+                if key in old_by_prov and old_by_prov[key]:
+                    entry["base_url"] = old_by_prov[key]
             merged.append(entry)
         cfg.raw["profiles"][profile]["chain"] = merged
         cfg.save()
@@ -795,7 +802,10 @@ class LCPHandler(BaseHTTPRequestHandler):
         """Return all profiles with their gateway URLs."""
         profiles = {}
         host = self.headers.get("Host", "localhost:8735")
-        scheme = "https" if self.headers.get("X-Forwarded-Proto") == "https" else "http"
+        scheme = "https" if (
+            self.headers.get("X-Forwarded-Proto", "").split(",")[0].strip() == "https"
+            or self.headers.get("X-Forwarded-Scheme") == "https"
+        ) else "http"
         base = f"{scheme}://{host}"
         for pname, pcfg in self.config.profiles.items():
             profiles[pname] = {
@@ -1768,7 +1778,7 @@ def _render_sidebar_html(config, active_page: str = "") -> str:
 
     sidebar = (
         '<aside class="sidebar" id="sidebar">\n'
-        '  <div class="sidebar-brand">⚡ smallm</div>\n'
+        '  <div class="sidebar-brand">smallm</div>\n'
         '  <nav class="sidebar-nav">\n'
         f'    <a href="/dashboard"{dash_active}>Dashboard</a>\n'
         f'    <a href="/keys"{keys_active}>API Keys</a>\n'
