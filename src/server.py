@@ -250,10 +250,10 @@ class LCPHandler(BaseHTTPRequestHandler):
                 pricing,
             )
 
-            # Prompt cache check
+            # Prompt cache check (skip cache for streaming requests - cached JSON cannot satisfy SSE)
             cache = get_prompt_cache()
             primary_model = profile_cfg["chain"][0]["model"]
-            cached = cache.get(profile, primary_model, body)
+            cached = cache.get(profile, primary_model, body) if not body.get("stream", False) else None
             if cached is not None:
                 latency_ms = 1  # near-instant
                 self.send_response(200)
