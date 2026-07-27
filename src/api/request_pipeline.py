@@ -90,6 +90,17 @@ def normalize_messages_for_cache(messages: list[dict]) -> list[dict]:
                 "content": content,
                 "tool_call_id": msg.get("tool_call_id", ""),
             })
+        elif role == "assistant" and msg.get("tool_calls"):
+            # Preserve tool_calls on assistant messages so sanitize_messages()
+            # can match them to tool responses. Without this, normalize strips
+            # tool_calls → sanitize orphans all tool messages → conversation
+            # collapses to flat user/assistant history → provider sees no tool
+            # context and stops responding mid-stream.
+            normalized.append({
+                "role": role,
+                "content": content,
+                "tool_calls": msg["tool_calls"],
+            })
         else:
             normalized.append({"role": role, "content": content})
     return normalized

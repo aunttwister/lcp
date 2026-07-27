@@ -62,6 +62,14 @@ profiles:
       base_url: https://api.deepseek.com/v1
     forbidden_tools: null
     auth_required: false
+  coder:
+    chain:
+    - provider: opencode
+      model: deepseek-v4-pro
+    - provider: deepseek
+      model: deepseek-v4-flash
+    forbidden_tools: []
+    auth_required: true
 providers:
   opencode:
     api_key_env: OPENCODE_API_KEY
