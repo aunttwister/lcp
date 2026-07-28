@@ -1,7 +1,7 @@
 [project]
-name = "smallm-gw"
+name = "5mall"
 version = "0.5.0"
-description = "smallm gateway — routes, enforces tool permissions, tracks costs, manages API keys & budgets"
+description = "5mall — self-hosted LLM gateway: route, enforce tool permissions, track costs, manage API keys"
 requires-python = ">=3.11"
 dependencies = [
     "structlog>=24.1",

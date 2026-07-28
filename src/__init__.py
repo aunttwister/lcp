@@ -1,3 +1,3 @@
-"""smallm gateway — routes, enforces, meters, observes."""
+"""5mall gateway — routes, enforces, meters, observes."""
 
 __version__ = "0.5.0"
