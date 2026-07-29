@@ -107,9 +107,13 @@ class TestDeepSeekFetchBalance:
     def test_successful_balance_query(self):
         fake_resp = MagicMock()
         fake_resp.read.return_value = json.dumps({
-            "balance": 42.50,
-            "currency": "USD",
-            "total_granted": 100.0,
+            "is_available": True,
+            "balance_infos": [{
+                "currency": "USD",
+                "total_balance": "42.50",
+                "granted_balance": "100.00",
+                "topped_up_balance": "0.00",
+            }],
         }).encode("utf-8")
         fake_resp.__enter__.return_value = fake_resp
 
@@ -121,6 +125,7 @@ class TestDeepSeekFetchBalance:
         assert result["balance"] == 42.50
         assert result["currency"] == "USD"
         assert result["total_granted"] == 100.0
+        assert result["topped_up"] == 0.0
         # Verify the correct URL was called
         args, _ = mock_req.call_args
         assert args[0].full_url == _BALANCE_URL
@@ -128,7 +133,11 @@ class TestDeepSeekFetchBalance:
     def test_balance_is_cached(self):
         """Within cache TTL, the API should not be called again."""
         fake_resp = MagicMock()
-        fake_resp.read.return_value = json.dumps({"balance": 10.0}).encode("utf-8")
+        fake_resp.read.return_value = json.dumps({
+            "is_available": True,
+            "balance_infos": [{"currency": "USD", "total_balance": "10.00",
+                                "granted_balance": "0.00", "topped_up_balance": "10.00"}],
+        }).encode("utf-8")
         fake_resp.__enter__.return_value = fake_resp
 
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "sk-test"}):
@@ -146,7 +155,11 @@ class TestDeepSeekFetchBalance:
     def test_cache_expires(self):
         """After cache TTL elapses, the API should be called again."""
         fake_resp = MagicMock()
-        fake_resp.read.return_value = json.dumps({"balance": 10.0}).encode("utf-8")
+        fake_resp.read.return_value = json.dumps({
+            "is_available": True,
+            "balance_infos": [{"currency": "USD", "total_balance": "10.00",
+                                "granted_balance": "0.00", "topped_up_balance": "10.00"}],
+        }).encode("utf-8")
         fake_resp.__enter__.return_value = fake_resp
 
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "sk-test"}):
@@ -184,13 +197,16 @@ class TestDeepSeekFetchSummary:
         self.plugin = DeepSeekCostPlugin()
 
     def test_summary_with_balance(self):
-        """When balance API responds, summary includes available/spent/total."""
-        import time as _time
+        """Real DeepSeek v2 API format: balance_infos[0].total_balance."""
         fake_resp = MagicMock()
         fake_resp.read.return_value = json.dumps({
-            "balance": 5.23,
-            "total_granted": 10.0,
-            "currency": "USD",
+            "is_available": True,
+            "balance_infos": [{
+                "currency": "USD",
+                "total_balance": "1.19",
+                "granted_balance": "0.00",
+                "topped_up_balance": "1.19",
+            }],
         }).encode("utf-8")
         fake_resp.__enter__.return_value = fake_resp
 
@@ -199,17 +215,44 @@ class TestDeepSeekFetchSummary:
                 result = self.plugin.fetch_summary()
         assert result is not None
         bal = result["balance"]
-        assert bal["available"] == 5.23
-        assert bal["spent"] == pytest.approx(4.77, rel=1e-5)
-        assert bal["total_granted"] == 10.0
+        assert bal["available"] == 1.19
+        assert bal["spent"] == 0.0      # granted 0 + topped_up 1.19 - available 1.19
+        assert bal["total_granted"] == 0.0
+        assert bal["topped_up"] == 1.19
         assert bal["currency"] == "USD"
 
-    def test_summary_no_total_granted(self):
-        """When total_granted is missing, spent should be None."""
+    def test_summary_spent_positive(self):
+        """When some credits have been spent, spent > 0."""
         fake_resp = MagicMock()
         fake_resp.read.return_value = json.dumps({
-            "balance": 3.14,
-            "currency": "CNY",
+            "is_available": True,
+            "balance_infos": [{
+                "currency": "USD",
+                "total_balance": "5.23",
+                "granted_balance": "5.00",
+                "topped_up_balance": "5.00",
+            }],
+        }).encode("utf-8")
+        fake_resp.__enter__.return_value = fake_resp
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "sk-test"}):
+            with patch("src.api.cost_plugins.deepseek.urlopen", return_value=fake_resp):
+                result = self.plugin.fetch_summary()
+        bal = result["balance"]
+        assert bal["available"] == 5.23
+        assert bal["spent"] == pytest.approx(4.77, rel=1e-5)  # 10.0 - 5.23
+
+    def test_summary_no_total_granted(self):
+        """When total_granted is 0, spent should be 0 (not None — we know the total)."""
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = json.dumps({
+            "is_available": True,
+            "balance_infos": [{
+                "currency": "CNY",
+                "total_balance": "3.14",
+                "granted_balance": "0.00",
+                "topped_up_balance": "3.14",
+            }],
         }).encode("utf-8")
         fake_resp.__enter__.return_value = fake_resp
 
@@ -219,8 +262,8 @@ class TestDeepSeekFetchSummary:
         assert result is not None
         bal = result["balance"]
         assert bal["available"] == 3.14
-        assert bal["spent"] is None
-        assert bal["total_granted"] is None
+        assert bal["spent"] == 0.0
+        assert bal["total_granted"] == 0.0
         assert bal["currency"] == "CNY"
 
     def test_summary_no_api_key(self):

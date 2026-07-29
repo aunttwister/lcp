@@ -114,12 +114,25 @@ class DeepSeekCostPlugin(CostPlugin):
             get_logger("lcp.cost.deepseek").warning("balance_query_failed", error=str(exc))
             return None
 
-        # Normalise: the API may return "balance" or "total_balance"
-        balance = data.get("balance") or data.get("total_balance") or 0.0
+        # Parse: API now wraps balance in balance_infos[0] (v2 format).
+        # Fall back to top-level keys for older API responses.
+        info: dict = {}
+        if isinstance(data.get("balance_infos"), list) and data["balance_infos"]:
+            info = data["balance_infos"][0]
+
+        balance = float(
+            info.get("total_balance")
+            or data.get("balance")
+            or data.get("total_balance")
+            or 0.0
+        )
+        granted_raw = info.get("granted_balance") or data.get("total_granted")
+        topped_raw = info.get("topped_up_balance")
         result = {
-            "balance": float(balance),
-            "currency": data.get("currency", "USD"),
-            "total_granted": data.get("total_granted"),
+            "balance": balance,
+            "currency": info.get("currency") or data.get("currency", "USD"),
+            "total_granted": float(granted_raw) if granted_raw is not None else None,
+            "topped_up": float(topped_raw) if topped_raw is not None else None,
             "raw": data,
         }
         self._balance_cache = result
@@ -129,22 +142,23 @@ class DeepSeekCostPlugin(CostPlugin):
     # ── Rich summary — balance + spent credits ─────────────────────────────
 
     def fetch_summary(self) -> Optional[dict]:
-        """Return balance summary: available credits, spent, total granted."""
+        """Return balance summary: available credits, spent, topped-up, granted."""
         bal = self.fetch_balance()
         if bal is None:
             return None
 
-        total_granted = bal.get("total_granted")
         available = bal["balance"]
-        spent: Optional[float] = None
-        if total_granted is not None:
-            spent = round(float(total_granted) - available, 8)
+        topped_up = bal.get("topped_up") or 0.0
+        total_granted = bal.get("total_granted") or 0.0
+        total_ever = topped_up + total_granted
+        spent = round(total_ever - available, 8) if total_ever > 0 else None
 
         return {
             "balance": {
                 "available": available,
                 "spent": spent,
                 "total_granted": total_granted,
+                "topped_up": topped_up,
                 "currency": bal.get("currency", "USD"),
             },
         }
