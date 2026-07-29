@@ -1643,7 +1643,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
 
               var detailLine = '';
               if (prov === 'opencode') {{
-                var om = (sum && sum.monthly) ? sum.monthly : (monthly[prov] || {});
+                var om = (sum && sum.monthly) ? sum.monthly : (monthly[prov] || {{}});
                 var now = new Date();
                 var moStart = new Date(now.getFullYear(), now.getMonth(), 1);
                 var moEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
