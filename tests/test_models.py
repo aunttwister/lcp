@@ -44,6 +44,31 @@ def test_sqlite_tmp_file():
             except FileNotFoundError:
                 pass
 
+def test_init_db():
+    """init_db creates engine and tables."""
+    import tempfile as tf
+    import os
+    from src.api.models import init_db
+    with tf.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        engine = init_db(db_path, create_all=True)
+        # Tables should exist
+        from sqlalchemy import inspect
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        assert "requests" in tables
+        assert "api_keys" in tables
+        engine.dispose()
+    finally:
+        os.unlink(db_path)
+        for ext in ["-wal", "-shm"]:
+            try:
+                os.unlink(db_path + ext)
+            except FileNotFoundError:
+                pass
+
+
 def test_session_context():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name

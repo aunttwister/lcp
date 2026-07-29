@@ -16,6 +16,7 @@ from .api.config import get_config
 from .api.logging_config import get_logger
 from .api.circuit_breaker import get_circuit_breaker
 from .ui.dashboard import render_dashboard
+from .api.cost_plugins import get_registry, init_plugins
 from .api.request_pipeline import (
     strip_forbidden_tools,
     calculate_cost,
@@ -50,7 +51,20 @@ def _extract_last_sse_chunk(raw_bytes):
 
 
 def _estimate_cost_from_tokens(provider, model, cost_info, config):
-    """Calculate cost from token counts using configured pricing."""
+    """Calculate cost from token counts using configured pricing or plugins."""
+    # Try plugin registry first
+    usage_for_plugin = {
+        "prompt_tokens": cost_info.get("prompt_tokens", 0)
+                        + cost_info.get("cache_miss_tokens", 0),
+        "completion_tokens": cost_info.get("completion_tokens", 0),
+        "prompt_cache_hit_tokens": cost_info.get("cache_hit_tokens", 0),
+        "prompt_cache_miss_tokens": cost_info.get("cache_miss_tokens", 0),
+    }
+    plugin_cost = get_registry().calculate_cost(provider, model, usage_for_plugin)
+    if plugin_cost is not None:
+        return round(plugin_cost, 8)
+
+    # Fall back to config-based pricing
     pricing = config.get_pricing(provider, model)
     cache_hit = cost_info.get("cache_hit_tokens", 0)
     cache_miss = cost_info.get("cache_miss_tokens", 0)
@@ -152,6 +166,10 @@ class LCPHandler(BaseHTTPRequestHandler):
             self._serve_alerts_config()
         elif self.path == "/api/alerts/active":
             self._serve_alerts_active()
+        elif self.path == "/api/cost-plugins/usage":
+            self._serve_plugin_usage()
+        elif self.path == "/api/cost-plugins/balances":
+            self._serve_plugin_balances()
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -676,14 +694,7 @@ class LCPHandler(BaseHTTPRequestHandler):
         self._send_json({"providers": providers, "profile_chains": profile_chains})
 
     def _serve_provider_presets(self):
-        presets = {
-            "deepseek": {"api_base": "https://api.deepseek.com/v1", "models": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat"]},
-            "opencode": {"api_base": "https://opencode.ai/zen/go/v1", "models": ["deepseek-v4-pro", "deepseek-v4-flash"]},
-            "openai": {"api_base": "https://api.openai.com/v1", "models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1"]},
-            "anthropic": {"api_base": "https://api.anthropic.com/v1", "models": ["claude-sonnet-4-20250514", "claude-haiku-3-5-20241022"]},
-            "groq": {"api_base": "https://api.groq.com/openai/v1", "models": ["llama-4-maverick-17b", "llama-4-scout-17b"]},
-            "xai": {"api_base": "https://api.x.ai/v1", "models": ["grok-3"]},
-        }
+        presets = get_registry().presets
         self._send_json({"presets": presets})
 
     def _serve_provider_create(self):
@@ -969,6 +980,22 @@ class LCPHandler(BaseHTTPRequestHandler):
         am = get_alert_manager()
         self._send_json({"alerts": am.get_active_alerts()})
 
+    # ── Cost Plugin API ──────────────────────────────────────────────────
+
+    def _serve_plugin_usage(self):
+        """Return aggregated usage from all cost tracking plugins."""
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        start = qs.get("start", [None])[0]
+        end = qs.get("end", [None])[0]
+        data = get_registry().fetch_all_usage(start_date=start, end_date=end)
+        self._send_json({"plugin_usage": data})
+
+    def _serve_plugin_balances(self):
+        """Return account balances from all cost tracking plugins."""
+        data = get_registry().fetch_all_balances()
+        self._send_json({"plugin_balances": data})
+
     def _serve_alerts_config(self):
         am = get_alert_manager()
         self._send_json({"config": am.config})
@@ -1128,6 +1155,7 @@ function loadPresets() {{
 function loadPreset() {{
   var key = document.getElementById('provPreset').value;
   if (!key) return;
+  showAddProvForm();
   api('GET', '/api/providers/presets').then(function(d) {{
     var p = (d.presets || {{}})[key];
     if (!p) return;
@@ -1135,7 +1163,6 @@ function loadPreset() {{
     document.getElementById('provUrl').value = p.api_base || '';
     document.getElementById('provModels').value = (p.models || []).join(', ');
     document.getElementById('provKeyEnv').value = 'LCP_' + key.toUpperCase() + '_API_KEY';
-    showAddProvForm();
     document.getElementById('provSaveBtn').disabled = false;
   }});
 }}

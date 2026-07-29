@@ -28,6 +28,10 @@ def main():
 
     get_circuit_breaker(config)
 
+    # Initialize cost tracking plugins (imports auto-register via __init__.py)
+    from .api.cost_plugins import init_plugins
+    init_plugins()
+
     db_path = os.environ.get("COST_DB", config.database.get("path", "/app/data/costs.db"))
     assert db_path is not None
     engine = get_engine(db_path)

@@ -4,6 +4,7 @@ Generates the full server-rendered HTML dashboard.
 """
 import json
 from datetime import datetime, timezone
+from typing import Any, cast
 from sqlalchemy import func, case
 from ..api.models import Request as RequestModel, get_session
 from ..api.prompt_cache import get_prompt_cache
@@ -19,7 +20,6 @@ _DASHBOARD_CSS = (_templates_dir / "dashboard.css").read_text()
 
 def render_dashboard(config, engine, headers, profile_filter=None):
     """Generate the full dashboard HTML page and return it as a string."""
-    import html as _html
 
     # Get circuit breaker for provider health dots
     cb = get_circuit_breaker()
@@ -51,6 +51,15 @@ def render_dashboard(config, engine, headers, profile_filter=None):
                 )
             summary = summary.first()
 
+            # Unpack summary to plain Python types (avoids Column typing issues)
+            _s = summary
+            summary_total_cost: float = float(_s.total_cost) if _s else 0.0
+            summary_total_requests: int = int(_s.total_requests) if _s else 0
+            summary_prompt_tokens: int = int(_s.prompt_tokens) if _s else 0
+            summary_output_tokens: int = int(_s.output_tokens) if _s else 0
+            cache_hit_tokens: int = int(_s.cache_hits) if _s else 0
+            cache_miss_tokens: int = int(_s.cache_misses) if _s else 0
+
             fallback_count = (
                 session.query(func.count(RequestModel.id))
                 .filter(RequestModel.success == 1)
@@ -72,8 +81,6 @@ def render_dashboard(config, engine, headers, profile_filter=None):
                 )
             total_success = total_success.scalar() or 0
 
-            cache_hit_tokens = summary.cache_hits or 0
-            cache_miss_tokens = summary.cache_misses or 0
             cache_total = cache_hit_tokens + cache_miss_tokens
             cache_hit_rate = (
                 (cache_hit_tokens / cache_total * 100) if cache_total > 0 else 0
@@ -258,6 +265,10 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         import traceback as _tb
         _tb.print_exc()
         summary = type("S", (), {"total_cost": 0, "total_requests": 0, "cache_hits": 0, "cache_misses": 0, "prompt_tokens": 0, "output_tokens": 0})()
+        summary_total_cost = 0.0
+        summary_total_requests = 0
+        summary_output_tokens = 0
+        summary_prompt_tokens = 0
         fallback_count = 0
         total_success = 0
         cache_hit_rate = 0
@@ -295,7 +306,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         return 0.0
 
     total_cache_savings = sum(
-        _savings_for_model(r.model, r.cache_hit)
+        _savings_for_model(cast(Any, r).model, cast(Any, r).cache_hit)
         for r in daily_rows
     ) if daily_rows else 0.0
 
@@ -363,6 +374,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         f'    <a href="/dashboard" class="{dash_active}">Dashboard</a>\n'
         f'    <a href="/keys">API Keys</a>\n'
         f'    <a href="/providers">Providers</a>\n'
+        '    <div class="sb-provider-rows" id="providerPluginRows"></div>\n'
         f'    <a href="/profiles">Profiles</a>\n'
         '    <div class="nav-label">Profiles</div>\n'
     )
@@ -379,7 +391,8 @@ def render_dashboard(config, engine, headers, profile_filter=None):
             f'</a>'
         )
     sidebar_nav += (
-        '\n  </nav>\n</aside>'
+        '\n  </nav>'
+        '\n</aside>'
     )
 
     # Old-style tabs (kept for reference, not rendered)
@@ -396,6 +409,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     # Daily Costs table
     daily_html = ""
     for r in daily_rows:
+        r = cast(Any, r)
         daily_saved = _savings_for_model(r.model, r.cache_hit)
         daily_html += (
             f'<tr><td class="mono">{r.date}</td><td>{r.profile}</td>'
@@ -411,6 +425,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     # Recent Requests table
     recent_html = ""
     for r in recent_rows:
+        r = cast(Any, r)
         time_str = r.timestamp[11:19] if r.timestamp and "T" in r.timestamp else str(r.timestamp)[:19]
         status_badges = ""
         if r.success:
@@ -436,6 +451,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     # Recent Errors table
     error_html = ""
     for r in error_rows:
+        r = cast(Any, r)
         time_str = r.timestamp[:19] if r.timestamp else ""
         error_html += (
             f'<tr><td class="mono">{time_str}</td><td>{r.profile}</td>'
@@ -465,6 +481,82 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         f'<div class="sub">Max: {cache_stats.get("max_entries", "N/A")}</div></div>\n'
     )
 
+    # ── Latest responding (current) provider ──
+    _latest_provider = None
+    with get_session(engine) as _s:
+        _latest_prov_row = _s.query(RequestModel.provider).filter(
+            RequestModel.success == 1,
+            RequestModel.provider != None,
+            RequestModel.provider != 'error',
+        )
+        if profile_filter:
+            _latest_prov_row = _latest_prov_row.filter(
+                RequestModel.profile == profile_filter
+            )
+        _latest_prov_row = _latest_prov_row.order_by(
+            RequestModel.timestamp.desc()
+        ).first()
+        if _latest_prov_row:
+            _latest_provider = _latest_prov_row[0]
+
+    # ── Monthly usage per provider (for OpenCode display) ──
+    from datetime import date as _date
+    _first_of_month = _date.today().replace(day=1).isoformat()
+    with get_session(engine) as _s:
+        _monthly_rows = _s.query(
+            RequestModel.provider,
+            func.count(RequestModel.id).label("m_reqs"),
+            func.coalesce(func.sum(RequestModel.completion_tokens + RequestModel.prompt_tokens), 0).label("m_tokens"),
+            func.coalesce(func.sum(RequestModel.cost), 0).label("m_cost"),
+        ).filter(
+            RequestModel.timestamp >= _first_of_month,
+            RequestModel.success == 1,
+        )
+        if profile_filter:
+            _monthly_rows = _monthly_rows.filter(
+                RequestModel.profile == profile_filter
+            )
+        _monthly_rows = _monthly_rows.group_by(RequestModel.provider).all()
+    _monthly_data = {}
+    for r in _monthly_rows:
+        _monthly_data[r.provider] = {
+            "reqs": int(r.m_reqs),
+            "tokens": int(r.m_tokens),
+            "cost": float(r.m_cost),
+        }
+
+    # Serialize for JS
+    _latest_provider_json = json.dumps(_latest_provider)
+    _monthly_data_json = json.dumps(_monthly_data)
+    _configured_providers_json = json.dumps(sorted(config.providers.keys()))
+
+    # Template snippet for header badge — shows current (last-responding) provider
+    plugin_header_info = (
+        "var latestProvider = " + _latest_provider_json + ";\n"
+        "var allUsage = usage, allBal = balances;\n"
+        "if (latestProvider && hdrText) {\n"
+        "  if (hdrDot) hdrDot.className = 'header-plugin-dot on';\n"
+        "  var usg = allUsage[latestProvider] || [];\n"
+        "  var totalCost = usg.reduce(function(s,r){return s + r.cost}, 0);\n"
+        "  var bal = allBal[latestProvider];\n"
+        "  var label = latestProvider + ' $' + totalCost.toFixed(4);\n"
+        "  if (bal && bal.balance !== null && bal.balance !== undefined) {\n"
+        "    label += ' \\u00b7 ' + (bal.currency||'USD') + ' ' + bal.balance.toFixed(2);\n"
+        "  } else if (latestProvider === 'llamacpp') {\n"
+        "    var mt = (monthly[latestProvider] || {}).tokens || 0;\n"
+        "    label += ' \\u00b7 ' + formatTokens(mt) + ' tokens';\n"
+        "  } else if (latestProvider === 'opencode') {\n"
+        "    var mr = (monthly[latestProvider] || {}).reqs || 0;\n"
+        "    label += ' \\u00b7 ' + mr + ' req this month';\n"
+        "  }\n"
+        "  hdrText.textContent = label;\n"
+        "  if (hdrDot) hdrDot.title = latestProvider + ' total: $' + totalCost.toFixed(4);\n"
+        "} else {\n"
+        "  if (hdrText) hdrText.textContent = 'No requests yet';\n"
+        "  if (hdrDot) hdrDot.className = 'header-plugin-dot off';\n"
+        "}"
+    )
+
     # ── Full HTML ──
     filter_title = f" — {profile_filter.upper()}" if profile_filter else ""
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -491,8 +583,16 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
     <button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()" title="Toggle sidebar">☰</button>
     <div class="main-content">
-    <h1>smallm gateway{filter_title}</h1>
-    <p class="subtitle">Cost tracking · Request history · Phase 5/6 intelligence</p>
+    <div class="header-row">
+      <div>
+        <h1>smallm gateway{filter_title}</h1>
+        <p class="subtitle">Cost tracking · Request history · Phase 5/6 intelligence</p>
+      </div>
+      <div class="header-plugin-badge" id="pluginHeaderBadge">
+        <span class="header-plugin-dot" id="pluginHeaderDot"></span>
+        <span class="header-plugin-text" id="pluginHeaderText">Plugins…</span>
+      </div>
+    </div>
 
     <!-- ── Provider Edit Modal (opened from sidebar) ── -->
     <div class="modal-overlay" id="provEditModal">
@@ -587,12 +687,12 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     <div class="section-content cards">
     <div class="card">
       <div class="label">Total Cost</div>
-      <div class="value">{_fmt_cost(summary.total_cost)}</div>
+      <div class="value">{_fmt_cost(summary_total_cost)}</div>
       <div class="sub">{active_days} active days</div>
     </div>
     <div class="card">
       <div class="label">Total Requests</div>
-      <div class="value">{summary.total_requests:,}</div>
+      <div class="value">{summary_total_requests:,}</div>
       <div class="sub">{fallback_count:,} fallbacks ({fb_pct:.1f}%)</div>
     </div>
     <div class="card">
@@ -607,8 +707,8 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     </div>
     <div class="card">
       <div class="label">Output Tokens</div>
-      <div class="value">{_fmt_num(summary.output_tokens or 0)}</div>
-      <div class="sub">prompt: {_fmt_num(summary.prompt_tokens or 0)}</div>
+      <div class="value">{_fmt_num(summary_output_tokens)}</div>
+      <div class="sub">prompt: {_fmt_num(summary_prompt_tokens)}</div>
     </div>
     {profile_card_html}
     {phase56_cards}
@@ -1495,6 +1595,79 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     }}
     </script>
     </div><!-- .main-content -->
+
+    <script>
+    // Monthly usage per provider (from DB — injected server-side)
+    var monthly = {_monthly_data_json};
+    var configuredProviders = {_configured_providers_json};
+
+    function loadPluginStatus() {{
+      var hdrDot = document.getElementById('pluginHeaderDot');
+      var hdrText = document.getElementById('pluginHeaderText');
+
+      Promise.all([
+        fetch('/api/cost-plugins/usage').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_usage:{{}}}}}}),
+        fetch('/api/cost-plugins/balances').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_balances:{{}}}}}})
+      ]).then(function(results) {{
+        var usage = results[0].plugin_usage || {{}};
+        var balances = results[1].plugin_balances || {{}};
+
+        var allProviders = Object.keys(usage).concat(Object.keys(balances));
+        var uniqueProvs = allProviders.filter(function(v,i,a){{return a.indexOf(v)===i}}).filter(function(v){{return configuredProviders.indexOf(v) !== -1}});
+
+        // ── Sidebar: plugin info under Providers nav link ──
+        var provRows = document.getElementById('providerPluginRows');
+        if (provRows) {{
+          if (uniqueProvs.length === 0) {{
+            provRows.innerHTML = '<div class="sb-provider-empty">No plugins active</div>';
+          }} else {{
+            var rows = '';
+            uniqueProvs.forEach(function(prov) {{
+              var bal = balances[prov];
+              var usg = usage[prov] || [];
+              var totalCost = usg.reduce(function(s,r){{return s + r.cost}}, 0);
+              var totalTokens = usg.reduce(function(s,r){{return s + r.prompt_tokens + r.completion_tokens}}, 0);
+              var m = monthly[prov] || {{}};
+
+              var detailLine = '';
+              if (bal && bal.balance !== null && bal.balance !== undefined) {{
+                var currency = bal.currency || 'USD';
+                detailLine = '<span class="sb-provider-detail">balance: ' + currency + ' ' + bal.balance.toFixed(2) + '</span>';
+              }} else if (prov === 'opencode') {{
+                var mr = m.reqs || 0;
+                var mt = m.tokens || 0;
+                detailLine = '<span class="sb-provider-detail">' + mr + ' req \\u00b7 ' + formatTokens(mt) + ' tok this month</span>';
+              }} else if (prov === 'llamacpp') {{
+                detailLine = '<span class="sb-provider-detail">' + formatTokens(totalTokens) + ' total tokens \\u00b7 local</span>';
+              }}
+
+              rows += '<div class="sb-provider-row">' +
+                '<div class="sb-provider-top">' +
+                '<span class="sb-provider-name">' + prov + '</span>' +
+                '<span class="sb-provider-cost">$' + totalCost.toFixed(4) + '</span>' +
+                '</div>' +
+                (detailLine ? detailLine : '') +
+                '</div>';
+            }});
+            provRows.innerHTML = rows;
+          }}
+        }}
+
+        // ── Header badge: active provider summary ──
+        {plugin_header_info}
+      }});
+    }}
+
+    function formatTokens(n) {{
+      if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+      return String(n);
+    }}
+
+    // Load plugin status on page load and every 60 seconds
+    loadPluginStatus();
+    setInterval(loadPluginStatus, 60000);
+    </script>
 
     <!-- ── Provider Modal ── -->
     <div class="modal-overlay" id="provModal">

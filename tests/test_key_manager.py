@@ -248,3 +248,61 @@ class TestLegacyMigration:
         assert len(keys) >= 1
         names = [k["name"] for k in keys]
         assert "Legacy Key" in names
+
+    def test_migrate_empty_keys_list(self, temp_dir):
+        """Empty keys list in legacy JSON skips migration loop."""
+        import json
+        data_dir = temp_dir / "data"
+        data_dir.mkdir()
+        with open(data_dir / "api_keys.json", "w") as f:
+            json.dump({"keys": []}, f)
+
+        db_path = str(temp_dir / "empty_migrate.db")
+        engine = get_engine(db_path)
+        Base.metadata.create_all(engine)
+        km2 = init_key_manager(engine, str(data_dir))
+        assert km2.list_keys() == []
+
+    def test_migrate_json_decode_error(self, temp_dir):
+        """Invalid JSON in legacy file triggers exception handler."""
+        data_dir = temp_dir / "data"
+        data_dir.mkdir()
+        with open(data_dir / "api_keys.json", "w") as f:
+            f.write("not valid json")
+
+        db_path = str(temp_dir / "bad_migrate.db")
+        engine = get_engine(db_path)
+        Base.metadata.create_all(engine)
+        km2 = init_key_manager(engine, str(data_dir))
+        # Falls through with no keys migrated
+        assert km2.list_keys() == []
+
+
+class TestValidateKeyEdgeCases:
+    def test_invalid_expiry_format(self, km):
+        """Invalid expires_at format is caught by ValueError handler."""
+        created = km.create_key(name="Bad Expiry")
+        from src.api.models import get_session
+        with get_session(km._engine) as session:
+            key = session.query(ApiKey).filter(ApiKey.id == created["id"]).first()
+            key.expires_at = "not-a-date"
+            session.commit()
+        # ValueError is caught, key is treated as valid
+        result = km.validate_key(created["key"])
+        assert result is not None
+        assert result["name"] == "Bad Expiry"
+
+
+class TestKeyManagerSingleton:
+    def test_get_key_manager_creates_when_none(self, temp_dir):
+        """get_key_manager creates a new instance when _key_manager is None."""
+        import src.api.key_manager as km_mod
+        km_mod._key_manager = None  # reset global
+
+        db_path = str(temp_dir / "get_km.db")
+        engine = get_engine(db_path)
+        Base.metadata.create_all(engine)
+
+        km = km_mod.get_key_manager(engine, str(temp_dir))
+        assert km is not None
+        assert km.list_keys() == []

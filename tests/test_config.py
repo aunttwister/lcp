@@ -3,6 +3,7 @@
 import os
 import tempfile
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -312,6 +313,84 @@ class TestConfigEdgeCases:
             yaml.dump(data, f)
         cfg = Config(str(path))
         cfg.reload()  # should not raise
+        os.unlink(str(path))
+
+    def test_check_reload_triggers_reload(self, temp_dir):
+        """File modified externally triggers reload."""
+        data = _base_config()
+        path = temp_dir / "config5.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        cfg = Config(str(path))
+        # Modify file externally to advance mtime
+        data["server"]["port"] = 9999
+        time.sleep(0.01)
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        assert cfg.check_reload() is True
+        assert cfg.server["port"] == 9999
+        os.unlink(str(path))
+
+    def test_check_reload_exception(self, temp_dir):
+        """Exception during stat is caught and logged."""
+        data = _base_config()
+        path = temp_dir / "config6.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        cfg = Config(str(path))
+        with patch.object(Path, 'stat', side_effect=PermissionError("denied")):
+            assert cfg.check_reload() is False
+        os.unlink(str(path))
+
+    def test_get_provider_cache_config_default(self, temp_dir):
+        """Non-existent provider returns default cache config."""
+        data = _base_config()
+        path = temp_dir / "config7.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        cfg = Config(str(path))
+        result = cfg.get_provider_cache_config("nonexistent")
+        assert result == {"strategy": "none", "savings": "none", "hit_field": None}
+        os.unlink(str(path))
+
+    def test_save_failure_cleans_up_tempfile(self, temp_dir):
+        """If shutil.move fails, the temp file is still cleaned up."""
+        import shutil
+        data = _base_config()
+        path = temp_dir / "config_fail.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        cfg = Config(str(path))
+        cfg.raw["server"]["port"] = 9999
+        with patch("shutil.move", side_effect=OSError("permission denied")):
+            with pytest.raises(OSError):
+                cfg.save()
+        # The temp file created by NamedTemporaryFile should have been cleaned up
+        os.unlink(str(path))
+
+    def test_get_config_creates_when_none(self, temp_dir):
+        """get_config creates a new Config when _config is None."""
+        import src.api.config as cfg_mod
+        data = _base_config()
+        path = temp_dir / "get_config.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        cfg_mod._config = None
+        with patch.dict(os.environ, {"LCP_CONFIG": str(path)}):
+            cfg = cfg_mod.get_config()
+            assert cfg.server["port"] == 8734
+        os.unlink(str(path))
+
+    def test_init_config_function(self, temp_dir):
+        """init_config creates and returns a new Config."""
+        import src.api.config as cfg_mod
+        data = _base_config()
+        path = temp_dir / "gateway2.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        cfg_mod._config = None  # reset global
+        cfg = cfg_mod.init_config(str(path))
+        assert cfg.server["port"] == 8734
         os.unlink(str(path))
 
     def test_init_config_with_env(self, temp_dir):

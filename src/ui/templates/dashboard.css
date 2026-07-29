@@ -440,3 +440,66 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   border-top: 1px solid hsl(var(--card-border));
   text-align: center;
 }
+
+/* ── Header plugin badge (top-right) ── */
+.header-row {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  margin-bottom: 2rem;
+}
+.header-row h1 { margin-bottom: 0.25rem; }
+.header-row .subtitle { margin-bottom: 0; }
+.header-plugin-badge {
+  display: flex; align-items: center; gap: 0.5rem;
+  background: hsl(var(--card)); border: 1px solid hsl(var(--card-border));
+  border-radius: var(--radius); padding: 0.5rem 0.75rem;
+  font-size: 0.6875rem; color: hsl(var(--muted-foreground));
+  flex-shrink: 0; max-width: 50%; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;
+}
+.header-plugin-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.header-plugin-dot.on { background: hsl(var(--green-fg)); box-shadow: 0 0 4px hsl(var(--green-fg) / 0.5); }
+.header-plugin-dot.off { background: hsl(var(--muted-foreground)); }
+.header-plugin-text {
+  overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.6875rem;
+}
+
+/* ── Provider plugin rows under Providers nav ── */
+.sb-provider-rows {
+  padding: 0 0.75rem 0.125rem 1.5rem;
+}
+.sb-provider-empty {
+  font-size: 0.625rem; color: hsl(var(--muted-foreground));
+  padding: 0.125rem 0;
+}
+.sb-provider-row {
+  padding: 0.125rem 0;
+  border-radius: var(--radius);
+  transition: background 0.1s;
+}
+.sb-provider-row:hover { background: hsl(var(--secondary) / 0.4); }
+.sb-provider-top {
+  display: flex; align-items: center; gap: 0.25rem;
+}
+.sb-provider-name {
+  font-weight: 600; font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.625rem; color: hsl(var(--foreground));
+}
+.sb-provider-cost {
+  color: hsl(var(--green-fg)); font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.5625rem; margin-left: auto;
+}
+.sb-provider-detail {
+  display: block;
+  font-size: 0.5rem; color: hsl(var(--muted-foreground));
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  opacity: 0.75; line-height: 1.4;
+  padding-left: 0.125rem;
+}
+
+@media (max-width: 768px) {
+  .header-row { flex-direction: column; gap: 0.5rem; }
+  .header-plugin-badge { max-width: 100%; }
+}

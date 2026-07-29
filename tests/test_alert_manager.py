@@ -2,6 +2,7 @@
 
 import json
 import time
+import threading
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -211,3 +212,68 @@ class TestErrorSpikeDetection:
         am.track_error()
         alerts = am.list_alerts()
         assert len(alerts) == 0
+
+
+class TestHistoryTruncation:
+    def test_fire_truncates_history(self, am):
+        """History stays bounded at 500 entries."""
+        for i in range(510):
+            am.fire(rule="budget_breach", severity="warning", title=f"A{i}", message="...")
+        assert len(am._alert_history) <= 500
+
+
+class TestProviderStatus:
+    def test_fire_provider_degraded(self, am):
+        am.fire_provider_status("deepseek", "l2", "healthy", "degraded")
+        alerts = am.list_alerts()
+        assert alerts[0]["rule"] == "provider_degraded"
+        assert alerts[0]["severity"] == "warning"
+
+    def test_fire_provider_recovery(self, am):
+        am.fire_provider_status("deepseek", "l2", "dead", "healthy")
+        alerts = am.list_alerts()
+        assert alerts[0]["rule"] == "circuit_breaker_recovery"
+        assert alerts[0]["severity"] == "info"
+
+
+class TestWebhookDispatchSync:
+    """Test that background thread actually sends the HTTP request."""
+
+    class _SyncThread:
+        """Thread replacement that runs target synchronously."""
+        def __init__(self, target=None, args=(), kwargs=None, **kw):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+        def start(self):
+            if self._target:
+                self._target(*self._args, **self._kwargs)
+        def join(self):
+            pass
+
+    def test_thread_sends_request(self, am):
+        am.update_config({
+            "webhook_url": "https://hooks.example.com/alert",
+            "webhook_secret": "secret123",
+            "enabled": True,
+        })
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.status = 200
+            mock_urlopen.return_value.__enter__.return_value = mock_resp
+            with patch("threading.Thread", new=self._SyncThread):
+                am.fire(rule="budget_breach", severity="warning",
+                        title="Webhook", message="...", dedup_key="wh:sync")
+                mock_urlopen.assert_called_once()
+
+    def test_thread_handles_failure(self, am):
+        am.update_config({
+            "webhook_url": "https://hooks.example.com/alert",
+            "webhook_secret": "secret123",
+            "enabled": True,
+        })
+        with patch("urllib.request.urlopen", side_effect=OSError("connection failed")):
+            with patch("threading.Thread", new=self._SyncThread):
+                # Should not raise — exception caught inside _send
+                am.fire(rule="budget_breach", severity="warning",
+                        title="Failing", message="...", dedup_key="wh:fail")

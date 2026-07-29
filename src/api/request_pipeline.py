@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from .circuit_breaker import get_circuit_breaker
 from .cost_estimator import estimate_from_request
+from .cost_plugins import get_registry, init_plugins
 from .exceptions import (
     AllProvidersFailedError,
     ProviderAuthError,
@@ -232,14 +233,38 @@ def read_cache_hit_tokens(provider_name: str, response_body: dict | None,
 
 def calculate_cost(provider: str, model: str, body: dict, response_body: dict | None,
                    config) -> dict:
-    """Calculate token usage and cost from request+response."""
-    pricing = config.get_pricing(provider, model)
+    """Calculate token usage and cost from request+response.
 
+    Tries the plugin registry first (for plugin-provided cost tracking),
+    then falls back to the generic config-based pricing.
+    """
     usage = response_body.get("usage", {}) if response_body else {}
     prompt_tokens = usage.get("prompt_tokens", 0)
     completion_tokens = usage.get("completion_tokens", 0)
     cache_hit = read_cache_hit_tokens(provider, response_body, config)
-    cache_miss = usage.get("prompt_cache_miss_tokens", prompt_tokens - cache_hit if prompt_tokens > cache_hit else 0)
+    cache_miss = usage.get("prompt_cache_miss_tokens",
+                           prompt_tokens - cache_hit if prompt_tokens > cache_hit else 0)
+
+    usage_for_plugin = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "prompt_cache_hit_tokens": cache_hit,
+        "prompt_cache_miss_tokens": cache_miss,
+    }
+
+    # Try plugin registry first
+    plugin_cost = get_registry().calculate_cost(provider, model, usage_for_plugin)
+    if plugin_cost is not None:
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cache_hit_tokens": cache_hit,
+            "cache_miss_tokens": cache_miss,
+            "cost": round(plugin_cost, 8),
+        }
+
+    # Fall back to config-based pricing
+    pricing = config.get_pricing(provider, model)
 
     cache_hit_cost = (cache_hit / 1_000_000) * pricing["cache_hit"]
     cache_miss_cost = (cache_miss / 1_000_000) * pricing["cache_miss"]
@@ -388,3 +413,21 @@ def record_cost(engine, profile: str, model: str, provider: str, cost_info: dict
         session.commit()
 
     # Track spend against key (when key auth is wired in)
+
+    # ── Plugin hooks ──────────────────────────────────────────────────────
+    # If the provider has a plugin, let it record the tokens (e.g. llama.cpp
+    # local tracking, or future plugins that need request-level callbacks).
+    if success:
+        plugin = get_registry().for_provider(provider)
+        if plugin is not None and hasattr(plugin, "record_tokens"):
+            try:
+                plugin.record_tokens(
+                    model,
+                    prompt_tokens=cost_info.get("prompt_tokens", 0)
+                                 + cost_info.get("cache_miss_tokens", 0),
+                    completion_tokens=cost_info.get("completion_tokens", 0),
+                    cache_hit_tokens=cost_info.get("cache_hit_tokens", 0),
+                )
+            except Exception as exc:
+                logger.warning("plugin_record_tokens_failed",
+                               provider=provider, error=str(exc))

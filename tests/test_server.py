@@ -260,12 +260,17 @@ class TestProviderEndpoints:
         assert "providers" in body
 
     def test_presets(self, temp_db):
+        from src.api.cost_plugins import init_plugins
+        init_plugins()
         h = TestHandler(path="/api/providers/presets", engine=temp_db)
         h.do_GET()
         assert _status(h) == 200
         body = _json_body(h)
         assert "presets" in body
-        assert "openai" in body["presets"]
+        assert "deepseek" in body["presets"]
+        assert "opencode" in body["presets"]
+        assert "llamacpp" in body["presets"]
+        assert body["presets"]["llamacpp"]["models"] == []
 
     def test_create_provider(self, temp_db):
         body = json.dumps({"name": "newco", "api_base": "https://new.api/v1", "api_key_env": "NEWCO_KEY", "models": ["m1"]})

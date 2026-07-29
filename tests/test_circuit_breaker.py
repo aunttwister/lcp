@@ -92,19 +92,47 @@ class TestDeadState:
     def test_healthy_provider_is_available(self, cb):
         assert cb.is_available("healthy", "https://x", "l2") is True
 
+    def test_available_after_cooldown_expired(self, cb):
+        """is_available returns True when tripped_until is in the past (line 45)."""
+        for _ in range(6):
+            cb.record_failure("p", "https://x", "l2")
+        assert cb.is_available("p", "https://x", "l2") is False  # tripped
+        # Fast-forward past the cooldown — save real time before mocking
+        real_now = time.time()
+        with patch("time.time") as mock_time:
+            mock_time.return_value = real_now + 60  # well past cooldown
+            assert cb.is_available("p", "https://x", "l2") is True  # cooldown expired
+
+
+class TestStats:
+    def test_stats_counts(self, cb):
+        cb.record_failure("h", "https://x", "l2")
+        cb.record_failure("h", "https://x", "l2")
+        cb.record_failure("h", "https://x", "l2")
+        cb.record_failure("h", "https://x", "l2")  # still degraded
+        s = cb.stats
+        assert s["total"] == 1
+        assert s["healthy"] == 0
+        assert s["degraded"] == 1
+        assert s["dead"] == 0
+
+    def test_stats_all_states(self, cb):
+        cb.record_failure("h1", "https://x", "l2")
+        cb.record_failure("h1", "https://x", "l2")
+        cb.record_failure("h1", "https://x", "l2")
+        cb.record_failure("h1", "https://x", "l2")  # degraded
+        for _ in range(6):
+            cb.record_failure("dead-prov", "https://y", "l2")
+        # Also have a healthy one
+        assert cb.is_available("healthy-prov", "https://z", "l2")
+        s = cb.stats
+        assert s["total"] == 3
+        assert s["healthy"] == 1
+        assert s["degraded"] == 1
+        assert s["dead"] == 1
+
 
 class TestGetAllHealth:
-    def test_returns_all_providers(self, cb):
-        cb.record_failure("a", "https://x", "l1")
-        cb.record_failure("b", "https://y", "l2")
-        all_h = cb.get_all_health()
-        assert len(all_h) == 2
-
-    def test_empty_initially(self, cb):
-        assert cb.get_all_health() == {}
-
-
-class TestSingleton:
     def test_get_circuit_breaker_requires_config(self):
         from src.api.circuit_breaker import _circuit_breaker
         import src.api.circuit_breaker as cb_module

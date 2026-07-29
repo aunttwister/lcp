@@ -41,3 +41,21 @@ def test_estimate_from_request():
     result = estimate_from_request("deepseek-v4-pro", [{"role": "user", "content": "hello"}], max_tokens=100)
     assert "estimated_total_cost" in result
     assert result["currency"] == "USD"
+
+def test_estimate_from_request_unknown_model():
+    """Unknown model falls back to deepseek pricing (lines 33-37)."""
+    result = estimate_from_request("nonexistent-model", [{"role": "user", "content": "hello"}], max_tokens=100)
+    assert "estimated_total_cost" in result
+    assert result["estimated_total_cost"] > 0
+
+def test_count_tokens_vision_content():
+    """Vision content blocks (content as list of dicts)."""
+    msgs = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "describe this image"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+        ]
+    }]
+    n = count_tokens(msgs)
+    assert n >= 4
