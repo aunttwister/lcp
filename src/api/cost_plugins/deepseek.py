@@ -126,6 +126,29 @@ class DeepSeekCostPlugin(CostPlugin):
         self._balance_cached_at = now
         return result
 
+    # ── Rich summary — balance + spent credits ─────────────────────────────
+
+    def fetch_summary(self) -> Optional[dict]:
+        """Return balance summary: available credits, spent, total granted."""
+        bal = self.fetch_balance()
+        if bal is None:
+            return None
+
+        total_granted = bal.get("total_granted")
+        available = bal["balance"]
+        spent: Optional[float] = None
+        if total_granted is not None:
+            spent = round(float(total_granted) - available, 8)
+
+        return {
+            "balance": {
+                "available": available,
+                "spent": spent,
+                "total_granted": total_granted,
+                "currency": bal.get("currency", "USD"),
+            },
+        }
+
 
 # ── Auto-register ──────────────────────────────────────────────────────────
 _registry = get_registry()

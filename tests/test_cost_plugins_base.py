@@ -178,6 +178,20 @@ class TestPluginRegistry:
         result = reg.fetch_all_balances()
         assert result["dummy"] == {"balance": 100.0, "currency": "USD"}
 
+    def test_fetch_all_summaries(self):
+        """fetch_all_summaries should collect summaries from all plugins."""
+        reg = PluginRegistry()
+        d = _DummyPlugin()
+        # Override fetch_summary to return custom data
+        d.fetch_summary = lambda: {"daily": {"tokens": 1000}}
+        a = _AnotherPlugin()
+        a.fetch_summary = lambda: {"balance": {"available": 50.0}}
+        reg.register(d)
+        reg.register(a)
+        result = reg.fetch_all_summaries()
+        assert result["dummy"] == {"daily": {"tokens": 1000}}
+        assert result["another"] == {"balance": {"available": 50.0}}
+
     def test_shutdown_all(self):
         reg = PluginRegistry()
         m = MagicMock(spec=CostPlugin)

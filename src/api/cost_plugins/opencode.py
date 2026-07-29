@@ -240,6 +240,79 @@ class OpenCodeCostPlugin(CostPlugin):
     def fetch_balance(self) -> Optional[dict]:
         return None
 
+    # ── Rich summary — daily / weekly / monthly usage from local DB ────────
+
+    def fetch_summary(self) -> Optional[dict]:
+        """Return daily, weekly, and monthly usage aggregates from OpenCode DB."""
+        db_path = self._db_path
+        if not os.path.isfile(db_path):
+            return None
+
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            now = datetime.now(timezone.utc)
+            thresholds: dict[str, float] = {
+                "daily":   now.timestamp() - 86400,
+                "weekly":  now.timestamp() - 604800,
+                "monthly": now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp(),
+            }
+
+            result: dict[str, dict] = {}
+            for period_label, cutoff_ts in thresholds.items():
+                cursor.execute(
+                    """SELECT m.data
+                       FROM message m
+                       WHERE m.time_created >= ?
+                       ORDER BY m.time_created ASC""",
+                    (cutoff_ts,),
+                )
+                rows = cursor.fetchall()
+
+                total_tokens = 0
+                total_cost = 0.0
+                request_count = 0
+                for row in rows:
+                    try:
+                        msg = json.loads(row["data"])
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if msg.get("role") != "assistant":
+                        continue
+                    tokens = msg.get("tokens")
+                    if not tokens:
+                        continue
+
+                    model_id: str = (
+                        msg.get("model", {}).get("modelID")
+                        or msg.get("modelID")
+                        or "unknown"
+                    )
+                    input_tok = tokens.get("input", 0)
+                    output_tok = tokens.get("output", 0)
+                    msg_cost: float = msg.get("cost") or self._calc_msg_cost(tokens, model_id)
+
+                    total_tokens += input_tok + output_tok
+                    total_cost += msg_cost
+                    request_count += 1
+
+                result[period_label] = {
+                    "tokens": total_tokens,
+                    "cost": round(total_cost, 8),
+                    "requests": request_count,
+                }
+
+            conn.close()
+            return result
+        except (sqlite3.Error, OSError) as exc:
+            from ..logging_config import get_logger
+            get_logger("lcp.cost.opencode").warning(
+                "summary_failed", path=db_path, error=str(exc)
+            )
+            return None
+
 
 # ── Auto-register ──────────────────────────────────────────────────────────
 _registry = get_registry()

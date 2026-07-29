@@ -533,24 +533,30 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     # Template snippet for header badge — shows current (last-responding) provider
     plugin_header_info = (
         "var latestProvider = " + _latest_provider_json + ";\n"
-        "var allUsage = usage, allBal = balances;\n"
+        "var summaries = pluginSummaries || {};\n"
         "if (latestProvider && hdrText) {\n"
         "  if (hdrDot) hdrDot.className = 'header-plugin-dot on';\n"
-        "  var usg = allUsage[latestProvider] || [];\n"
-        "  var totalCost = usg.reduce(function(s,r){return s + r.cost}, 0);\n"
-        "  var bal = allBal[latestProvider];\n"
-        "  var label = latestProvider + ' $' + totalCost.toFixed(4);\n"
-        "  if (bal && bal.balance !== null && bal.balance !== undefined) {\n"
-        "    label += ' \\u00b7 ' + (bal.currency||'USD') + ' ' + bal.balance.toFixed(2);\n"
+        "  var hdrLabel = latestProvider;\n"
+        "  var sum = summaries[latestProvider];\n"
+        "  if (latestProvider === 'opencode' && sum && sum.monthly) {\n"
+        "    hdrLabel += ' \\u00b7 ' + formatTokens(sum.monthly.tokens) + ' tok';\n"
+        "    hdrLabel += ' \\u00b7 $' + sum.monthly.cost.toFixed(4) + ' this month';\n"
+        "  } else if (latestProvider === 'deepseek' && sum && sum.balance) {\n"
+        "    var cur = sum.balance.currency || 'USD';\n"
+        "    if (sum.balance.spent !== null) {\n"
+        "      hdrLabel += ' \\u00b7 spent ' + cur + ' ' + sum.balance.spent.toFixed(2);\n"
+        "    }\n"
+        "    hdrLabel += ' \\u00b7 remaining ' + cur + ' ' + sum.balance.available.toFixed(2);\n"
         "  } else if (latestProvider === 'llamacpp') {\n"
         "    var mt = (monthly[latestProvider] || {}).tokens || 0;\n"
-        "    label += ' \\u00b7 ' + formatTokens(mt) + ' tokens';\n"
-        "  } else if (latestProvider === 'opencode') {\n"
-        "    var mr = (monthly[latestProvider] || {}).reqs || 0;\n"
-        "    label += ' \\u00b7 ' + mr + ' req this month';\n"
+        "    hdrLabel += ' \\u00b7 ' + formatTokens(mt) + ' tokens';\n"
+        "  } else {\n"
+        "    var usg = allUsage[latestProvider] || [];\n"
+        "    var totalCost = usg.reduce(function(s,r){return s + r.cost}, 0);\n"
+        "    hdrLabel += ' \\u00b7 $' + totalCost.toFixed(4);\n"
         "  }\n"
-        "  hdrText.textContent = label;\n"
-        "  if (hdrDot) hdrDot.title = latestProvider + ' total: $' + totalCost.toFixed(4);\n"
+        "  hdrText.textContent = hdrLabel;\n"
+        "  if (hdrDot) hdrDot.title = latestProvider + ' — latest successful provider';\n"
         "} else {\n"
         "  if (hdrText) hdrText.textContent = 'No requests yet';\n"
         "  if (hdrDot) hdrDot.className = 'header-plugin-dot off';\n"
@@ -1607,12 +1613,14 @@ def render_dashboard(config, engine, headers, profile_filter=None):
 
       Promise.all([
         fetch('/api/cost-plugins/usage').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_usage:{{}}}}}}),
-        fetch('/api/cost-plugins/balances').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_balances:{{}}}}}})
+        fetch('/api/cost-plugins/balances').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_balances:{{}}}}}}),
+        fetch('/api/cost-plugins/summary').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_summaries:{{}}}}}})
       ]).then(function(results) {{
-        var usage = results[0].plugin_usage || {{}};
+        var allUsage = results[0].plugin_usage || {{}};
         var balances = results[1].plugin_balances || {{}};
+        var pluginSummaries = results[2].plugin_summaries || {{}};
 
-        var allProviders = Object.keys(usage).concat(Object.keys(balances));
+        var allProviders = Object.keys(allUsage).concat(Object.keys(balances));
         var uniqueProvs = allProviders.filter(function(v,i,a){{return a.indexOf(v)===i}}).filter(function(v){{return configuredProviders.indexOf(v) !== -1}});
 
         // ── Sidebar: plugin info under Providers nav link ──
@@ -1624,21 +1632,33 @@ def render_dashboard(config, engine, headers, profile_filter=None):
             var rows = '';
             uniqueProvs.forEach(function(prov) {{
               var bal = balances[prov];
-              var usg = usage[prov] || [];
+              var usg = allUsage[prov] || [];
               var totalCost = usg.reduce(function(s,r){{return s + r.cost}}, 0);
               var totalTokens = usg.reduce(function(s,r){{return s + r.prompt_tokens + r.completion_tokens}}, 0);
-              var m = monthly[prov] || {{}};
+              var sum = pluginSummaries[prov];
 
               var detailLine = '';
-              if (bal && bal.balance !== null && bal.balance !== undefined) {{
+              if (prov === 'opencode' && sum && sum.monthly) {{
+                detailLine = '<span class="sb-provider-detail">' +
+                  'daily ' + formatTokens(sum.daily.tokens) + ' \\u00b7 ' +
+                  'weekly ' + formatTokens(sum.weekly.tokens) + ' \\u00b7 ' +
+                  'monthly ' + formatTokens(sum.monthly.tokens) + ' tok</span>';
+              }} else if (prov === 'deepseek' && sum && sum.balance) {{
+                var cur = sum.balance.currency || 'USD';
+                var parts = [];
+                if (sum.balance.spent !== null) parts.push('spent ' + cur + ' ' + sum.balance.spent.toFixed(2));
+                parts.push('available ' + cur + ' ' + sum.balance.available.toFixed(2));
+                detailLine = '<span class="sb-provider-detail">' + parts.join(' \\u00b7 ') + '</span>';
+              }} else if (bal && bal.balance !== null && bal.balance !== undefined) {{
                 var currency = bal.currency || 'USD';
                 detailLine = '<span class="sb-provider-detail">balance: ' + currency + ' ' + bal.balance.toFixed(2) + '</span>';
-              }} else if (prov === 'opencode') {{
-                var mr = m.reqs || 0;
-                var mt = m.tokens || 0;
-                detailLine = '<span class="sb-provider-detail">' + mr + ' req \\u00b7 ' + formatTokens(mt) + ' tok this month</span>';
               }} else if (prov === 'llamacpp') {{
                 detailLine = '<span class="sb-provider-detail">' + formatTokens(totalTokens) + ' total tokens \\u00b7 local</span>';
+              }} else {{
+                var m = monthly[prov] || {{}};
+                var mr = m.reqs || 0;
+                var mt = m.tokens || 0;
+                if (mr > 0) detailLine = '<span class="sb-provider-detail">' + mr + ' req \\u00b7 ' + formatTokens(mt) + ' tok this month</span>';
               }}
 
               rows += '<div class="sb-provider-row">' +

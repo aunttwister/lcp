@@ -170,6 +170,8 @@ class LCPHandler(BaseHTTPRequestHandler):
             self._serve_plugin_usage()
         elif self.path == "/api/cost-plugins/balances":
             self._serve_plugin_balances()
+        elif self.path == "/api/cost-plugins/summary":
+            self._serve_plugin_summary()
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -995,6 +997,11 @@ class LCPHandler(BaseHTTPRequestHandler):
         """Return account balances from all cost tracking plugins."""
         data = get_registry().fetch_all_balances()
         self._send_json({"plugin_balances": data})
+
+    def _serve_plugin_summary(self):
+        """Return rich provider summaries (usage limits, balance, etc.)."""
+        data = get_registry().fetch_all_summaries()
+        self._send_json({"plugin_summaries": data})
 
     def _serve_alerts_config(self):
         am = get_alert_manager()

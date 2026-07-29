@@ -331,3 +331,79 @@ class TestOpenCodeFetchUsage:
 class TestOpenCodeFetchBalance:
     def test_balance_always_none(self, plugin):
         assert plugin.fetch_balance() is None
+
+
+class TestOpenCodeFetchSummary:
+    """Tests for the rich summary (daily/weekly/monthly) from local DB."""
+
+    def test_summary_empty_db(self, plugin):
+        """Empty DB returns zeros for all periods."""
+        result = plugin.fetch_summary()
+        assert result is not None
+        for period in ("daily", "weekly", "monthly"):
+            assert result[period]["tokens"] == 0
+            assert result[period]["cost"] == 0.0
+            assert result[period]["requests"] == 0
+
+    def test_summary_with_data(self, opencode_db):
+        """Messages from today should appear in daily/weekly/monthly aggregates."""
+        import time as _time
+        now_ts = int(_time.time())
+        _insert_message(
+            opencode_db, "msg-1", "sess-1", now_ts - 3600,  # 1 hour ago
+            "assistant", "deepseek-v4-pro", "opencode",
+            input_tok=1000, output_tok=500, cache_read=200,
+        )
+        _insert_message(
+            opencode_db, "msg-2", "sess-1", now_ts - 1800,  # 30 min ago
+            "assistant", "deepseek-v4-pro", "opencode",
+            input_tok=2000, output_tok=1000,
+            cost=0.005,
+        )
+        plugin = OpenCodeCostPlugin(db_path=opencode_db)
+        result = plugin.fetch_summary()
+        assert result is not None
+
+        # Daily should capture both messages
+        # msg-1: _calc_msg_cost = 1000/1M*0.435 + 200/1M*0.003625 + 500/1M*0.87 = 0.000870725
+        # msg-2: explicit cost = 0.005
+        # total = 0.005870725 → rounded to 8 decimal places
+        assert result["daily"]["tokens"] == 4500  # 1000+500+2000+1000
+        assert result["daily"]["cost"] == pytest.approx(0.00587073, rel=1e-5)
+        assert result["daily"]["requests"] == 2
+
+        # Weekly should be same as daily (both within 7 days)
+        assert result["weekly"]["tokens"] >= 4500
+        assert result["weekly"]["requests"] >= 2
+
+        # Monthly should be same
+        assert result["monthly"]["tokens"] >= 4500
+
+    def test_summary_ignores_non_assistant(self, opencode_db):
+        """User messages should not be counted in summary."""
+        import time as _time
+        now_ts = int(_time.time())
+        _insert_message(
+            opencode_db, "msg-1", "sess-1", now_ts - 60,
+            "user", "deepseek-v4-pro", "opencode",
+            input_tok=5000, output_tok=0,
+        )
+        plugin = OpenCodeCostPlugin(db_path=opencode_db)
+        result = plugin.fetch_summary()
+        assert result is not None
+        assert result["daily"]["tokens"] == 0
+        assert result["daily"]["requests"] == 0
+
+    def test_summary_none_when_db_missing(self, tmp_path):
+        """Should return None when the DB file doesn't exist."""
+        plugin = OpenCodeCostPlugin(db_path=str(tmp_path / "no_such.db"))
+        assert plugin.fetch_summary() is None
+
+    def test_summary_none_on_db_error(self, opencode_db):
+        """Corrupt/inaccessible DB should return None gracefully."""
+        import sqlite3
+        with patch("src.api.cost_plugins.opencode.sqlite3.connect",
+                   side_effect=sqlite3.Error("boom")):
+            plugin = OpenCodeCostPlugin(db_path=opencode_db)
+            result = plugin.fetch_summary()
+            assert result is None

@@ -91,6 +91,34 @@ class CostPlugin(ABC):
         """
         return None
 
+    # ── Rich summary (daily/weekly/monthly usage, balance, limits) ─────────
+
+    def fetch_summary(self) -> Optional[dict]:
+        """Return a rich provider summary for the dashboard.
+
+        Each plugin returns a provider-specific shape:
+
+        OpenCode (local DB)::
+
+            {
+                "daily":   {"tokens": int, "cost": float, "requests": int},
+                "weekly":  {"tokens": int, "cost": float, "requests": int},
+                "monthly": {"tokens": int, "cost": float, "requests": int},
+            }
+
+        DeepSeek (balance API)::
+
+            {
+                "balance": {
+                    "available": float, "spent": float,
+                    "total_granted": float, "currency": str,
+                },
+            }
+
+        Return *None* when the summary is unavailable.
+        """
+        return None
+
     # ── Quick-add preset (provider config template) ────────────────────────
 
     @property
@@ -205,6 +233,16 @@ class PluginRegistry:
         result: dict[str, Optional[dict]] = {}
         for name, plugin in self._plugins.items():
             result[name] = plugin.fetch_balance()
+        return result
+
+    def fetch_all_summaries(self) -> dict[str, Optional[dict]]:
+        """Fetch rich provider summaries from every plugin.
+
+        Returns {provider_name: summary_dict_or_None}.
+        """
+        result: dict[str, Optional[dict]] = {}
+        for name, plugin in self._plugins.items():
+            result[name] = plugin.fetch_summary()
         return result
 
     def shutdown_all(self) -> None:

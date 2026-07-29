@@ -173,3 +173,64 @@ class TestDeepSeekFetchBalance:
             with patch("src.api.cost_plugins.deepseek.urlopen", return_value=fake_resp):
                 result = self.plugin.fetch_balance()
         assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# fetch_summary
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestDeepSeekFetchSummary:
+    def setup_method(self):
+        self.plugin = DeepSeekCostPlugin()
+
+    def test_summary_with_balance(self):
+        """When balance API responds, summary includes available/spent/total."""
+        import time as _time
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = json.dumps({
+            "balance": 5.23,
+            "total_granted": 10.0,
+            "currency": "USD",
+        }).encode("utf-8")
+        fake_resp.__enter__.return_value = fake_resp
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "sk-test"}):
+            with patch("src.api.cost_plugins.deepseek.urlopen", return_value=fake_resp):
+                result = self.plugin.fetch_summary()
+        assert result is not None
+        bal = result["balance"]
+        assert bal["available"] == 5.23
+        assert bal["spent"] == pytest.approx(4.77, rel=1e-5)
+        assert bal["total_granted"] == 10.0
+        assert bal["currency"] == "USD"
+
+    def test_summary_no_total_granted(self):
+        """When total_granted is missing, spent should be None."""
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = json.dumps({
+            "balance": 3.14,
+            "currency": "CNY",
+        }).encode("utf-8")
+        fake_resp.__enter__.return_value = fake_resp
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "sk-test"}):
+            with patch("src.api.cost_plugins.deepseek.urlopen", return_value=fake_resp):
+                result = self.plugin.fetch_summary()
+        assert result is not None
+        bal = result["balance"]
+        assert bal["available"] == 3.14
+        assert bal["spent"] is None
+        assert bal["total_granted"] is None
+        assert bal["currency"] == "CNY"
+
+    def test_summary_no_api_key(self):
+        """Without API key, summary should be None."""
+        assert self.plugin.fetch_summary() is None
+
+    def test_summary_api_error(self):
+        """API error should propagate as None."""
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "sk-test"}):
+            with patch("src.api.cost_plugins.deepseek.urlopen",
+                       side_effect=URLError("timeout")):
+                result = self.plugin.fetch_summary()
+        assert result is None
