@@ -374,6 +374,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         f'    <a href="/dashboard" class="{dash_active}">Dashboard</a>\n'
         f'    <a href="/keys">API Keys</a>\n'
         f'    <a href="/providers">Providers</a>\n'
+        f'    <a href="/usage">Usage</a>\n'
         '    <div class="sb-provider-rows" id="providerPluginRows"></div>\n'
         f'    <a href="/profiles">Profiles</a>\n'
         '    <div class="nav-label">Profiles</div>\n'
@@ -530,23 +531,25 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     _monthly_data_json = json.dumps(_monthly_data)
     _configured_providers_json = json.dumps(sorted(config.providers.keys()))
 
-    # Template snippet for header badge — shows current (last-responding) provider
+    # Template snippet for header badge — key stat per active provider
     plugin_header_info = (
         "var latestProvider = " + _latest_provider_json + ";\n"
         "var summaries = pluginSummaries || {};\n"
         "if (latestProvider && hdrText) {\n"
         "  if (hdrDot) hdrDot.className = 'header-plugin-dot on';\n"
-        "  var hdrLabel = latestProvider;\n"
         "  var sum = summaries[latestProvider];\n"
-        "  if (latestProvider === 'opencode' && sum && sum.monthly) {\n"
+        "  var cur, hdrLabel = latestProvider;\n"
+        "  if (latestProvider === 'deepseek' && sum && sum.balance) {\n"
+        "    cur = sum.balance.currency || 'USD';\n"
+        "    hdrLabel += ' \\u00b7 ' + cur + ' ' + sum.balance.available.toFixed(2) + ' available';\n"
+        "  } else if (latestProvider === 'opencode' && sum && sum.monthly) {\n"
+        "    var now = new Date();\n"
+        "    var start = new Date(now.getFullYear(), now.getMonth(), 1);\n"
+        "    var end = new Date(now.getFullYear(), now.getMonth() + 1, 1);\n"
+        "    var moPct = Math.round(((now - start) / (end - start)) * 100);\n"
+        "    hdrLabel += ' \\u00b7 ' + moPct + '% of month';\n"
         "    hdrLabel += ' \\u00b7 ' + formatTokens(sum.monthly.tokens) + ' tok';\n"
-        "    hdrLabel += ' \\u00b7 $' + sum.monthly.cost.toFixed(4) + ' this month';\n"
-        "  } else if (latestProvider === 'deepseek' && sum && sum.balance) {\n"
-        "    var cur = sum.balance.currency || 'USD';\n"
-        "    if (sum.balance.spent !== null) {\n"
-        "      hdrLabel += ' \\u00b7 spent ' + cur + ' ' + sum.balance.spent.toFixed(2);\n"
-        "    }\n"
-        "    hdrLabel += ' \\u00b7 remaining ' + cur + ' ' + sum.balance.available.toFixed(2);\n"
+        "    hdrLabel += ' \\u00b7 $' + sum.monthly.cost.toFixed(4);\n"
         "  } else if (latestProvider === 'llamacpp') {\n"
         "    var mt = (monthly[latestProvider] || {}).tokens || 0;\n"
         "    hdrLabel += ' \\u00b7 ' + formatTokens(mt) + ' tokens';\n"
@@ -556,7 +559,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         "    hdrLabel += ' \\u00b7 $' + totalCost.toFixed(4);\n"
         "  }\n"
         "  hdrText.textContent = hdrLabel;\n"
-        "  if (hdrDot) hdrDot.title = latestProvider + ' — latest successful provider';\n"
+        "  if (hdrDot) hdrDot.title = latestProvider + ' \\u2014 latest successful provider';\n"
         "} else {\n"
         "  if (hdrText) hdrText.textContent = 'No requests yet';\n"
         "  if (hdrDot) hdrDot.className = 'header-plugin-dot off';\n"
@@ -1639,21 +1642,22 @@ def render_dashboard(config, engine, headers, profile_filter=None):
 
               var detailLine = '';
               if (prov === 'opencode' && sum && sum.monthly) {{
+                var now = new Date();
+                var moStart = new Date(now.getFullYear(), now.getMonth(), 1);
+                var moEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+                var moPct = Math.round(((now - moStart) / (moEnd - moStart)) * 100);
                 detailLine = '<span class="sb-provider-detail">' +
-                  'daily ' + formatTokens(sum.daily.tokens) + ' \\u00b7 ' +
-                  'weekly ' + formatTokens(sum.weekly.tokens) + ' \\u00b7 ' +
-                  'monthly ' + formatTokens(sum.monthly.tokens) + ' tok</span>';
+                  moPct + '% of month \\u00b7 ' + formatTokens(sum.monthly.tokens) + ' tok \\u00b7 $' + sum.monthly.cost.toFixed(4) + '</span>';
               }} else if (prov === 'deepseek' && sum && sum.balance) {{
                 var cur = sum.balance.currency || 'USD';
-                var parts = [];
-                if (sum.balance.spent !== null) parts.push('spent ' + cur + ' ' + sum.balance.spent.toFixed(2));
-                parts.push('available ' + cur + ' ' + sum.balance.available.toFixed(2));
-                detailLine = '<span class="sb-provider-detail">' + parts.join(' \\u00b7 ') + '</span>';
+                detailLine = '<span class="sb-provider-detail">' + cur + ' ' + sum.balance.available.toFixed(2) + ' available';
+                if (sum.balance.spent !== null) detailLine += ' \\u00b7 spent ' + cur + ' ' + sum.balance.spent.toFixed(2);
+                detailLine += '</span>';
               }} else if (bal && bal.balance !== null && bal.balance !== undefined) {{
                 var currency = bal.currency || 'USD';
-                detailLine = '<span class="sb-provider-detail">balance: ' + currency + ' ' + bal.balance.toFixed(2) + '</span>';
+                detailLine = '<span class="sb-provider-detail">' + currency + ' ' + bal.balance.toFixed(2) + ' balance</span>';
               }} else if (prov === 'llamacpp') {{
-                detailLine = '<span class="sb-provider-detail">' + formatTokens(totalTokens) + ' total tokens \\u00b7 local</span>';
+                detailLine = '<span class="sb-provider-detail">' + formatTokens(totalTokens) + ' tokens \\u00b7 local</span>';
               }} else {{
                 var m = monthly[prov] || {{}};
                 var mr = m.reqs || 0;

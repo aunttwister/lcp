@@ -172,6 +172,10 @@ class LCPHandler(BaseHTTPRequestHandler):
             self._serve_plugin_balances()
         elif self.path == "/api/cost-plugins/summary":
             self._serve_plugin_summary()
+        elif self.path == "/api/usage/stats" or self.path.startswith("/api/usage/stats?"):
+            self._serve_usage_stats_api()
+        elif self.path == "/usage":
+            self._serve_usage_page()
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -1056,6 +1060,107 @@ class LCPHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(html.encode("utf-8"))
 
+    def _serve_usage_page(self):
+        """Server-rendered Usage & Spending page."""
+        html = _render_usage_page(self.config)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_usage_stats_api(self):
+        """Return per-provider aggregates: daily spending, by-model, by-profile."""
+        from urllib.parse import urlparse, parse_qs
+        from sqlalchemy import func
+        qs = parse_qs(urlparse(self.path).query)
+        provider = qs.get("provider", [None])[0]
+        days = int(qs.get("days", ["30"])[0])
+
+        try:
+            with get_session(self.engine) as session:
+                # Daily spending trend
+                daily_rows = (
+                    session.query(
+                        func.substr(RequestModel.timestamp, 1, 10).label("date"),
+                        func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
+                        func.count(RequestModel.id).label("requests"),
+                    )
+                    .filter(RequestModel.success == 1)
+                )
+                if provider:
+                    daily_rows = daily_rows.filter(RequestModel.provider == provider)
+                daily_rows = (
+                    daily_rows
+                    .group_by(func.substr(RequestModel.timestamp, 1, 10))
+                    .order_by(func.substr(RequestModel.timestamp, 1, 10).desc())
+                    .limit(days)
+                    .all()
+                )
+                daily = [{"date": r.date, "cost": float(r.cost), "requests": r.requests}
+                         for r in reversed(daily_rows)]
+
+                # Per-model aggregates
+                model_rows = (
+                    session.query(
+                        RequestModel.model,
+                        func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
+                        func.count(RequestModel.id).label("requests"),
+                        func.coalesce(func.sum(RequestModel.prompt_tokens), 0).label("prompt_tokens"),
+                        func.coalesce(func.sum(RequestModel.completion_tokens), 0).label("completion_tokens"),
+                    )
+                    .filter(RequestModel.success == 1)
+                )
+                if provider:
+                    model_rows = model_rows.filter(RequestModel.provider == provider)
+                model_rows = model_rows.group_by(RequestModel.model).order_by(func.sum(RequestModel.cost).desc()).all()
+                by_model = {
+                    r.model: {
+                        "cost": float(r.cost),
+                        "requests": r.requests,
+                        "prompt_tokens": r.prompt_tokens,
+                        "completion_tokens": r.completion_tokens,
+                    }
+                    for r in model_rows
+                }
+
+                # Per-profile aggregates
+                profile_rows = (
+                    session.query(
+                        RequestModel.profile,
+                        func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
+                        func.count(RequestModel.id).label("requests"),
+                        func.coalesce(func.sum(RequestModel.prompt_tokens), 0).label("prompt_tokens"),
+                        func.coalesce(func.sum(RequestModel.completion_tokens), 0).label("completion_tokens"),
+                    )
+                    .filter(RequestModel.success == 1)
+                )
+                if provider:
+                    profile_rows = profile_rows.filter(RequestModel.provider == provider)
+                profile_rows = profile_rows.group_by(RequestModel.profile).order_by(func.sum(RequestModel.cost).desc()).all()
+                by_profile = {
+                    r.profile: {
+                        "cost": float(r.cost),
+                        "requests": r.requests,
+                        "prompt_tokens": r.prompt_tokens,
+                        "completion_tokens": r.completion_tokens,
+                    }
+                    for r in profile_rows
+                }
+
+                # Totals
+                total_cost = sum(d["cost"] for d in daily)
+                total_requests = sum(d["requests"] for d in daily)
+
+            self._send_json({
+                "provider": provider,
+                "daily": daily,
+                "by_model": by_model,
+                "by_profile": by_profile,
+                "totals": {"cost": total_cost, "requests": total_requests},
+            })
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
 
 def _render_providers_page(config) -> str:
     """Render the Providers management page."""
@@ -1818,6 +1923,7 @@ def _render_sidebar_html(config, active_page: str = "") -> str:
     keys_active = ' class="active"' if active_page == "keys" else ""
     providers_active = ' class="active"' if active_page == "providers" else ""
     profiles_active = ' class="active"' if active_page == "profiles" else ""
+    usage_active = ' class="active"' if active_page == "usage" else ""
 
     sidebar = (
         '<aside class="sidebar" id="sidebar">\n'
@@ -1826,6 +1932,7 @@ def _render_sidebar_html(config, active_page: str = "") -> str:
         f'    <a href="/dashboard"{dash_active}>Dashboard</a>\n'
         f'    <a href="/keys"{keys_active}>API Keys</a>\n'
         f'    <a href="/providers"{providers_active}>Providers</a>\n'
+        f'    <a href="/usage"{usage_active}>Usage</a>\n'
         f'    <a href="/profiles"{profiles_active}>Profiles</a>\n'
         '    <div class="nav-label">Profiles</div>\n'
     )
@@ -1835,6 +1942,269 @@ def _render_sidebar_html(config, active_page: str = "") -> str:
         '  </nav>\n</aside>'
     )
     return sidebar
+
+
+def _render_usage_page(config) -> str:
+    """Render the Usage & Spending page with per-provider stats."""
+    from pathlib import Path
+    _templates_dir = Path(__file__).parent / "ui" / "templates"
+    css = ""
+    try:
+        css = (_templates_dir / "dashboard.css").read_text()
+    except Exception:
+        pass
+
+    return f"""<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>smallm — Usage</title>
+<style>{css}
+.page-section {{ margin-bottom: 2rem; }}
+.page-section h2 {{ font-size: 1.1rem; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }}
+.stat-cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }}
+.stat-card {{ background: hsl(var(--card)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); padding: 1rem; }}
+.stat-card .label {{ font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--muted-foreground)); margin-bottom: 0.25rem; }}
+.stat-card .value {{ font-size: 1.4rem; font-weight: 700; }}
+.stat-card .sub {{ font-size: 0.7rem; color: hsl(var(--muted-foreground)); margin-top: 0.15rem; }}
+.chart-wrap {{ background: hsl(var(--card)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; }}
+.chart-wrap canvas {{ max-height: 250px; }}
+.breakdown-table {{ width: 100%; border-collapse: collapse; font-size: 0.8rem; }}
+.breakdown-table th {{ text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid hsl(var(--card-border)); color: hsl(var(--muted-foreground)); font-weight: 600; font-size: 0.7rem; text-transform: uppercase; }}
+.breakdown-table td {{ padding: 0.35rem 0.6rem; border-bottom: 1px solid hsl(var(--card-border) / 0.4); }}
+.breakdown-table tr:last-child td {{ border-bottom: none; }}
+.breakdown-table .cost-col {{ text-align: right; font-variant-numeric: tabular-nums; }}
+.progress-bar {{ height: 6px; background: hsl(var(--secondary)); border-radius: 3px; overflow: hidden; margin-top: 0.35rem; }}
+.progress-fill {{ height: 100%; border-radius: 3px; transition: width 0.5s; }}
+.progress-blue {{ background: hsl(var(--blue-fg, 217 91% 60%)); }}
+.progress-green {{ background: hsl(var(--green-fg)); }}
+.tab-bar {{ display: flex; gap: 0; margin-bottom: 1rem; border-bottom: 2px solid hsl(var(--card-border)); }}
+.tab-btn {{ padding: 0.5rem 1rem; font-size: 0.8rem; background: none; border: none; color: hsl(var(--muted-foreground)); border-bottom: 2px solid transparent; margin-bottom: -2px; cursor: pointer; transition: color 0.2s, border-color 0.2s; }}
+.tab-btn:hover {{ color: hsl(var(--foreground)); }}
+.tab-btn.active {{ color: hsl(var(--foreground)); border-bottom-color: hsl(var(--foreground)); }}
+.tab-panel {{ display: none; }}
+.tab-panel.active {{ display: block; }}
+.empty-state {{ text-align: center; padding: 1.5rem; color: hsl(var(--muted-foreground)); font-size: 0.85rem; }}
+</style>
+</head>
+<body>
+{_render_sidebar_html(config, "usage")}
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+<button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()">☰</button>
+<div class="main-content">
+<h1>Usage &amp; Spending</h1>
+<p class="subtitle">Per-provider cost breakdowns, balance, and trends</p>
+
+<div class="tab-bar" id="providerTabs"></div>
+
+<div id="providerPanels"></div>
+
+<p style="margin-top:2rem;font-size:0.75rem;color:hsl(var(--muted-foreground))">
+  <a href="/health">/health</a> · <a href="/metrics">/metrics</a> · <a href="/export">/export</a>
+  · <a href="/providers">Providers</a> · <a href="/dashboard">Dashboard</a>
+</p>
+<p style="font-size:0.7rem;color:hsl(var(--muted-foreground))">Generated <span id="genTime"></span> · Refresh to update</p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+// ── State ──
+var configuredProviders = {json.dumps([p for p in config.providers.keys()])};
+var monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+document.getElementById('genTime').textContent = new Date().toISOString().replace('T',' ').slice(0,19) + ' UTC';
+
+function formatTokens(n) {{
+    if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+    return String(n);
+}}
+
+function monthPct() {{
+    var now = new Date();
+    var start = new Date(now.getFullYear(), now.getMonth(), 1);
+    var end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    return ((now - start) / (end - start)) * 100;
+}}
+
+function renderDailyChart(canvasId, daily) {{
+    var ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+    var labels = daily.map(function(d) {{ var p = d.date.split('-'); return p[2] + ' ' + (monthNames[parseInt(p[1])-1] || ''); }});
+    var costs = daily.map(function(d) {{ return d.cost; }});
+    new Chart(ctx, {{
+        type: 'bar',
+        data: {{
+            labels: labels,
+            datasets: [{{
+                label: 'Daily Cost (USD)',
+                data: costs,
+                backgroundColor: 'hsl(217 91% 60% / 0.6)',
+                borderColor: 'hsl(217 91% 60%)',
+                borderWidth: 1,
+                borderRadius: 3,
+            }}]
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {{ legend: {{ display: false }} }},
+            scales: {{
+                x: {{ ticks: {{ color: 'hsl(var(--muted-foreground))', maxTicksLimit: 15, font: {{ size: 10 }} }}, grid: {{ display: false }} }},
+                y: {{ ticks: {{ color: 'hsl(var(--muted-foreground))', callback: function(v) {{ return '$' + v.toFixed(2); }}, font: {{ size: 10 }} }}, grid: {{ color: 'hsl(var(--card-border) / 0.3)' }} }}
+            }}
+        }}
+    }});
+}}
+
+function renderBreakdownTable(containerId, data, labelKey) {{
+    var el = document.getElementById(containerId);
+    if (!el) return;
+    var keys = Object.keys(data).sort(function(a,b) {{ return data[b].cost - data[a].cost; }});
+    if (keys.length === 0) {{
+        el.innerHTML = '<div class="empty-state">No data for this period</div>';
+        return;
+    }}
+    var maxCost = data[keys[0]].cost || 1;
+    var html = '<table class="breakdown-table"><thead><tr><th>' + labelKey + '</th><th class="cost-col">Cost</th><th class="cost-col">Requests</th><th class="cost-col">Tokens</th><th>Share</th></tr></thead><tbody>';
+    keys.forEach(function(k) {{
+        var d = data[k];
+        var pct = maxCost > 0 ? ((d.cost / maxCost) * 100) : 0;
+        var barColor = maxCost > 0 && d.cost === maxCost ? 'progress-blue' : 'progress-green';
+        html += '<tr>' +
+            '<td><b>' + k + '</b></td>' +
+            '<td class="cost-col">$' + d.cost.toFixed(4) + '</td>' +
+            '<td class="cost-col">' + d.requests + '</td>' +
+            '<td class="cost-col">' + formatTokens(d.prompt_tokens + d.completion_tokens) + '</td>' +
+            '<td style="width:120px"><div class="progress-bar"><div class="progress-fill ' + barColor + '" style="width:' + Math.round(pct) + '%"></div></div></td>' +
+            '</tr>';
+    }});
+    html += '</tbody></table>';
+    el.innerHTML = html;
+}}
+
+function loadStats(provider) {{
+    return fetch('/api/usage/stats?provider=' + encodeURIComponent(provider) + '&days=30')
+        .then(function(r) {{ return r.json(); }});
+}}
+
+function loadSummaries() {{
+    return fetch('/api/cost-plugins/summary')
+        .then(function(r) {{ return r.json(); }})
+        .then(function(d) {{ return d.plugin_summaries || {{}}; }});
+}}
+
+function buildPage(providers) {{
+    return Promise.all([
+        Promise.all(providers.map(loadStats)),
+        loadSummaries()
+    ]).then(function(results) {{
+        var statsList = results[0];
+        var summaries = results[1];
+
+        // ── Tab bar ──
+        var tabBar = document.getElementById('providerTabs');
+        var panelsDiv = document.getElementById('providerPanels');
+        var tabsHtml = '';
+        var panelsHtml = '';
+
+        providers.forEach(function(prov, i) {{
+            var activeClass = i === 0 ? ' active' : '';
+            tabsHtml += '<button class="tab-btn' + activeClass + '" onclick="switchTab(\\'' + prov + '\\')">' + prov + '</button>';
+
+            var stats = statsList[i] || {{daily:[], by_model:{{}}, by_profile:{{}}, totals:{{cost:0, requests:0}}}};
+            var sum = summaries[prov];
+            var panelId = 'panel-' + prov;
+            var dailyChartId = 'chart-daily-' + prov;
+            var modelTableId = 'table-model-' + prov;
+            var profileTableId = 'table-profile-' + prov;
+
+            panelsHtml += '<div class="tab-panel' + activeClass + '" id="' + panelId + '">';
+
+            // ── Provider-specific cards ──
+            if (prov === 'deepseek') {{
+                var bal = (sum && sum.balance) ? sum.balance : {{}};
+                var available = bal.available || 0;
+                var spent = bal.spent;
+                var topped = bal.topped_up || 0;
+                var granted = bal.total_granted || 0;
+                var totalEver = topped + granted;
+                panelsHtml += '<div class="stat-cards">' +
+                    '<div class="stat-card"><div class="label">Available Balance</div><div class="value">$' + available.toFixed(2) + '</div><div class="sub">DeepSeek API</div></div>' +
+                    '<div class="stat-card"><div class="label">Total Spent</div><div class="value">$' + (spent != null ? spent.toFixed(2) : '—') + '</div><div class="sub">topped up $' + topped.toFixed(2) + ' + granted $' + granted.toFixed(2) + '</div></div>' +
+                    '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + stats.totals.cost.toFixed(4) + '</div><div class="sub">' + stats.totals.requests + ' requests</div></div>' +
+                    '</div>';
+            }} else if (prov === 'opencode') {{
+                var monthly = (sum && sum.monthly) ? sum.monthly : {{tokens:0, cost:0, requests:0}};
+                var weekly = (sum && sum.weekly) ? sum.weekly : {{tokens:0, cost:0, requests:0}};
+                var daily = (sum && sum.daily) ? sum.daily : {{tokens:0, cost:0, requests:0}};
+                var moPct = monthPct();
+                panelsHtml += '<div class="stat-cards">' +
+                    '<div class="stat-card"><div class="label">Month Progress</div><div class="value">' + moPct.toFixed(0) + '%</div><div class="sub"><div class="progress-bar"><div class="progress-fill progress-blue" style="width:' + moPct.toFixed(0) + '%"></div></div></div></div>' +
+                    '<div class="stat-card"><div class="label">Monthly Usage</div><div class="value">' + formatTokens(monthly.tokens) + ' tok</div><div class="sub">$' + monthly.cost.toFixed(4) + ' · ' + monthly.requests + ' requests</div></div>' +
+                    '<div class="stat-card"><div class="label">Rolling Weekly</div><div class="value">' + formatTokens(weekly.tokens) + ' tok</div><div class="sub">$' + weekly.cost.toFixed(4) + ' · ' + weekly.requests + ' requests</div></div>' +
+                    '<div class="stat-card"><div class="label">Today</div><div class="value">' + formatTokens(daily.tokens) + ' tok</div><div class="sub">$' + daily.cost.toFixed(4) + ' · ' + daily.requests + ' requests</div></div>' +
+                    '</div>';
+            }} else {{
+                panelsHtml += '<div class="stat-cards">' +
+                    '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + stats.totals.cost.toFixed(4) + '</div><div class="sub">' + stats.totals.requests + ' requests</div></div>' +
+                    '</div>';
+            }}
+
+            // ── Daily chart ──
+            panelsHtml += '<div class="chart-wrap"><h3 style="font-size:0.85rem;margin-bottom:0.5rem">Daily Spending (30 days)</h3><div style="height:250px"><canvas id="' + dailyChartId + '"></canvas></div></div>';
+
+            // ── Breakdown tables ──
+            panelsHtml += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">' +
+                '<div class="chart-wrap"><h3 style="font-size:0.85rem;margin-bottom:0.5rem">By Model</h3><div id="' + modelTableId + '"></div></div>' +
+                '<div class="chart-wrap"><h3 style="font-size:0.85rem;margin-bottom:0.5rem">By Profile</h3><div id="' + profileTableId + '"></div></div>' +
+                '</div>';
+
+            panelsHtml += '</div>';  // end tab-panel
+        }});
+
+        tabBar.innerHTML = tabsHtml;
+        panelsDiv.innerHTML = panelsHtml;
+
+        // Render charts & tables for each provider
+        providers.forEach(function(prov, i) {{
+            var stats = statsList[i] || {{daily:[], by_model:{{}}, by_profile:{{}}}};
+            renderDailyChart('chart-daily-' + prov, stats.daily);
+            renderBreakdownTable('table-model-' + prov, stats.by_model, 'Model');
+            renderBreakdownTable('table-profile-' + prov, stats.by_profile, 'Profile');
+        }});
+    }});
+}}
+
+window.switchTab = function(prov) {{
+    document.querySelectorAll('.tab-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+    document.querySelectorAll('.tab-panel').forEach(function(p) {{ p.classList.remove('active'); }});
+    var btn = document.querySelector('.tab-btn[onclick*="' + prov + '"]');
+    var panel = document.getElementById('panel-' + prov);
+    if (btn) btn.classList.add('active');
+    if (panel) panel.classList.add('active');
+}};
+
+window.toggleSidebar = function() {{
+    var sb = document.getElementById('sidebar');
+    var ov = document.getElementById('sidebarOverlay');
+    if (sb) sb.classList.toggle('open');
+    if (ov) ov.classList.toggle('open');
+}};
+window.closeSidebar = function() {{
+    var sb = document.getElementById('sidebar');
+    var ov = document.getElementById('sidebarOverlay');
+    if (sb) sb.classList.remove('open');
+    if (ov) ov.classList.remove('open');
+}};
+
+// ── Boot ──
+buildPage(configuredProviders).catch(function(e) {{
+    console.error('Failed to load usage page', e);
+}});
+</script>
+</body>
+</html>"""
 
 
 def create_server(config, engine, port=8734):
