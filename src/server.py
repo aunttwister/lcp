@@ -1377,22 +1377,9 @@ function deleteProvider(name) {{
   }});
 }}
 
-function toggleSidebar() {{
-  var sb = document.getElementById('sidebar');
-  if (window.innerWidth <= 768) {{
-    sb.classList.toggle('open');
-    document.getElementById('sidebarOverlay').classList.toggle('show');
-  }} else {{
-    sb.classList.toggle('collapsed');
-  }}
-}}
-function closeSidebar() {{
-  document.getElementById('sidebar').classList.remove('open');
-  document.getElementById('sidebarOverlay').classList.remove('show');
-}}
-
 loadPresets();
 </script>
+""" + _render_sidebar_plugin_js(config) + """
 </body>
 </html>"""
 
@@ -1661,20 +1648,8 @@ function saveProfileEdit() {{
   }});
 }}
 
-function toggleSidebar() {{
-  var sb = document.getElementById('sidebar');
-  if (window.innerWidth <= 768) {{
-    sb.classList.toggle('open');
-    document.getElementById('sidebarOverlay').classList.toggle('show');
-  }} else {{
-    sb.classList.toggle('collapsed');
-  }}
-}}
-function closeSidebar() {{
-  document.getElementById('sidebar').classList.remove('open');
-  document.getElementById('sidebarOverlay').classList.remove('show');
-}}
 </script>
+""" + _render_sidebar_plugin_js(config) + """
 </body>
 </html>"""
 
@@ -1940,6 +1915,7 @@ function closeSidebar() {{
 
 loadKeys();
 </script>
+""" + _render_sidebar_plugin_js(config) + """
 </body>
 </html>"""
 
@@ -1960,6 +1936,7 @@ def _render_sidebar_html(config, active_page: str = "") -> str:
         f'    <a href="/keys"{keys_active}>API Keys</a>\n'
         f'    <a href="/providers"{providers_active}>Providers</a>\n'
         f'    <a href="/usage"{usage_active}>Usage</a>\n'
+        '    <div class="sb-provider-rows" id="providerPluginRows"></div>\n'
         f'    <a href="/profiles"{profiles_active}>Profiles</a>\n'
         '    <div class="nav-label">Profiles</div>\n'
     )
@@ -1969,6 +1946,155 @@ def _render_sidebar_html(config, active_page: str = "") -> str:
         '  </nav>\n</aside>'
     )
     return sidebar
+
+
+def _render_sidebar_plugin_js(config) -> str:
+    """Shared JS for sidebar plugin status rows (loadPluginStatus, toggle, etc.).
+
+    Injects ``monthly`` gateway data and ``configuredProviders`` lists so
+    that the sidebar plugin rows can fall back to the gateway DB when the
+    provider plugin has no local data (e.g. OpenCode DB not on server).
+    """
+    from datetime import date as _date
+    from sqlalchemy import func
+
+    # Monthly data from gateway DB
+    _first_of_month = _date.today().replace(day=1).isoformat()
+    monthly_data = {}
+    try:
+        from src.main import get_session, engine
+        from src.api.models import RequestModel
+        with get_session(engine) as _s:
+            _monthly_rows = _s.query(
+                RequestModel.provider,
+                func.count(RequestModel.id).label("m_reqs"),
+                func.coalesce(func.sum(RequestModel.completion_tokens + RequestModel.prompt_tokens), 0).label("m_tokens"),
+                func.coalesce(func.sum(RequestModel.cost), 0).label("m_cost"),
+            ).filter(
+                RequestModel.timestamp >= _first_of_month,
+                RequestModel.success == 1,
+            ).group_by(RequestModel.provider).all()
+        for r in _monthly_rows:
+            monthly_data[r.provider] = {
+                "reqs": int(r.m_reqs),
+                "tokens": int(r.m_tokens),
+                "cost": float(r.m_cost),
+            }
+    except Exception:
+        pass
+
+    monthly_json = json.dumps(monthly_data)
+    configured_json = json.dumps(sorted(config.providers.keys()))
+
+    return f"""<script>
+function toggleSidebar() {{
+  var sb = document.getElementById('sidebar');
+  var ov = document.getElementById('sidebarOverlay');
+  if (window.innerWidth <= 768) {{
+    sb.classList.toggle('open');
+    ov.classList.toggle('show');
+  }} else {{
+    sb.classList.toggle('collapsed');
+    localStorage.setItem('lcp-sidebar', sb.classList.contains('collapsed') ? 'collapsed' : 'pinned');
+  }}
+}}
+function closeSidebar() {{
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('show');
+}}
+(function() {{
+  if (window.innerWidth <= 768) return;
+  if (localStorage.getItem('lcp-sidebar') === 'collapsed') {{
+    document.getElementById('sidebar').classList.add('collapsed');
+  }}
+}})();
+
+function formatTokens(n) {{
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return String(n);
+}}
+
+var monthly = {monthly_json};
+var configuredProviders = {configured_json};
+
+function loadPluginStatus() {{
+  var provRows = document.getElementById('providerPluginRows');
+  if (!provRows) return;
+
+  Promise.all([
+    fetch('/api/cost-plugins/usage').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_usage:{{}}}}}}),
+    fetch('/api/cost-plugins/balances').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_balances:{{}}}}}}),
+    fetch('/api/cost-plugins/summary').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_summaries:{{}}}}}})
+  ]).then(function(results) {{
+    var allUsage = results[0].plugin_usage || {{}};
+    var balances = results[1].plugin_balances || {{}};
+    var pluginSummaries = results[2].plugin_summaries || {{}};
+
+    var allProviders = Object.keys(allUsage).concat(Object.keys(balances));
+    var uniqueProvs = allProviders.filter(function(v,i,a){{return a.indexOf(v)===i}}).filter(function(v){{return configuredProviders.indexOf(v) !== -1}});
+
+    if (uniqueProvs.length === 0) {{
+      provRows.innerHTML = '<div class="sb-provider-empty">No plugins active</div>';
+    }} else {{
+      var rows = '';
+      uniqueProvs.forEach(function(prov) {{
+        var bal = balances[prov];
+        var usg = allUsage[prov] || [];
+        var totalCost = usg.reduce(function(s,r){{return s + r.cost}}, 0);
+        var totalTokens = usg.reduce(function(s,r){{return s + r.prompt_tokens + r.completion_tokens}}, 0);
+        // Fallback to gateway DB when plugin has no usage data
+        if (totalCost === 0 && monthly[prov]) {{
+          totalCost = monthly[prov].cost || 0;
+        }}
+        if (totalTokens === 0 && monthly[prov]) {{
+          totalTokens = monthly[prov].tokens || 0;
+        }}
+        var sum = pluginSummaries[prov];
+
+        var detailLine = '';
+        if (prov === 'opencode') {{
+          var om = (sum && sum.monthly) ? sum.monthly : (monthly[prov] || {{}});
+          var now = new Date();
+          var moDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+          detailLine = '<span class="sb-provider-detail">' +
+            'day ' + now.getDate() + '/' + moDays;
+          if (om.tokens) detailLine += ' \\u00b7 ' + formatTokens(om.tokens) + ' tok';
+          if (om.cost) detailLine += ' \\u00b7 $' + om.cost.toFixed(4);
+          detailLine += '</span>';
+        }} else if (prov === 'deepseek' && sum && sum.balance) {{
+          var cur = sum.balance.currency || 'USD';
+          detailLine = '<span class="sb-provider-detail">' + cur + ' ' + sum.balance.available.toFixed(2) + ' available';
+          if (sum.balance.spent !== null) detailLine += ' \\u00b7 spent ' + cur + ' ' + sum.balance.spent.toFixed(2);
+          detailLine += '</span>';
+        }} else if (bal && bal.balance !== null && bal.balance !== undefined) {{
+          var currency = bal.currency || 'USD';
+          detailLine = '<span class="sb-provider-detail">' + currency + ' ' + bal.balance.toFixed(2) + ' balance</span>';
+        }} else if (prov === 'llamacpp') {{
+          detailLine = '<span class="sb-provider-detail">' + formatTokens(totalTokens) + ' tokens \\u00b7 local</span>';
+        }} else {{
+          var m = monthly[prov] || {{}};
+          var mr = m.reqs || 0;
+          var mt = m.tokens || 0;
+          if (mr > 0) detailLine = '<span class="sb-provider-detail">' + mr + ' req \\u00b7 ' + formatTokens(mt) + ' tok this month</span>';
+        }}
+
+        rows += '<div class="sb-provider-row">' +
+          '<div class="sb-provider-top">' +
+          '<span class="sb-provider-name">' + prov + '</span>' +
+          '<span class="sb-provider-cost">$' + totalCost.toFixed(4) + '</span>' +
+          '</div>' +
+          (detailLine ? detailLine : '') +
+          '</div>';
+      }});
+      provRows.innerHTML = rows;
+    }}
+  }});
+}}
+
+loadPluginStatus();
+setInterval(loadPluginStatus, 60000);
+</script>"""
 
 
 def _render_usage_page(config) -> str:
@@ -2165,9 +2291,17 @@ function buildPage(providers) {{
                 var monthly = (sum && sum.monthly) ? sum.monthly : {{tokens:0, cost:0, requests:0}};
                 var weekly = (sum && sum.weekly) ? sum.weekly : {{tokens:0, cost:0, requests:0}};
                 var daily = (sum && sum.daily) ? sum.daily : {{tokens:0, cost:0, requests:0}};
+                // Fallback to gateway DB when OpenCode local DB is unavailable
+                var gwMonthly = stats.totals || {{cost:0, requests:0}};
+                if (monthly.tokens === 0 && monthly.requests === 0) {{
+                    monthly.requests = gwMonthly.requests || 0;
+                    monthly.cost = (monthly.cost || 0) || (gwMonthly.cost || 0);
+                }}
+                var now = new Date();
+                var moDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
                 var moPct = monthPct();
                 panelsHtml += '<div class="stat-cards">' +
-                    '<div class="stat-card"><div class="label">Month Progress</div><div class="value">' + moPct.toFixed(0) + '%</div><div class="sub"><div class="progress-bar"><div class="progress-fill progress-blue" style="width:' + moPct.toFixed(0) + '%"></div></div></div></div>' +
+                    '<div class="stat-card"><div class="label">Month Elapsed</div><div class="value">day ' + now.getDate() + '/' + moDays + '</div><div class="sub"><div class="progress-bar"><div class="progress-fill progress-blue" style="width:' + moPct.toFixed(0) + '%"></div></div></div></div>' +
                     '<div class="stat-card"><div class="label">Monthly Usage</div><div class="value">' + formatTokens(monthly.tokens) + ' tok</div><div class="sub">$' + monthly.cost.toFixed(4) + ' · ' + monthly.requests + ' requests</div></div>' +
                     '<div class="stat-card"><div class="label">Rolling Weekly</div><div class="value">' + formatTokens(weekly.tokens) + ' tok</div><div class="sub">$' + weekly.cost.toFixed(4) + ' · ' + weekly.requests + ' requests</div></div>' +
                     '<div class="stat-card"><div class="label">Today</div><div class="value">' + formatTokens(daily.tokens) + ' tok</div><div class="sub">$' + daily.cost.toFixed(4) + ' · ' + daily.requests + ' requests</div></div>' +
@@ -2230,6 +2364,7 @@ buildPage(configuredProviders).catch(function(e) {{
     console.error('Failed to load usage page', e);
 }});
 </script>
+""" + _render_sidebar_plugin_js(config) + """
 </body>
 </html>"""
 

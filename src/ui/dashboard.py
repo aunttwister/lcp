@@ -540,10 +540,8 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         "  } else if (latestProvider === 'opencode') {\n"
         "    var om = (sum && sum.monthly) ? sum.monthly : (monthly[latestProvider] || {});\n"
         "    var now = new Date();\n"
-        "    var start = new Date(now.getFullYear(), now.getMonth(), 1);\n"
-        "    var end = new Date(now.getFullYear(), now.getMonth() + 1, 1);\n"
-        "    var moPct = Math.round(((now - start) / (end - start)) * 100);\n"
-        "    hdrLabel += ' \\u00b7 ' + moPct + '% of month';\n"
+        "    var moDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();\n"
+        "    hdrLabel += ' \\u00b7 day ' + now.getDate() + '/' + moDays;\n"
         "    if (om.tokens) hdrLabel += ' \\u00b7 ' + formatTokens(om.tokens) + ' tok';\n"
         "    if (om.cost) hdrLabel += ' \\u00b7 $' + om.cost.toFixed(4);\n"
         "  } else if (latestProvider === 'llamacpp') {\n"
@@ -1634,17 +1632,22 @@ def render_dashboard(config, engine, headers, profile_filter=None):
               var usg = allUsage[prov] || [];
               var totalCost = usg.reduce(function(s,r){{return s + r.cost}}, 0);
               var totalTokens = usg.reduce(function(s,r){{return s + r.prompt_tokens + r.completion_tokens}}, 0);
+              // Fallback to gateway DB when plugin has no usage data
+              if (totalCost === 0 && monthly[prov]) {{
+                totalCost = monthly[prov].cost || 0;
+              }}
+              if (totalTokens === 0 && monthly[prov]) {{
+                totalTokens = monthly[prov].tokens || 0;
+              }}
               var sum = pluginSummaries[prov];
 
               var detailLine = '';
               if (prov === 'opencode') {{
                 var om = (sum && sum.monthly) ? sum.monthly : (monthly[prov] || {{}});
                 var now = new Date();
-                var moStart = new Date(now.getFullYear(), now.getMonth(), 1);
-                var moEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-                var moPct = Math.round(((now - moStart) / (moEnd - moStart)) * 100);
+                var moDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
                 detailLine = '<span class="sb-provider-detail">' +
-                  moPct + '% of month';
+                  'day ' + now.getDate() + '/' + moDays;
                 if (om.tokens) detailLine += ' \\u00b7 ' + formatTokens(om.tokens) + ' tok';
                 if (om.cost) detailLine += ' \\u00b7 $' + om.cost.toFixed(4);
                 detailLine += '</span>';
