@@ -1,9 +1,9 @@
-# Task: LLM Control Plane (lcp)
+# Task: 5mall-gw
 
 Created: 2026-06-18
 Status: in_progress (Phases 1-4 ✅ resolved, 5-7 in_progress, 8 open)
 Merged from: llm-gateway-router (completed Phases 1-3), llm-cost-tracking, os-sandboxing
-Name chosen: llm-control-plane (lcp) — "control plane" as in the networking architecture term: routes traffic, enforces policy, manages state.
+Name chosen: 5mall-gw — "control plane" as in the networking architecture term: routes traffic, enforces policy, manages state.
 Active consideration: Replace with https://github.com/theopenco/llmgateway (TypeScript, 1.3K stars) — see replacement task.
 
 ## North Star

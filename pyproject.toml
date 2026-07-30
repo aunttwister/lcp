@@ -1,7 +1,7 @@
 [project]
-name = "5mall"
+name = "5mall-gw"
 version = "0.5.0"
-description = "5mall — self-hosted LLM gateway: route, enforce tool permissions, track costs, manage API keys"
+description = "5mall-gw — self-hosted LLM gateway: route, enforce tool permissions, track costs, manage API keys"
 requires-python = ">=3.11"
 dependencies = [
     "structlog>=24.1",

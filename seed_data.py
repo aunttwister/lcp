@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed the LLM Control Plane database with realistic demo data."""
+"""Seed the 5mall-gw database with realistic demo data."""
 
 import os
 import sys
@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 # Ensure src is importable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.models import (
+from src.api.models import (
     Base,
     Request,
     Team,

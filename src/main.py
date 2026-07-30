@@ -10,14 +10,6 @@ from .api.circuit_breaker import get_circuit_breaker
 from .api.key_manager import get_key_manager
 from .server import create_server
 
-# ── Load static template assets ──────────────────────────────────────────
-_DASHBOARD_CSS: str = ""
-try:
-    _templates_dir = __import__("pathlib").Path(__file__).parent / "ui" / "templates"
-    _DASHBOARD_CSS = (_templates_dir / "dashboard.css").read_text()
-except Exception:
-    pass
-
 
 def main():
     """Entry point — start the HTTP server."""

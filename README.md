@@ -1,4 +1,4 @@
-# 5mall
+# 5mall-gw
 
 **A self-hosted LLM gateway. Route, meter, control — one container, one port, no cloud dependency.**
 
@@ -8,9 +8,9 @@
 
 ---
 
-## What is 5mall?
+## What is 5mall-gw?
 
-5mall is a self-hosted LLM gateway that sits between your agents and LLM providers. It routes
+5mall-gw is a self-hosted LLM gateway that sits between your agents and LLM providers. It routes
 requests, enforces tool permissions, tracks costs, and manages API keys — all from a single Docker
 container backed by SQLite. No PostgreSQL. No Redis. No external services.
 
@@ -23,7 +23,7 @@ Your agents (Hermes, scripts, external tools)
           |
           v
 +--------------------------------------------+
-|             5mall (:8734)                   |
+|             5mall-gw (:8734)                   |
 |                                            |
 |  Auth -> Strip Tools -> Route              |
 |       -> Circuit Breaker -> Track Cost     |
@@ -54,7 +54,7 @@ Your agents (Hermes, scripts, external tools)
 - Per-request cost with DeepSeek cache hit/miss breakdown
 - Daily cost summaries per profile, per model, per provider
 - Prompt prefix caching — normalizes messages so repeated system prompts hit the provider cache
-- Cache hits are 120x cheaper than cache misses; 5mall tracks both accurately
+- Cache hits are 120x cheaper than cache misses; 5mall-gw tracks both accurately
 
 ### API key management
 - Create, rotate, and revoke virtual API keys through the dashboard
@@ -79,8 +79,8 @@ Your agents (Hermes, scripts, external tools)
 
 ```bash
 # Clone
-git clone https://github.com/aunttwister/5mall.git
-cd 5mall
+git clone https://github.com/aunttwister/5mall-gw.git
+cd 5mall-gw
 
 # Configure providers — add your API keys
 cp config/.env.example config/.env
@@ -90,7 +90,7 @@ cp config/.env.example config/.env
 docker compose up -d
 ```
 
-5mall is now running at `http://localhost:8734`. Open the dashboard, send a request:
+5mall-gw is now running at `http://localhost:8734`. Open the dashboard, send a request:
 
 ```bash
 curl http://localhost:8734/l2/v1/chat/completions \
@@ -139,9 +139,9 @@ pricing:
     output: 0.87
 ```
 
-## Why 5mall over alternatives?
+## Why 5mall-gw over alternatives?
 
-| | 5mall | LiteLLM | llmgateway |
+| | 5mall-gw | LiteLLM | llmgateway |
 |---|---|---|---|
 | **Tool permission enforcement** | Yes, per profile | No | No |
 | **Deployment** | Single container, SQLite | Container + PostgreSQL + Redis | Container |
@@ -151,13 +151,13 @@ pricing:
 | **Agent-native** | Built for Hermes agents | Generic API proxy | Generic API proxy |
 | **API key management** | Virtual keys, spend limits | Virtual keys | Limited |
 
-5mall is the only open-source LLM gateway with agent tool permission enforcement. No other
+5mall-gw is the only open-source LLM gateway with agent tool permission enforcement. No other
 gateway strips tools based on who is calling. If you run AI agents in production, this matters.
 
 ## Architecture
 
 ```
-5mall (:8734) — single process, single port
+5mall-gw (:8734) — single process, single port
 |
 +-- Python stdlib (http.server) — no framework overhead
 +-- SQLite (costs.db) — zero-infrastructure persistence
@@ -167,7 +167,7 @@ gateway strips tools based on who is calling. If you run AI agents in production
 +-- Docker — python:3.11-slim
 ```
 
-5mall deliberately avoids PostgreSQL, Redis, Next.js, pnpm, Kubernetes, and the broader
+5mall-gw deliberately avoids PostgreSQL, Redis, Next.js, pnpm, Kubernetes, and the broader
 TypeScript ecosystem. SQLite handles millions of cost rows at homelab scale. One container,
 one port, one `docker compose up`.
 
@@ -199,7 +199,7 @@ Full details in [PLAN.md](PLAN.md).
 
 ## Status
 
-5mall runs continuously in production, routing all LLM traffic for a multi-agent homelab setup
+5mall-gw runs continuously in production, routing all LLM traffic for a multi-agent homelab setup
 (6 Hermes profiles, 15+ custom skills, daily cron jobs). It handles approximately 200 requests
 per day across 4 profiles with real cost tracking. Phase 5 (multi-tenant authentication and
 authorization) is the next milestone toward a 1.0 release.

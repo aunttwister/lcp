@@ -5,7 +5,6 @@ Generates the full server-rendered HTML dashboard.
 import json
 from datetime import datetime, timezone
 from typing import Any, cast
-from sqlalchemy import func, case
 from ..api.models import Request as RequestModel, get_session
 from ..api.prompt_cache import get_prompt_cache
 from ..api.token_verifier import get_token_verifier
@@ -25,9 +24,6 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     cb = get_circuit_breaker()
     _get_health = cb.get_health
 
-    # The original method body follows:
-    """Server-rendered shadcn-themed dashboard with provider health, daily costs,
-    recent requests/errors, Chart.js time-series, and Phase 5/6 metrics."""
     from sqlalchemy import func, case
 
     try:
@@ -395,9 +391,6 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         '\n  </nav>'
         '\n</aside>'
     )
-
-    # Old-style tabs (kept for reference, not rendered)
-    tabs_html = ""
 
     # Per-profile summary cards
     profile_card_html = ""

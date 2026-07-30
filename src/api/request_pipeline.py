@@ -29,14 +29,6 @@ from .token_verifier import get_token_verifier
 
 logger = get_logger("lcp.pipeline")
 
-# Tool names that Hermes agents can request
-KNOWN_HERMES_TOOLS = {
-    "read_file", "write_file", "patch", "search_files", "terminal",
-    "execute_code", "memory", "session_search", "process", "delegate_task",
-    "send_message", "skill_manage", "todo", "vision_analyze", "web",
-    "cronjob", "text_to_speech",
-}
-
 
 # ── Tool Stripping ───────────────────────────────────────────────────────────
 

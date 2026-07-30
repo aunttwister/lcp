@@ -1,12 +1,12 @@
 services:
-  llm-control-plane-dev:
+  smallm-gw-dev:
     build: .
-    container_name: llm-control-plane-dev
+    container_name: smallm-gw-dev
     restart: unless-stopped
     ports:
       - "8735:8734"
     volumes:
-      - lcp_dev_data:/app/data
+      - smallm_gw_data:/app/data
       - ./config/gateway.yaml:/app/config/gateway.yaml:ro
     env_file:
       - .env
@@ -15,4 +15,4 @@ services:
       - LISTEN_PORT=8734
 
 volumes:
-  lcp_dev_data:
+  smallm_gw_data:
