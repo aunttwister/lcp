@@ -1,4 +1,4 @@
-"""Modal HTML snippets for the smallm dashboard.
+"""Modal HTML snippets for the LCP dashboard.
 These are loaded as string constants — no build step required.
 """
 

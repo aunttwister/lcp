@@ -1,4 +1,4 @@
-"""HTTP server and request handler for the smallm gateway.
+"""HTTP server and request handler for the LCP gateway.
 
 Contains the LCPHandler class that dispatches requests to the appropriate
 pipeline, dashboard, and API modules.
@@ -78,7 +78,7 @@ def _estimate_cost_from_tokens(provider, model, cost_info, config):
 
 
 class LCPHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for smallm gateway."""
+    """HTTP request handler for LCP gateway."""
 
     # Class-level references set after server init
     config: Any = None
@@ -1220,7 +1220,7 @@ def _render_providers_page(config) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>smallm — Providers</title>
+<title>LCP — Providers</title>
 <style>{css}</style>
 </head>
 <body>
@@ -1431,7 +1431,7 @@ def _render_profiles_page(config) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>smallm — Profiles</title>
+<title>LCP — Profiles</title>
 <style>{css}</style>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 </head>
@@ -1694,7 +1694,7 @@ def _render_keys_page(config, engine) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>smallm — API Keys</title>
+<title>LCP — API Keys</title>
 <style>{css}</style>
 </head>
 <body>
@@ -1954,7 +1954,7 @@ def _render_sidebar_html(config, active_page: str = "") -> str:
 
     sidebar = (
         '<aside class="sidebar" id="sidebar">\n'
-        '  <div class="sidebar-brand">smallm</div>\n'
+        '  <div class="sidebar-brand">LCP</div>\n'
         '  <nav class="sidebar-nav">\n'
         f'    <a href="/dashboard"{dash_active}>Dashboard</a>\n'
         f'    <a href="/keys"{keys_active}>API Keys</a>\n'
@@ -1986,7 +1986,7 @@ def _render_usage_page(config) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>smallm — Usage</title>
+<title>LCP — Usage</title>
 <style>{css}
 .page-section {{ margin-bottom: 2rem; }}
 .page-section h2 {{ font-size: 1.1rem; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }}

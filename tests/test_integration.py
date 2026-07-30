@@ -61,7 +61,7 @@ class TestHealth:
     def test_homepage_is_html(self):
         body, status = _get("/")
         assert status == 200
-        assert "<h1>smallm gateway</h1>" in body
+        assert "<h1>LCP</h1>" in body
 
     def test_dashboard_stats_present(self):
         body, _ = _get("/")

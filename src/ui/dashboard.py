@@ -1,4 +1,4 @@
-"""Dashboard renderer for the smallm gateway.
+"""Dashboard renderer for the LCP gateway.
 
 Generates the full server-rendered HTML dashboard.
 """
@@ -367,7 +367,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     host_url = f"{scheme}://{host}"
     sidebar_nav = (
         '<aside class="sidebar" id="sidebar">\n'
-        '  <div class="sidebar-brand">smallm</div>\n'
+        '  <div class="sidebar-brand">LCP</div>\n'
         '  <nav class="sidebar-nav">\n'
         f'    <a href="/dashboard" class="{dash_active}">Dashboard</a>\n'
         f'    <a href="/keys">API Keys</a>\n'
@@ -576,7 +576,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>smallm Dashboard{filter_title}</title>
+    <title>LCP Dashboard{filter_title}</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
     <style>
@@ -590,7 +590,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     <div class="main-content">
     <div class="header-row">
       <div>
-        <h1>smallm gateway{filter_title}</h1>
+        <h1>LCP{filter_title}</h1>
         <p class="subtitle">Cost tracking · Request history · Phase 5/6 intelligence</p>
       </div>
       <div class="header-plugin-badge" id="pluginHeaderBadge">

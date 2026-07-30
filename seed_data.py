@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed the 5mall-gw database with realistic demo data."""
+"""Seed the LCP database with realistic demo data."""
 
 import os
 import sys

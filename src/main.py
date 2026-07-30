@@ -1,4 +1,4 @@
-"""smallm gateway — entry point. Loads env, boots server."""
+"""LCP gateway — entry point. Loads env, boots server."""
 
 import os
 from pathlib import Path

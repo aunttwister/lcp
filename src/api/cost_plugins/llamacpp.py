@@ -9,7 +9,7 @@ billing API to query.  The plugin acts as a local token tracker:
   - Provides an accumulated ``fetch_usage()`` view for the dashboard.
 
 Persistent state file location (if ``persist_path`` is set):
-  ``~/.local/share/smallm-gw/llamacpp-usage.json``
+  ``~/.local/share/lcp/llamacpp-usage.json``
 """
 
 import json
@@ -29,7 +29,7 @@ def _default_persist_path() -> str:
         "XDG_DATA_HOME",
         os.path.join(os.path.expanduser("~"), ".local", "share"),
     )
-    return os.path.join(data_home, "smallm-gw", "llamacpp-usage.json")
+    return os.path.join(data_home, "lcp", "llamacpp-usage.json")
 
 
 class LlamaCppCostPlugin(CostPlugin):

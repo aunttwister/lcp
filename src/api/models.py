@@ -1,4 +1,4 @@
-"""SQLAlchemy models for the smallm gateway."""
+"""SQLAlchemy models for the LCP gateway."""
 
 from datetime import datetime, timezone
 

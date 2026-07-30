@@ -99,7 +99,7 @@ class TestDoGet:
         assert h.send_response.called
         assert h.send_response.call_args[0][0] == 200
         combined = _get_written_bytes(h)
-        assert b"smallm gateway" in combined
+        assert b"LCP" in combined
 
     def test_health(self, temp_db):
         h = _TestHandler("/health", engine=temp_db)

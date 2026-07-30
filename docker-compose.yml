@@ -1,12 +1,12 @@
 services:
-  smallm-gw-dev:
+  lcp-dev:
     build: .
-    container_name: smallm-gw-dev
+    container_name: lcp-dev
     restart: unless-stopped
     ports:
       - "8735:8734"
     volumes:
-      - smallm_gw_data:/app/data
+      - lcp_data:/app/data
       - ./config/gateway.yaml:/app/config/gateway.yaml:ro
     env_file:
       - .env
@@ -15,4 +15,4 @@ services:
       - LISTEN_PORT=8734
 
 volumes:
-  smallm_gw_data:
+  lcp_data:

@@ -6,7 +6,7 @@
 
 ## North Star
 
-A unified memory endpoint inside 5mall-gw so every LLM client in the workflow
+A unified memory endpoint inside LCP so every LLM client in the workflow
 (Hermes agents, laptop tools, VPS scripts, custom integrations) reads and writes
 to **one** memory bank through **one** API. No separate Hindsight service to discover.
 No fragmented memory per device.
@@ -27,7 +27,7 @@ GET  /{profile}/memory/count    → return total stored facts
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  5mall-gw (:8734)                                          │
+│  LCP (:8734)                                          │
 │                                                          │
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
 │  │ Provider Cost│  │ Tool Stripper│  │ Memory Plugin │  │
@@ -179,11 +179,11 @@ LanceDB tables.
 ## Migration / Hindsight coexistence
 
 - **Hindsight remains Hermes' memory** — it has entity graphs, cross-session
-  synthesis, and `hindsight_reflect`. 5mall-gw's memory layer does not replace it.
-- **5mall-gw memory is for everything else** — laptop scripts, VPS cron jobs,
-  custom tools that hit the 5mall-gw API for completions and now need memory too.
+  synthesis, and `hindsight_reflect`. LCP's memory layer does not replace it.
+- **LCP memory is for everything else** — laptop scripts, VPS cron jobs,
+  custom tools that hit the LCP API for completions and now need memory too.
 - **No migration needed.** They serve different clients and different use cases.
-  If unification is desired later, Hindsight can be taught to read from 5mall's
+  If unification is desired later, Hindsight can be taught to read from LCP's
   LanceDB via the plugin contract.
 
 ## Dependencies

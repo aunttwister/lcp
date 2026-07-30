@@ -1,4 +1,4 @@
-"""Alembic migration environment for 5mall-gw."""
+"""Alembic migration environment for LCP."""
 
 from logging.config import fileConfig
 

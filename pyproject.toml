@@ -1,7 +1,7 @@
 [project]
-name = "5mall-gw"
+name = "lcp"
 version = "0.5.0"
-description = "5mall-gw — self-hosted LLM gateway: route, enforce tool permissions, track costs, manage API keys"
+description = "LCP — self-hosted LLM gateway: route, enforce tool permissions, track costs, manage API keys"
 requires-python = ">=3.11"
 dependencies = [
     "structlog>=24.1",
@@ -19,7 +19,7 @@ dev = [
 ]
 
 [project.scripts]
-smallm = "src.main:main"
+lcp = "src.main:main"
 
 [tool.setuptools.package-dir]
 "" = "src"
