@@ -118,6 +118,8 @@ class LCPHandler(BaseHTTPRequestHandler):
     # ── Routes ────────────────────────────────────────────────────────────
 
     def do_GET(self):
+        logger.debug("request_start", method="GET", path=self.path,
+                     client_ip=self.client_address[0])
         if self.path == "/" or self.path == "/dashboard":
             self._serve_dashboard()
         elif self.path == "/keys" or self.path == "/keys/dashboard":
@@ -183,6 +185,10 @@ class LCPHandler(BaseHTTPRequestHandler):
         # Config hot-reload check
         self.config.check_reload()
 
+        profile = self._resolve_profile()
+        logger.debug("request_start", method="POST", path=self.path,
+                     client_ip=self.client_address[0], profile=profile or "none")
+
         # Provider API routes
         if self.path == "/api/providers":
             self._serve_provider_create()
@@ -210,11 +216,15 @@ class LCPHandler(BaseHTTPRequestHandler):
 
         # Only handle chat completions
         if "/chat/completions" not in self.path:
+            logger.warning("invalid_route", method="POST", path=self.path,
+                           client_ip=self.client_address[0])
             self._send_json({"error": "not found"}, 404)
             return
 
         profile = self._resolve_profile()
         if profile is None:
+            logger.warning("unknown_profile", path=self.path,
+                           client_ip=self.client_address[0])
             self._send_json({"error": f"unknown profile in path: {self.path}"}, 400)
             return
 
@@ -227,6 +237,8 @@ class LCPHandler(BaseHTTPRequestHandler):
         if profile_cfg.get("auth_required", True):
             auth_header = self.headers.get("Authorization", "")
             if not auth_header.startswith("Bearer "):
+                logger.warning("auth_failed", reason="missing_bearer_token",
+                               profile=profile, client_ip=self.client_address[0])
                 self._send_json({"error": "API key required for this profile. Use Authorization: Bearer <key>"}, 401)
                 return
             raw_key = auth_header[7:]
@@ -234,6 +246,8 @@ class LCPHandler(BaseHTTPRequestHandler):
             if km:
                 key_info = km.validate_key(raw_key)
                 if key_info is None:
+                    logger.warning("auth_failed", reason="invalid_or_revoked_key",
+                                   profile=profile, client_ip=self.client_address[0])
                     self._send_json({"error": "invalid or revoked API key"}, 401)
                     return
                 # Check profile access
@@ -241,12 +255,19 @@ class LCPHandler(BaseHTTPRequestHandler):
                 if allowed:
                     allowed_list = [p.strip() for p in allowed.split(",") if p.strip()]
                     if profile not in allowed_list:
+                        logger.warning("auth_failed", reason="profile_access_denied",
+                                       profile=profile, client_ip=self.client_address[0],
+                                       key_id=key_info.get("id"))
                         self._send_json({"error": f"key does not have access to profile '{profile}'"}, 403)
                         return
                 # Check spend limit
                 limit = key_info.get("spend_limit", 0)
                 spent = key_info.get("total_spend", 0)
                 if limit > 0 and spent >= limit:
+                    logger.warning("auth_failed", reason="spend_limit_exceeded",
+                                   profile=profile, client_ip=self.client_address[0],
+                                   key_id=key_info.get("id"), spent=round(spent, 2),
+                                   limit=round(limit, 2))
                     self._send_json({"error": f"spend limit exceeded (${spent:.2f} / ${limit:.2f})"}, 429)
                     return
                 self._current_key_id = key_info.get("id")
@@ -418,8 +439,10 @@ class LCPHandler(BaseHTTPRequestHandler):
             )
 
         except ToolBlockedError as e:
+            logger.warning("tool_blocked", profile=profile, error=str(e))
             self._send_json({"error": str(e)}, 403)
         except AllProvidersFailedError as e:
+            logger.error("all_providers_failed", profile=profile, error=str(e))
             cost_info = {"prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0,
                          "cache_miss_tokens": 0, "cost": 0, "latency_ms": 0}
             record_cost(self.engine, profile, "unknown", "unknown", cost_info, False, "all_providers_failed", [])
@@ -440,6 +463,8 @@ class LCPHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         self.config.check_reload()
+        logger.debug("request_start", method="PUT", path=self.path,
+                     client_ip=self.client_address[0])
         if self.path.startswith("/api/providers/") and len(self.path.split("/")) == 4:
             provider_name = self.path.split("/")[3]
             self._serve_provider_update(provider_name)
@@ -456,6 +481,8 @@ class LCPHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         self.config.check_reload()
+        logger.debug("request_start", method="DELETE", path=self.path,
+                     client_ip=self.client_address[0])
         if self.path.startswith("/api/providers/") and len(self.path.split("/")) == 4:
             provider_name = self.path.split("/")[3]
             self._serve_provider_delete(provider_name)

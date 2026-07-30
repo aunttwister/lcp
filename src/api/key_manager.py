@@ -65,6 +65,7 @@ class KeyManager:
         """List all keys with stats."""
         with get_session(self._engine) as session:
             keys = session.query(ApiKey).order_by(ApiKey.id.desc()).all()
+            logger.debug("key_listed", count=len(keys))
             return [
                 {
                     "id": k.id,
@@ -206,6 +207,15 @@ class KeyManager:
                 ApiKey.status == "active",
             ).first()
             if not k:
+                # Check if it exists at all (for better error logging)
+                any_key = session.query(ApiKey).filter(
+                    ApiKey.key_hash == key_hash
+                ).first()
+                if any_key:
+                    logger.warning("key_validation_failed", reason="revoked_or_inactive",
+                                   key_prefix=any_key.key_prefix, key_id=any_key.id)
+                else:
+                    logger.warning("key_validation_failed", reason="not_found")
                 return None
             # Check expiry
             if k.expires_at:
@@ -214,6 +224,8 @@ class KeyManager:
                     if exp.tzinfo is None:
                         exp = exp.replace(tzinfo=timezone.utc)
                     if datetime.now(timezone.utc) > exp:
+                        logger.warning("key_validation_failed", reason="expired",
+                                       key_prefix=k.key_prefix, key_id=k.id)
                         return None
                 except ValueError:
                     pass
@@ -239,6 +251,8 @@ class KeyManager:
             prev_spend = k.total_spend or 0.0
             k.total_spend = prev_spend + cost
             session.commit()
+            logger.debug("key_spend_updated", key_id=key_id, key_prefix=k.key_prefix,
+                         cost=round(cost, 6), total_spend=round(k.total_spend, 6))
 
             # Check spend limit
             if k.spend_limit and k.spend_limit > 0:

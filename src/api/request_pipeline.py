@@ -332,10 +332,20 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
     """Try each provider in the chain. Returns (response, status, provider, model)."""
     cb = get_circuit_breaker()
     errors = []
-    for step in profile_cfg["chain"]:
+    chain_len = len(profile_cfg["chain"])
+    for i, step in enumerate(profile_cfg["chain"]):
         provider_name = step["provider"]
         base_url = step.get("base_url") or config.providers.get(provider_name, {}).get("api_base", "")
         model = step["model"]
+
+        logger.info(
+            "chain_attempt",
+            profile=profile_name,
+            provider=provider_name,
+            model=model,
+            attempt=i + 1,
+            chain_len=chain_len,
+        )
 
         # Check circuit breaker
         if not cb.is_available(provider_name, base_url, profile_name):
@@ -367,13 +377,33 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
         step_with_key = {**step, "api_key_env": config.providers[provider_name]["api_key_env"]}
 
         try:
+            t0 = time.time()
             resp, status = forward_request(step_with_key, body, config)
+            hop_ms = int((time.time() - t0) * 1000)
             cb.record_success(provider_name, base_url, profile_name)
+            logger.info(
+                "chain_success",
+                profile=profile_name,
+                provider=provider_name,
+                model=model,
+                attempt=i + 1,
+                chain_len=chain_len,
+                latency_ms=hop_ms,
+            )
             return resp, status, provider_name, model
         except (ProviderTimeoutError, ProviderAuthError, ProviderRateLimitError) as e:
             cb.record_failure(provider_name, base_url, profile_name)
             errors.append(f"{provider_name}: {e}")
-            logger.error("provider_failed", provider=provider_name, error=str(e))
+            logger.warning(
+                "chain_fallback",
+                profile=profile_name,
+                provider=provider_name,
+                model=model,
+                attempt=i + 1,
+                chain_len=chain_len,
+                error=str(e),
+                next=profile_cfg["chain"][i + 1]["provider"] if i + 1 < chain_len else "none",
+            )
 
     raise AllProvidersFailedError(f"All providers failed for {profile_name}: {'; '.join(errors)}")
 

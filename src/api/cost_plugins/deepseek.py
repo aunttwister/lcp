@@ -137,6 +137,8 @@ class DeepSeekCostPlugin(CostPlugin):
         }
         self._balance_cache = result
         self._balance_cached_at = now
+        from ..logging_config import get_logger
+        get_logger("lcp.cost.deepseek").debug("balance_fetched", balance=result.get("balance"), currency=result.get("currency"))
         return result
 
     # ── Rich summary — balance + spent credits ─────────────────────────────

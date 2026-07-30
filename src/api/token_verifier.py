@@ -61,6 +61,15 @@ class TokenVerifier:
                 pct=round(prompt_diff_pct, 2),
             )
 
+        # Log periodic stats every 1000 checks
+        if self._checks % 1000 == 0:
+            logger.info(
+                "token_verifier_stats",
+                checks=self._checks,
+                warnings=self._warnings,
+                warning_rate=round(self._warnings / self._checks, 4),
+            )
+
         return result
 
     @property

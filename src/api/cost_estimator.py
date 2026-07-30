@@ -4,6 +4,10 @@ from typing import Optional
 
 import tiktoken
 
+from .logging_config import get_logger
+
+logger = get_logger("lcp.cost_estimator")
+
 
 # Approximate token pricing per 1M tokens (fallback if config unavailable)
 # Keys match the gateway.yaml pricing convention: cache_miss = input, output = output
@@ -94,4 +98,11 @@ def estimate_from_request(
 ) -> dict:
     """Full cost estimation from request parameters."""
     input_tokens = count_tokens(messages, tools)
-    return estimate_cost(model, input_tokens, max_tokens, pricing)
+    result = estimate_cost(model, input_tokens, max_tokens, pricing)
+    logger.debug(
+        "cost_estimated",
+        model=model,
+        input_tokens=input_tokens,
+        estimated_cost=result["estimated_total_cost"],
+    )
+    return result

@@ -10,6 +10,9 @@ from ..api.prompt_cache import get_prompt_cache
 from ..api.token_verifier import get_token_verifier
 from ..api.router import get_dynamic_router
 from ..api.circuit_breaker import get_circuit_breaker
+from ..api.logging_config import get_logger
+
+logger = get_logger("lcp.dashboard")
 
 # ── Load dashboard CSS from template file ────────────────────────────────
 from pathlib import Path
@@ -258,8 +261,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
                 pm_data["models"][r.model]["costs"][idx] = float(r.cost)
                 pm_data["models"][r.model]["lats"][idx] = float(r.avg_lat)
     except Exception:
-        import traceback as _tb
-        _tb.print_exc()
+        logger.error("dashboard_query_failed", exc_info=True)
         summary = type("S", (), {"total_cost": 0, "total_requests": 0, "cache_hits": 0, "cache_misses": 0, "prompt_tokens": 0, "output_tokens": 0})()
         summary_total_cost = 0.0
         summary_total_requests = 0

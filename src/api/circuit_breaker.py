@@ -48,24 +48,50 @@ class CircuitBreaker:
     def record_success(self, provider: str, base_url: str, profile: str) -> None:
         """Record a successful request — resets failure count."""
         h = self.get_health(provider, base_url, profile)
+        old_status = h["status"]
         h["status"] = "healthy"
         h["consecutive_failures"] = 0
         h["last_success"] = datetime.now(timezone.utc).isoformat()
         h["tripped_until"] = None
+        if old_status != "healthy":
+            logger.info(
+                "circuit_breaker_recovered",
+                provider=provider,
+                base_url=base_url,
+                profile=profile,
+                old_status=old_status,
+                new_status="healthy",
+            )
 
     def record_failure(self, provider: str, base_url: str, profile: str) -> None:
         """Record a failed request — may trip circuit breaker."""
         cb_cfg = self._config.circuit_breaker
         h = self.get_health(provider, base_url, profile)
+        old_status = h["status"]
         h["consecutive_failures"] += 1
         h["last_failure"] = datetime.now(timezone.utc).isoformat()
         n = h["consecutive_failures"]
+        new_status = old_status
         if n >= cb_cfg["failures_dead"]:
             h["status"] = "dead"
             h["tripped_until"] = time.time() + cb_cfg["dead_cooldown_seconds"]
+            new_status = "dead"
         elif n >= cb_cfg["failures_degraded"]:
             h["status"] = "degraded"
             h["tripped_until"] = time.time() + cb_cfg["degraded_cooldown_seconds"]
+            new_status = "degraded"
+        if new_status != old_status:
+            level = "error" if new_status == "dead" else "warning"
+            logger_method = logger.error if level == "error" else logger.warning
+            logger_method(
+                "circuit_breaker_tripped",
+                provider=provider,
+                base_url=base_url,
+                profile=profile,
+                old_status=old_status,
+                new_status=new_status,
+                consecutive_failures=n,
+            )
 
     def get_all_health(self) -> dict:
         """Return all tracked provider health entries keyed by (provider, url, profile)."""

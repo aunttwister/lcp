@@ -14,6 +14,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+from .logging_config import get_logger
+
+logger = get_logger("lcp.models")
+
 
 class Base(DeclarativeBase):
     pass

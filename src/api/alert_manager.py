@@ -109,6 +109,8 @@ class AlertManager:
             now = time.time()
             last = self._last_fire.get(dedup_key, 0)
             if now - last < self._cooldown_seconds:
+                logger.debug("alert_suppressed", rule=rule, dedup_key=dedup_key,
+                             cooldown_remaining=int(self._cooldown_seconds - (now - last)))
                 return None
             self._last_fire[dedup_key] = now
 
@@ -207,6 +209,12 @@ class AlertManager:
         total = sum(c for _, c in self._error_counts)
         threshold = self._config["rules"]["error_spike"].get("threshold", 10)
         if total >= threshold:
+            logger.warning(
+                "error_spike_detected",
+                error_count=total,
+                threshold=threshold,
+                window_minutes=window // 60,
+            )
             self.fire(
                 rule="error_spike",
                 severity="warning",

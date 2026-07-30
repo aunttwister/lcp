@@ -45,8 +45,18 @@ class DynamicRouter:
                               max_tokens: int = 1024) -> str:
         """Get recommended model based on request complexity."""
         if self.enabled and self.should_use_flash(messages, tools, max_tokens):
-            return self.MODEL_MAP["flash"]
-        return self.MODEL_MAP["pro"]
+            model = self.MODEL_MAP["flash"]
+        else:
+            model = self.MODEL_MAP["pro"]
+        logger.debug(
+            "routing_decision",
+            model=model,
+            enabled=self.enabled,
+            tokens=count_tokens(messages, tools),
+            tools=len(tools) if tools else 0,
+            max_tokens=max_tokens,
+        )
+        return model
 
 
 # Global instance — disabled by default

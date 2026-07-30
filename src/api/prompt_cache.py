@@ -40,12 +40,15 @@ class PromptCache:
 
         if entry is None:
             self._misses += 1
+            logger.debug("cache_miss", key=key[:12], entries=len(self._cache),
+                         hits=self._hits, misses=self._misses)
             return None
 
         expires, response = entry
         if time.time() > expires:
             del self._cache[key]
             self._misses += 1
+            logger.debug("cache_expired", key=key[:12], entries=len(self._cache))
             return None
 
         self._hits += 1
@@ -58,9 +61,12 @@ class PromptCache:
         if len(self._cache) >= self._max_entries:
             oldest_key = min(self._cache, key=lambda k: self._cache[k][0])
             del self._cache[oldest_key]
+            logger.debug("cache_evicted", key=oldest_key[:12], entries=len(self._cache))
 
         key = self._make_key(profile, model, body)
         self._cache[key] = (time.time() + self._ttl, response)
+        logger.debug("cache_set", key=key[:12], entries=len(self._cache),
+                     max_entries=self._max_entries)
 
     def clear(self) -> None:
         """Clear all cache entries."""

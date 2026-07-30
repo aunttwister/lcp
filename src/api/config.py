@@ -8,7 +8,9 @@ from typing import Any
 import structlog
 import yaml
 
-logger = structlog.get_logger(__name__)
+from .logging_config import get_logger
+
+logger = get_logger("lcp.config")
 
 
 class ConfigError(Exception):

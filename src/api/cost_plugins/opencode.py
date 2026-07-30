@@ -218,6 +218,8 @@ class OpenCodeCostPlugin(CostPlugin):
         for d in daily.values():
             d["cost"] = round(d["cost"], 8)
 
+        from ..logging_config import get_logger
+        get_logger("lcp.cost.opencode").debug("usage_fetched", days=len(daily))
         return list(daily.values())
 
     @staticmethod

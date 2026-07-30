@@ -119,6 +119,8 @@ class LlamaCppCostPlugin(CostPlugin):
                         "cost": 0.0,
                         "request_count": entry["request_count"],
                     })
+        from ..logging_config import get_logger
+        get_logger("lcp.cost.llamacpp").debug("usage_fetched", days=len(result))
         return result
 
     def fetch_balance(self) -> Optional[dict]:
