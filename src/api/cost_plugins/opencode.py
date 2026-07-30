@@ -54,8 +54,26 @@ def _default_db_path() -> str:
 class OpenCodeCostPlugin(CostPlugin):
     """Cost tracking for OpenCode — reads local SQLite store."""
 
+    _warned_missing_db: set[str] = set()
+
     def __init__(self, db_path: Optional[str] = None) -> None:
         self._db_path = db_path or _default_db_path()
+
+    def _check_db_available(self) -> bool:
+        """Return True if the OpenCode SQLite DB exists, log once if missing."""
+        if os.path.isfile(self._db_path):
+            return True
+        if self._db_path not in self._warned_missing_db:
+            self._warned_missing_db.add(self._db_path)
+            from ..logging_config import get_logger
+            get_logger("lcp.cost.opencode").warning(
+                "opencode_db_missing",
+                path=self._db_path,
+                hint="OpenCode plugin data is unavailable — "
+                     "the gateway falls back to its own request database. "
+                     "Install OpenCode.app on this host or copy opencode.db to this path.",
+            )
+        return False
 
     # ── Identity ───────────────────────────────────────────────────────────
 
@@ -118,12 +136,11 @@ class OpenCodeCostPlugin(CostPlugin):
 
         Returns daily aggregates for assistant messages that have token data.
         """
-        db_path = self._db_path
-        if not os.path.isfile(db_path):
+        if not self._check_db_available():
             return []
 
         try:
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(self._db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -153,7 +170,7 @@ class OpenCodeCostPlugin(CostPlugin):
         except (sqlite3.Error, OSError) as exc:
             from ..logging_config import get_logger
             get_logger("lcp.cost.opencode").warning(
-                "db_read_failed", path=db_path, error=str(exc)
+                "db_read_failed", path=self._db_path, error=str(exc)
             )
             return []
 
@@ -246,12 +263,11 @@ class OpenCodeCostPlugin(CostPlugin):
 
     def fetch_summary(self) -> Optional[dict]:
         """Return daily, weekly, and monthly usage aggregates from OpenCode DB."""
-        db_path = self._db_path
-        if not os.path.isfile(db_path):
+        if not self._check_db_available():
             return None
 
         try:
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(self._db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -311,7 +327,7 @@ class OpenCodeCostPlugin(CostPlugin):
         except (sqlite3.Error, OSError) as exc:
             from ..logging_config import get_logger
             get_logger("lcp.cost.opencode").warning(
-                "summary_failed", path=db_path, error=str(exc)
+                "summary_failed", path=self._db_path, error=str(exc)
             )
             return None
 
