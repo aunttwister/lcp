@@ -2084,6 +2084,12 @@ function loadPluginStatus() {{
               if (wkResetHr > 0) w += ' \\u00b7 resets in ' + wkResetHr + 'h';
               parts.push(w);
             }}
+            if (sub.monthly_pct != null) {{
+              var moResetDay = Math.floor(sub.monthly_reset_sec / 86400);
+              var m = 'month: ' + sub.monthly_pct.toFixed(0) + '% used';
+              if (moResetDay > 0) m += ' \\u00b7 resets in ' + moResetDay + 'd';
+              parts.push(m);
+            }}
             detailLine += parts.join('<br>');
             detailLine += '</span>';
           }}
@@ -2345,9 +2351,15 @@ function buildPage(providers) {{
                     var wReset = resetHr > 0 ? ('<div class="sub">resets in ' + resetHr + 'h</div>') : '';
                     weeklyCard = '<div class="stat-card"><div class="label">Weekly Usage</div><div class="value">' + sub.weekly_pct.toFixed(0) + '% used</div>' + wReset + '</div>';
                 }}
+                var monthlyCard = '';
+                if (sub.monthly_pct != null) {{
+                    var moResetDay = Math.floor(sub.monthly_reset_sec / 86400);
+                    var moReset = moResetDay > 0 ? ('<div class="sub">resets in ' + moResetDay + 'd</div>') : '';
+                    monthlyCard = '<div class="stat-card"><div class="label">Monthly Usage</div><div class="value">' + sub.monthly_pct.toFixed(0) + '% used</div>' + moReset + '</div>';
+                }}
                 panelsHtml += '<div class="stat-cards">' +
-                    rollingCard + weeklyCard +
-                    '<div class="stat-card"><div class="label">Monthly Usage</div><div class="value">' + formatTokens(monthly.tokens) + ' tok</div><div class="sub">$' + monthly.cost.toFixed(4) + ' · ' + monthly.requests + ' requests</div></div>' +
+                    rollingCard + weeklyCard + monthlyCard +
+                    '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + monthly.cost.toFixed(4) + '</div><div class="sub">' + monthly.requests + ' requests</div></div>' +
                     '<div class="stat-card"><div class="label">Rolling Weekly</div><div class="value">' + formatTokens(weekly.tokens) + ' tok</div><div class="sub">$' + weekly.cost.toFixed(4) + ' · ' + weekly.requests + ' requests</div></div>' +
                     '<div class="stat-card"><div class="label">Today</div><div class="value">' + formatTokens(daily.tokens) + ' tok</div><div class="sub">$' + daily.cost.toFixed(4) + ' · ' + daily.requests + ' requests</div></div>' +
                     '</div>';

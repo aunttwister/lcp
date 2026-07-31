@@ -545,6 +545,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         "    if (ocSub) {\n"
         "      if (ocSub.rolling_pct != null) hdrLabel += ' \\u00b7 5h ' + ocSub.rolling_pct.toFixed(0) + '%';\n"
         "      if (ocSub.weekly_pct != null) hdrLabel += ' \\u00b7 wk ' + ocSub.weekly_pct.toFixed(0) + '%';\n"
+        "      if (ocSub.monthly_pct != null) hdrLabel += ' \\u00b7 mo ' + ocSub.monthly_pct.toFixed(0) + '%';\n"
         "    }\n"
         "  } else if (latestProvider === 'llamacpp') {\n"
         "    var mt = (monthly[latestProvider] || {}).tokens || 0;\n"
@@ -1673,6 +1674,12 @@ def render_dashboard(config, engine, headers, profile_filter=None):
                     if (wkResetHr > 0) w += ' \\u00b7 resets in ' + wkResetHr + 'h';
                     parts.push(w);
                   }}
+                  if (sub.monthly_pct != null) {{
+                    var moResetDay = Math.floor(sub.monthly_reset_sec / 86400);
+                    var m = 'month: ' + sub.monthly_pct.toFixed(0) + '% used';
+                    if (moResetDay > 0) m += ' \\u00b7 resets in ' + moResetDay + 'd';
+                    parts.push(m);
+                  }}
                   detailLine += parts.join('<br>');
                   detailLine += '</span>';
                 }}
@@ -1727,8 +1734,13 @@ def render_dashboard(config, engine, headers, profile_filter=None):
             parts.push('Week: ' + ocSub.weekly_pct.toFixed(0) + '%');
             if (resetHr > 0) parts[parts.length-1] += ' (reset ' + resetHr + 'h)';
           }}
+          if (ocSub.monthly_pct !== undefined && ocSub.monthly_pct !== null) {{
+            var resetDay = Math.floor(ocSub.monthly_reset_sec / 86400);
+            parts.push('Month: ' + ocSub.monthly_pct.toFixed(0) + '%');
+            if (resetDay > 0) parts[parts.length-1] += ' (reset ' + resetDay + 'd)';
+          }}
           subValue.textContent = parts.join(' · ') || '--';
-          var pctVal = ocSub.rolling_pct || ocSub.weekly_pct || 0;
+          var pctVal = ocSub.rolling_pct || ocSub.weekly_pct || ocSub.monthly_pct || 0;
           var cls = pctVal > 90 ? 'warn' : 'good';
           subValue.className = 'value ' + cls;
           if (ocSub.workspace_id) {{
