@@ -312,6 +312,11 @@ def init_plugins(extra_plugins: Optional[list[CostPlugin]] = None,
             _registry.register(DeepSeekCostPlugin())
             _registry.register(OpenCodeCostPlugin(engine=engine))
             _registry.register(LlamaCppCostPlugin())
+        elif engine is not None:
+            # Inject engine into already-registered plugins that need it
+            for _name, _plugin in _registry._plugins.items():
+                if hasattr(_plugin, "set_engine"):
+                    _plugin.set_engine(engine)
         return _registry
 
     _registry = PluginRegistry()

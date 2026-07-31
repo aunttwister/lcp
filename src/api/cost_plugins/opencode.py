@@ -18,7 +18,7 @@ from typing import Any, Optional
 from sqlalchemy import func
 
 from ..logging_config import get_logger
-from .base import CostPlugin
+from .base import CostPlugin, get_registry
 
 logger = get_logger("lcp.cost.opencode")
 
@@ -259,3 +259,8 @@ class OpenCodeCostPlugin(CostPlugin):
             logger.warning("subscription_fetch_failed", error=str(exc))
             return None
 
+
+
+# ── Auto-register ──────────────────────────────────────────────────────────
+_registry = get_registry()
+_registry.register(OpenCodeCostPlugin())
