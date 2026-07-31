@@ -1182,7 +1182,7 @@ class LCPHandler(BaseHTTPRequestHandler):
                 }
 
                 # Totals
-                total_cost = sum(d["cost"] for d in daily)
+                total_cost = sum(d["cost"] for  d in daily)
                 total_requests = sum(d["requests"] for d in daily)
 
             self._send_json({
@@ -2174,7 +2174,7 @@ def _render_usage_page(config) -> str:
 .usage-bar-item .bar-fill.yellow {{ background: linear-gradient(90deg, #eab308, #eab308); }}
 .usage-bar-item .bar-fill.green {{ background: linear-gradient(90deg, #22c55e, #22c55e); }}
 .usage-bar-item .bar-fill.red {{ background: linear-gradient(90deg, #ef4444, #ef4444); }}
-.usage-bar-item .bar-sub {{ font-size: 0.65rem; color: hsl(var(--muted-foreground)); }}
+.usage-bar-item .bar-sub {{ display: flex; justify-content: space-between; font-size: 0.65rem; color: hsl(var(--muted-foreground)); }}
 .progress-green {{ background: hsl(var(--green-fg)); }}
 .tab-bar {{ display: flex; gap: 0; margin-bottom: 1rem; border-bottom: 2px solid hsl(var(--card-border)); }}
 .tab-btn {{ padding: 0.5rem 1rem; font-size: 0.8rem; background: none; border: none; color: hsl(var(--muted-foreground)); border-bottom: 2px solid transparent; margin-bottom: -2px; cursor: pointer; transition: color 0.2s, border-color 0.2s; }}
@@ -2352,21 +2352,26 @@ function buildPage(providers) {{
                 // Subscription usage from OpenCode web API - progress bars
                 var sub = subscriptions['opencode'] || {{}};
                 function barColor(pct) {{ return pct >= 90 ? 'red' : pct >= 70 ? 'orange' : pct >= 40 ? 'yellow' : 'green'; }}
+                function fmtCountdown(sec) {{
+                    if (!sec || sec <= 0) return '';
+                    var d = Math.floor(sec / 86400);
+                    var h = Math.floor((sec % 86400) / 3600);
+                    var m = Math.floor((sec % 3600) / 60);
+                    var parts = [];
+                    if (d > 0) parts.push(d + 'd');
+                    if (h > 0) parts.push(h + 'h');
+                    if (m > 0 || parts.length === 0) parts.push(m + 'm');
+                    return parts.join(' ');
+                }}
                 var barsHtml = '';
                 if (sub.rolling_pct != null) {{
-                    var resetMin = Math.floor(sub.rolling_reset_sec / 60);
-                    var rReset = resetMin > 0 ? ('resets in ' + resetMin + 'm') : '';
-                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">5h Rolling</span><span class="bar-pct">' + sub.rolling_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.rolling_pct) + '" style="width:' + sub.rolling_pct + '%"></div></div><div class="bar-sub">' + rReset + '</div></div>';
+                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">5h Rolling</span><span class="bar-pct">' + sub.rolling_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.rolling_pct) + '" style="width:' + sub.rolling_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.rolling_reset_sec) + '</span><span>' + (sub.rolling_reset_at || '') + '</span></div></div>';
                 }}
                 if (sub.weekly_pct != null) {{
-                    var resetHr = Math.floor(sub.weekly_reset_sec / 3600);
-                    var wReset = resetHr > 0 ? ('resets in ' + resetHr + 'h') : '';
-                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Weekly</span><span class="bar-pct">' + sub.weekly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.weekly_pct) + '" style="width:' + sub.weekly_pct + '%"></div></div><div class="bar-sub">' + wReset + '</div></div>';
+                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Weekly</span><span class="bar-pct">' + sub.weekly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.weekly_pct) + '" style="width:' + sub.weekly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.weekly_reset_sec) + '</span><span>' + (sub.weekly_reset_at || '') + '</span></div></div>';
                 }}
                 if (sub.monthly_pct != null) {{
-                    var moResetDay = Math.floor(sub.monthly_reset_sec / 86400);
-                    var moReset = moResetDay > 0 ? ('resets in ' + moResetDay + 'd') : '';
-                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Monthly</span><span class="bar-pct">' + sub.monthly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.monthly_pct) + '" style="width:' + sub.monthly_pct + '%"></div></div><div class="bar-sub">' + moReset + '</div></div>';
+                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Monthly</span><span class="bar-pct">' + sub.monthly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.monthly_pct) + '" style="width:' + sub.monthly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.monthly_reset_sec) + '</span><span>' + (sub.monthly_reset_at || '') + '</span></div></div>';
                 }}
                 if (barsHtml) {{
                     panelsHtml += '<div class="usage-bars">' + barsHtml + '</div>';

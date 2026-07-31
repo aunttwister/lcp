@@ -20,6 +20,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
@@ -229,6 +230,11 @@ def fetch_subscription_dict(cookie: Optional[str]) -> Optional[dict]:
     snap = fetch_subscription(cookie)
     if snap is None:
         return None
+    now = datetime.now(timezone.utc)
+    def _reset_at(sec: int) -> str:
+        if sec:
+            return (now + timedelta(seconds=sec)).strftime("%b %d, %H:%M")
+        return ""
     return {
         "rolling_pct": snap.rolling_pct,
         "weekly_pct": snap.weekly_pct,
@@ -236,5 +242,8 @@ def fetch_subscription_dict(cookie: Optional[str]) -> Optional[dict]:
         "rolling_reset_sec": snap.rolling_reset_sec,
         "weekly_reset_sec": snap.weekly_reset_sec,
         "monthly_reset_sec": snap.monthly_reset_sec,
+        "rolling_reset_at": _reset_at(snap.rolling_reset_sec),
+        "weekly_reset_at": _reset_at(snap.weekly_reset_sec),
+        "monthly_reset_at": _reset_at(snap.monthly_reset_sec),
         "workspace_id": snap.workspace_id,
     }
