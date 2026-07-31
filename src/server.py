@@ -2163,6 +2163,18 @@ def _render_usage_page(config) -> str:
 .progress-bar {{ height: 6px; background: hsl(var(--secondary)); border-radius: 3px; overflow: hidden; margin-top: 0.35rem; }}
 .progress-fill {{ height: 100%; border-radius: 3px; transition: width 0.5s; }}
 .progress-blue {{ background: hsl(var(--blue-fg, 217 91% 60%)); }}
+.usage-bars {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }}
+.usage-bar-item {{ background: hsl(var(--card)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); padding: 0.85rem 1rem; }}
+.usage-bar-item .bar-header {{ display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.4rem; }}
+.usage-bar-item .bar-label {{ font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--muted-foreground)); }}
+.usage-bar-item .bar-pct {{ font-size: 1.1rem; font-weight: 700; }}
+.usage-bar-item .bar-track {{ height: 8px; background: hsl(var(--secondary)); border-radius: 4px; overflow: hidden; margin-bottom: 0.35rem; }}
+.usage-bar-item .bar-fill {{ height: 100%; border-radius: 4px; transition: width 0.6s ease; }}
+.usage-bar-item .bar-fill.orange {{ background: linear-gradient(90deg, #f97316, #f97316); }}
+.usage-bar-item .bar-fill.yellow {{ background: linear-gradient(90deg, #eab308, #eab308); }}
+.usage-bar-item .bar-fill.green {{ background: linear-gradient(90deg, #22c55e, #22c55e); }}
+.usage-bar-item .bar-fill.red {{ background: linear-gradient(90deg, #ef4444, #ef4444); }}
+.usage-bar-item .bar-sub {{ font-size: 0.65rem; color: hsl(var(--muted-foreground)); }}
 .progress-green {{ background: hsl(var(--green-fg)); }}
 .tab-bar {{ display: flex; gap: 0; margin-bottom: 1rem; border-bottom: 2px solid hsl(var(--card-border)); }}
 .tab-btn {{ padding: 0.5rem 1rem; font-size: 0.8rem; background: none; border: none; color: hsl(var(--muted-foreground)); border-bottom: 2px solid transparent; margin-bottom: -2px; cursor: pointer; transition: color 0.2s, border-color 0.2s; }}
@@ -2337,28 +2349,29 @@ function buildPage(providers) {{
                     monthly.requests = gwMonthly.requests || 0;
                     monthly.cost = (monthly.cost || 0) || (gwMonthly.cost || 0);
                 }}
-                // Subscription usage from OpenCode web API
+                // Subscription usage from OpenCode web API - progress bars
                 var sub = subscriptions['opencode'] || {{}};
-                var rollingCard = '';
-                var weeklyCard = '';
+                function barColor(pct) {{ return pct >= 90 ? 'red' : pct >= 70 ? 'orange' : pct >= 40 ? 'yellow' : 'green'; }}
+                var barsHtml = '';
                 if (sub.rolling_pct != null) {{
                     var resetMin = Math.floor(sub.rolling_reset_sec / 60);
-                    var rReset = resetMin > 0 ? ('<div class="sub">resets in ' + resetMin + 'm</div>') : '';
-                    rollingCard = '<div class="stat-card"><div class="label">5h Rolling Usage</div><div class="value">' + sub.rolling_pct.toFixed(0) + '% used</div>' + rReset + '</div>';
+                    var rReset = resetMin > 0 ? ('resets in ' + resetMin + 'm') : '';
+                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">5h Rolling</span><span class="bar-pct">' + sub.rolling_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.rolling_pct) + '" style="width:' + sub.rolling_pct + '%"></div></div><div class="bar-sub">' + rReset + '</div></div>';
                 }}
                 if (sub.weekly_pct != null) {{
                     var resetHr = Math.floor(sub.weekly_reset_sec / 3600);
-                    var wReset = resetHr > 0 ? ('<div class="sub">resets in ' + resetHr + 'h</div>') : '';
-                    weeklyCard = '<div class="stat-card"><div class="label">Weekly Usage</div><div class="value">' + sub.weekly_pct.toFixed(0) + '% used</div>' + wReset + '</div>';
+                    var wReset = resetHr > 0 ? ('resets in ' + resetHr + 'h') : '';
+                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Weekly</span><span class="bar-pct">' + sub.weekly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.weekly_pct) + '" style="width:' + sub.weekly_pct + '%"></div></div><div class="bar-sub">' + wReset + '</div></div>';
                 }}
-                var monthlyCard = '';
                 if (sub.monthly_pct != null) {{
                     var moResetDay = Math.floor(sub.monthly_reset_sec / 86400);
-                    var moReset = moResetDay > 0 ? ('<div class="sub">resets in ' + moResetDay + 'd</div>') : '';
-                    monthlyCard = '<div class="stat-card"><div class="label">Monthly Usage</div><div class="value">' + sub.monthly_pct.toFixed(0) + '% used</div>' + moReset + '</div>';
+                    var moReset = moResetDay > 0 ? ('resets in ' + moResetDay + 'd') : '';
+                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Monthly</span><span class="bar-pct">' + sub.monthly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.monthly_pct) + '" style="width:' + sub.monthly_pct + '%"></div></div><div class="bar-sub">' + moReset + '</div></div>';
+                }}
+                if (barsHtml) {{
+                    panelsHtml += '<div class="usage-bars">' + barsHtml + '</div>';
                 }}
                 panelsHtml += '<div class="stat-cards">' +
-                    rollingCard + weeklyCard + monthlyCard +
                     '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + monthly.cost.toFixed(4) + '</div><div class="sub">' + monthly.requests + ' requests</div></div>' +
                     '<div class="stat-card"><div class="label">Rolling Weekly</div><div class="value">' + formatTokens(weekly.tokens) + ' tok</div><div class="sub">$' + weekly.cost.toFixed(4) + ' · ' + weekly.requests + ' requests</div></div>' +
                     '<div class="stat-card"><div class="label">Today</div><div class="value">' + formatTokens(daily.tokens) + ' tok</div><div class="sub">$' + daily.cost.toFixed(4) + ' · ' + daily.requests + ' requests</div></div>' +
