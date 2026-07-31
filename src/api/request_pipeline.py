@@ -373,8 +373,12 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
         if "messages" in body:
             body["messages"] = sanitize_messages(body["messages"])
 
-        # Add API key env to step config
-        step_with_key = {**step, "api_key_env": config.providers[provider_name]["api_key_env"]}
+        # Add API key env and base_url to step config
+        step_with_key = {
+            **step,
+            "api_key_env": config.providers[provider_name]["api_key_env"],
+            "base_url": base_url,
+        }
 
         try:
             t0 = time.time()

@@ -1,18 +1,22 @@
 services:
-  lcp-dev:
+  lcp:
     build: .
-    container_name: lcp-dev
+    container_name: lcp
     restart: unless-stopped
     ports:
-      - "8735:8734"
+      - "8734:8734"
     volumes:
-      - lcp_data:/app/data
+      - llm-cost-tracker_cost_data:/app/data
       - ./config/gateway.yaml:/app/config/gateway.yaml:ro
     env_file:
       - .env
     environment:
       - COST_DB=/app/data/costs.db
       - LISTEN_PORT=8734
+      - OPENCODE_API_KEY=${OPENCODE_API_KEY}
+      - OPENCODE_COOKIE=${OPENCODE_COOKIE}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
 
 volumes:
-  lcp_data:
+  llm-cost-tracker_cost_data:
+    external: true
