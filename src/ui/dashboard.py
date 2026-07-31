@@ -539,11 +539,13 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         "    hdrLabel += ' \\u00b7 ' + cur + ' ' + sum.balance.available.toFixed(2) + ' available';\n"
         "  } else if (latestProvider === 'opencode') {\n"
         "    var om = (sum && sum.monthly) ? sum.monthly : (monthly[latestProvider] || {});\n"
-        "    var now = new Date();\n"
-        "    var moDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();\n"
-        "    hdrLabel += ' \\u00b7 day ' + now.getDate() + '/' + moDays;\n"
-        "    if (om.tokens) hdrLabel += ' \\u00b7 ' + formatTokens(om.tokens) + ' tok';\n"
+        "    hdrLabel += ' \\u00b7 ' + formatTokens(om.tokens || 0) + ' tok';\n"
         "    if (om.cost) hdrLabel += ' \\u00b7 $' + om.cost.toFixed(4);\n"
+        "    var ocSub = subscriptions['opencode'];\n"
+        "    if (ocSub) {\n"
+        "      if (ocSub.rolling_pct != null) hdrLabel += ' \\u00b7 5h ' + ocSub.rolling_pct.toFixed(0) + '%';\n"
+        "      if (ocSub.weekly_pct != null) hdrLabel += ' \\u00b7 wk ' + ocSub.weekly_pct.toFixed(0) + '%';\n"
+        "    }\n"
         "  } else if (latestProvider === 'llamacpp') {\n"
         "    var mt = (monthly[latestProvider] || {}).tokens || 0;\n"
         "    hdrLabel += ' \\u00b7 ' + formatTokens(mt) + ' tokens';\n"
@@ -1651,12 +1653,29 @@ def render_dashboard(config, engine, headers, profile_filter=None):
               var detailLine = '';
               if (prov === 'opencode') {{
                 var om = (sum && sum.monthly) ? sum.monthly : (monthly[prov] || {{}});
-                var now = new Date();
-                var moDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
                 detailLine = '<span class="sb-provider-detail">' +
-                  'day ' + now.getDate() + '/' + moDays;
-                if (om.tokens) detailLine += ' \\u00b7 ' + formatTokens(om.tokens) + ' tok';
+                  'month: ' + formatTokens(om.tokens || totalTokens) + ' tok';
                 if (om.cost) detailLine += ' \\u00b7 $' + om.cost.toFixed(4);
+                // Subscription data from OpenCode web API
+                var sub = subscriptions[prov];
+                if (sub) {{
+                  detailLine += '<br><span class="sb-sub-detail">';
+                  var parts = [];
+                  if (sub.rolling_pct != null) {{
+                    var resetMin = Math.floor(sub.rolling_reset_sec / 60);
+                    var r = '5h: ' + sub.rolling_pct.toFixed(0) + '% used';
+                    if (resetMin > 0) r += ' \\u00b7 resets in ' + resetMin + 'm';
+                    parts.push(r);
+                  }}
+                  if (sub.weekly_pct != null) {{
+                    var wkResetHr = Math.floor(sub.weekly_reset_sec / 3600);
+                    var w = 'week: ' + sub.weekly_pct.toFixed(0) + '% used';
+                    if (wkResetHr > 0) w += ' \\u00b7 resets in ' + wkResetHr + 'h';
+                    parts.push(w);
+                  }}
+                  detailLine += parts.join('<br>');
+                  detailLine += '</span>';
+                }}
                 detailLine += '</span>';
               }} else if (prov === 'deepseek' && sum && sum.balance) {{
                 var cur = sum.balance.currency || 'USD';

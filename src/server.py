@@ -2064,27 +2064,27 @@ function loadPluginStatus() {{
         var detailLine = '';
         if (prov === 'opencode') {{
           var om = (sum && sum.monthly) ? sum.monthly : (monthly[prov] || {{}});
-          var now = new Date();
-          var moDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
           detailLine = '<span class="sb-provider-detail">' +
-            'day ' + now.getDate() + '/' + moDays;
-          if (om.tokens) detailLine += ' \\u00b7 ' + formatTokens(om.tokens) + ' tok';
+            'month: ' + formatTokens(om.tokens || totalTokens) + ' tok';
           if (om.cost) detailLine += ' \\u00b7 $' + om.cost.toFixed(4);
           // Subscription data from OpenCode web API
           var sub = subscriptions[prov];
           if (sub) {{
             detailLine += '<br><span class="sb-sub-detail">';
-            if (sub.rolling_pct !== undefined && sub.rolling_pct !== null) {{
+            var parts = [];
+            if (sub.rolling_pct != null) {{
               var resetMin = Math.floor(sub.rolling_reset_sec / 60);
-              detailLine += '5h: ' + sub.rolling_pct.toFixed(0) + '% used';
-              if (resetMin > 0) detailLine += ' \\u00b7 resets in ' + resetMin + 'm';
+              var r = '5h: ' + sub.rolling_pct.toFixed(0) + '% used';
+              if (resetMin > 0) r += ' \\u00b7 resets in ' + resetMin + 'm';
+              parts.push(r);
             }}
-            if (sub.weekly_pct !== undefined && sub.weekly_pct !== null) {{
-              if (sub.rolling_pct !== undefined) detailLine += ' \\u00b7 ';
+            if (sub.weekly_pct != null) {{
               var wkResetHr = Math.floor(sub.weekly_reset_sec / 3600);
-              detailLine += 'Week: ' + sub.weekly_pct.toFixed(0) + '% used';
-              if (wkResetHr > 0) detailLine += ' \\u00b7 resets in ' + wkResetHr + 'h';
+              var w = 'week: ' + sub.weekly_pct.toFixed(0) + '% used';
+              if (wkResetHr > 0) w += ' \\u00b7 resets in ' + wkResetHr + 'h';
+              parts.push(w);
             }}
+            detailLine += parts.join('<br>');
             detailLine += '</span>';
           }}
           detailLine += '</span>';
@@ -2273,13 +2273,21 @@ function loadSummaries() {{
         .then(function(d) {{ return d.plugin_summaries || {{}}; }});
 }}
 
+function loadSubscriptions() {{
+    return fetch('/api/cost-plugins/subscriptions')
+        .then(function(r) {{ return r.json(); }})
+        .then(function(d) {{ return d.plugin_subscriptions || {{}}; }});
+}}
+
 function buildPage(providers) {{
     return Promise.all([
         Promise.all(providers.map(loadStats)),
-        loadSummaries()
+        loadSummaries(),
+        loadSubscriptions()
     ]).then(function(results) {{
         var statsList = results[0];
         var summaries = results[1];
+        var subscriptions = results[2];
 
         // ── Tab bar ──
         var tabBar = document.getElementById('providerTabs');
@@ -2323,11 +2331,22 @@ function buildPage(providers) {{
                     monthly.requests = gwMonthly.requests || 0;
                     monthly.cost = (monthly.cost || 0) || (gwMonthly.cost || 0);
                 }}
-                var now = new Date();
-                var moDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-                var moPct = monthPct();
+                // Subscription usage from OpenCode web API
+                var sub = subscriptions['opencode'] || {{}};
+                var rollingCard = '';
+                var weeklyCard = '';
+                if (sub.rolling_pct != null) {{
+                    var resetMin = Math.floor(sub.rolling_reset_sec / 60);
+                    var rReset = resetMin > 0 ? ('<div class="sub">resets in ' + resetMin + 'm</div>') : '';
+                    rollingCard = '<div class="stat-card"><div class="label">5h Rolling Usage</div><div class="value">' + sub.rolling_pct.toFixed(0) + '% used</div>' + rReset + '</div>';
+                }}
+                if (sub.weekly_pct != null) {{
+                    var resetHr = Math.floor(sub.weekly_reset_sec / 3600);
+                    var wReset = resetHr > 0 ? ('<div class="sub">resets in ' + resetHr + 'h</div>') : '';
+                    weeklyCard = '<div class="stat-card"><div class="label">Weekly Usage</div><div class="value">' + sub.weekly_pct.toFixed(0) + '% used</div>' + wReset + '</div>';
+                }}
                 panelsHtml += '<div class="stat-cards">' +
-                    '<div class="stat-card"><div class="label">Month Elapsed</div><div class="value">day ' + now.getDate() + '/' + moDays + '</div><div class="sub"><div class="progress-bar"><div class="progress-fill progress-blue" style="width:' + moPct.toFixed(0) + '%"></div></div></div></div>' +
+                    rollingCard + weeklyCard +
                     '<div class="stat-card"><div class="label">Monthly Usage</div><div class="value">' + formatTokens(monthly.tokens) + ' tok</div><div class="sub">$' + monthly.cost.toFixed(4) + ' · ' + monthly.requests + ' requests</div></div>' +
                     '<div class="stat-card"><div class="label">Rolling Weekly</div><div class="value">' + formatTokens(weekly.tokens) + ' tok</div><div class="sub">$' + weekly.cost.toFixed(4) + ' · ' + weekly.requests + ' requests</div></div>' +
                     '<div class="stat-card"><div class="label">Today</div><div class="value">' + formatTokens(daily.tokens) + ' tok</div><div class="sub">$' + daily.cost.toFixed(4) + ' · ' + daily.requests + ' requests</div></div>' +
