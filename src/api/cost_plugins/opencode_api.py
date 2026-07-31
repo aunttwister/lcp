@@ -85,7 +85,7 @@ def _is_authenticated(raw: str) -> bool:
 
 # ── SSR parsing ────────────────────────────────────────────────────────────
 
-_WRK_RE = re.compile(r'id\s*:\s*"(wrk_[a-zA-Z0-9]+)"', re.IGNORECASE)
+_WRK_RE = re.compile(r'wrk_[a-zA-Z0-9]+')
 
 # Match the full lite.subscription.get data in the $R SSR block.
 # Format: lite.subscription.get["wrk_..."]...rollingUsage:$R[N]={status:"ok",...}
@@ -158,6 +158,10 @@ def _parse_ssr_subscription(text: str) -> Optional[dict]:
 def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
     """Fetch OpenCode subscription usage from the /go page SSR data.
 
+    ``https://opencode.ai/go`` works without a workspace ID — it resolves
+    to the default workspace and exposes the ID in the SSR block.  A second
+    request to ``/workspace/{wid}/go`` fetches the full subscription data.
+
     Returns a ``SubscriptionSnapshot`` or ``None`` when the cookie is
     missing, invalid, or no subscription data is found.
     """
@@ -167,14 +171,12 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
 
     cookie = cookie.strip()
     headers = _base_headers(cookie)
+    workspace_id = os.environ.get("OPENCODE_WORKSPACE_ID", "").strip() or None
 
-    # ── Step 1: discover workspace ID ──────────────────────────────────
-    # Prefer explicit env var; fall back to scraping the landing page.
-    workspace_id: Optional[str] = os.environ.get("OPENCODE_WORKSPACE_ID", "").strip() or None
-
+    # ── Step 1: discover workspace ID from /go (no ID in URL) ──────────
     if not workspace_id:
         try:
-            raw = _http_get(_OPENCODE_BASE, headers)
+            raw = _http_get(f"{_OPENCODE_BASE}/go", headers)
             if not _is_authenticated(raw):
                 logger.warning("opencode_not_authenticated")
                 return None
@@ -182,18 +184,18 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
             if ids:
                 workspace_id = ids[0]
         except (URLError, OSError) as exc:
-            logger.warning("opencode_dashboard_fetch_failed", error=str(exc))
+            logger.warning("opencode_go_discovery_failed", error=str(exc))
             return None
 
     if not workspace_id:
         logger.warning("opencode_no_workspace_found")
         return None
 
-    # ── Step 2: fetch /go page and parse SSR subscription data ──────────
+    # ── Step 2: fetch /workspace/{wid}/go for subscription data ────────
     try:
+        go_url = f"{_OPENCODE_BASE}/workspace/{workspace_id}/go"
         headers["Referer"] = f"{_OPENCODE_BASE}/workspace/{workspace_id}"
-        url = f"{_OPENCODE_BASE}/workspace/{workspace_id}/go"
-        raw = _http_get(url, headers)
+        raw = _http_get(go_url, headers)
     except (URLError, OSError) as exc:
         logger.warning("opencode_go_page_fetch_failed", error=str(exc))
         return None
@@ -202,6 +204,7 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
         logger.warning("opencode_not_authenticated_go")
         return None
 
+    # ── Parse subscription data from SSR ───────────────────────────────
     result = _parse_ssr_subscription(raw)
     if result is None:
         logger.warning("opencode_subscription_parse_failed")
