@@ -178,6 +178,8 @@ class LCPHandler(BaseHTTPRequestHandler):
             self._serve_plugin_subscriptions()
         elif self.path == "/api/usage/stats" or self.path.startswith("/api/usage/stats?"):
             self._serve_usage_stats_api()
+        elif self.path == "/api/usage/totals" or self.path.startswith("/api/usage/totals?"):
+            self._serve_usage_totals_api()
         elif self.path == "/usage":
             self._serve_usage_page()
         else:
@@ -1103,28 +1105,46 @@ class LCPHandler(BaseHTTPRequestHandler):
         self.wfile.write(html.encode("utf-8"))
 
     def _serve_usage_stats_api(self):
-        """Return per-provider aggregates: daily spending, by-model, by-profile."""
+        """Return per-provider aggregates: daily spending, by-model, by-profile.
+
+        Accepts ?provider=X&days=N or ?provider=X&start=YYYY-MM-DD&end=YYYY-MM-DD.
+        """
         from urllib.parse import urlparse, parse_qs
         from sqlalchemy import func
         qs = parse_qs(urlparse(self.path).query)
         provider = qs.get("provider", [None])[0]
         days = int(qs.get("days", ["30"])[0])
+        start_str = qs.get("start", [None])[0]
+        end_str = qs.get("end", [None])[0]
 
         try:
             with get_session(self.engine) as session:
+                base_filter = [RequestModel.success == 1]
+                if provider:
+                    base_filter.append(RequestModel.provider == provider)
+
+                # Date range: use start/end if provided, else use days limit
+                if start_str and end_str:
+                    base_filter.append(RequestModel.timestamp >= start_str)
+                    base_filter.append(RequestModel.timestamp <= end_str + "T23:59:59")
+                    daily_date_filter = RequestModel.timestamp.between(start_str, end_str + "T23:59:59")
+                else:
+                    daily_date_filter = True  # no date filter, limit by days below
+
                 # Daily spending trend
-                daily_rows = (
+                daily_q = (
                     session.query(
                         func.substr(RequestModel.timestamp, 1, 10).label("date"),
                         func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
                         func.count(RequestModel.id).label("requests"),
                     )
-                    .filter(RequestModel.success == 1)
                 )
-                if provider:
-                    daily_rows = daily_rows.filter(RequestModel.provider == provider)
+                for f in base_filter:
+                    daily_q = daily_q.filter(f)
+                if not (start_str and end_str):
+                    daily_q = daily_q.filter(daily_date_filter)
                 daily_rows = (
-                    daily_rows
+                    daily_q
                     .group_by(func.substr(RequestModel.timestamp, 1, 10))
                     .order_by(func.substr(RequestModel.timestamp, 1, 10).desc())
                     .limit(days)
@@ -1133,32 +1153,49 @@ class LCPHandler(BaseHTTPRequestHandler):
                 daily = [{"date": r.date, "cost": float(r.cost), "requests": r.requests}
                          for r in reversed(daily_rows)]
 
-                # Per-model aggregates
-                model_rows = (
+                # Per-model aggregates (with cache tokens)
+                model_q = (
                     session.query(
                         RequestModel.model,
                         func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
                         func.count(RequestModel.id).label("requests"),
                         func.coalesce(func.sum(RequestModel.prompt_tokens), 0).label("prompt_tokens"),
                         func.coalesce(func.sum(RequestModel.completion_tokens), 0).label("completion_tokens"),
+                        func.coalesce(func.sum(RequestModel.cache_hit_tokens), 0).label("cache_hit_tokens"),
+                        func.coalesce(func.sum(RequestModel.cache_miss_tokens), 0).label("cache_miss_tokens"),
                     )
-                    .filter(RequestModel.success == 1)
                 )
-                if provider:
-                    model_rows = model_rows.filter(RequestModel.provider == provider)
-                model_rows = model_rows.group_by(RequestModel.model).order_by(func.sum(RequestModel.cost).desc()).all()
+                for f in base_filter:
+                    model_q = model_q.filter(f)
+                model_rows = model_q.group_by(RequestModel.model).order_by(func.sum(RequestModel.cost).desc()).all()
+
+                # Compute cache savings from gateway.yaml pricing
+                total_cache_savings = 0.0
+                for r in model_rows:
+                    try:
+                        pricing = self.config.get_pricing(provider or "deepseek", r.model)
+                        if pricing and r.cache_hit_tokens > 0:
+                            savings = (r.cache_hit_tokens / 1_000_000) * (
+                                pricing["cache_miss"] - pricing["cache_hit"]
+                            )
+                            total_cache_savings += savings
+                    except Exception:
+                        pass
+
                 by_model = {
                     r.model: {
                         "cost": float(r.cost),
                         "requests": r.requests,
                         "prompt_tokens": r.prompt_tokens,
                         "completion_tokens": r.completion_tokens,
+                        "cache_hit_tokens": r.cache_hit_tokens,
+                        "cache_miss_tokens": r.cache_miss_tokens,
                     }
                     for r in model_rows
                 }
 
                 # Per-profile aggregates
-                profile_rows = (
+                profile_q = (
                     session.query(
                         RequestModel.profile,
                         func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
@@ -1166,11 +1203,10 @@ class LCPHandler(BaseHTTPRequestHandler):
                         func.coalesce(func.sum(RequestModel.prompt_tokens), 0).label("prompt_tokens"),
                         func.coalesce(func.sum(RequestModel.completion_tokens), 0).label("completion_tokens"),
                     )
-                    .filter(RequestModel.success == 1)
                 )
-                if provider:
-                    profile_rows = profile_rows.filter(RequestModel.provider == provider)
-                profile_rows = profile_rows.group_by(RequestModel.profile).order_by(func.sum(RequestModel.cost).desc()).all()
+                for f in base_filter:
+                    profile_q = profile_q.filter(f)
+                profile_rows = profile_q.group_by(RequestModel.profile).order_by(func.sum(RequestModel.cost).desc()).all()
                 by_profile = {
                     r.profile: {
                         "cost": float(r.cost),
@@ -1181,9 +1217,22 @@ class LCPHandler(BaseHTTPRequestHandler):
                     for r in profile_rows
                 }
 
-                # Totals
-                total_cost = sum(d["cost"] for  d in daily)
-                total_requests = sum(d["requests"] for d in daily)
+                # Totals (respect date range)
+                total_q = (
+                    session.query(
+                        func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
+                        func.count(RequestModel.id).label("requests"),
+                    )
+                )
+                for f in base_filter:
+                    total_q = total_q.filter(f)
+                total_row = total_q.first()
+                total_cost = float(total_row.cost) if total_row else 0
+                total_requests = total_row.requests if total_row else 0
+
+                # Aggregate cache stats
+                cache_hit = sum(r.cache_hit_tokens for r in model_rows)
+                cache_miss = sum(r.cache_miss_tokens for r in model_rows)
 
             self._send_json({
                 "provider": provider,
@@ -1191,7 +1240,52 @@ class LCPHandler(BaseHTTPRequestHandler):
                 "by_model": by_model,
                 "by_profile": by_profile,
                 "totals": {"cost": total_cost, "requests": total_requests},
+                "cache": {
+                    "hit_tokens": cache_hit,
+                    "miss_tokens": cache_miss,
+                    "savings": round(total_cache_savings, 6),
+                },
             })
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_usage_totals_api(self):
+        """Return just the totals for a date range — lightweight endpoint for date-filter pills."""
+        from urllib.parse import urlparse, parse_qs
+        from sqlalchemy import func
+        qs = parse_qs(urlparse(self.path).query)
+        provider = qs.get("provider", [None])[0]
+        start_str = qs.get("start", [None])[0]
+        end_str = qs.get("end", [None])[0]
+
+        try:
+            with get_session(self.engine) as session:
+                filters = [RequestModel.success == 1]
+                if provider:
+                    filters.append(RequestModel.provider == provider)
+                if start_str and end_str:
+                    filters.append(RequestModel.timestamp >= start_str)
+                    filters.append(RequestModel.timestamp <= end_str + "T23:59:59")
+
+                total_q = (
+                    session.query(
+                        func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
+                        func.count(RequestModel.id).label("requests"),
+                        func.coalesce(func.sum(RequestModel.prompt_tokens + RequestModel.completion_tokens), 0).label("tokens"),
+                    )
+                )
+                for f in filters:
+                    total_q = total_q.filter(f)
+                row = total_q.first()
+                result = {
+                    "provider": provider,
+                    "start": start_str,
+                    "end": end_str,
+                    "cost": float(row.cost) if row else 0,
+                    "requests": row.requests if row else 0,
+                    "tokens": int(row.tokens) if row and row.tokens else 0,
+                }
+            self._send_json(result)
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
@@ -2183,6 +2277,13 @@ def _render_usage_page(config) -> str:
 .tab-panel {{ display: none; }}
 .tab-panel.active {{ display: block; }}
 .empty-state {{ text-align: center; padding: 1.5rem; color: hsl(var(--muted-foreground)); font-size: 0.85rem; }}
+.date-filters {{ display: flex; gap: 0.35rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }}
+.date-pill {{ padding: 0.3rem 0.7rem; font-size: 0.7rem; background: hsl(var(--secondary)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); color: hsl(var(--muted-foreground)); cursor: pointer; transition: all 0.15s; }}
+.date-pill:hover {{ color: hsl(var(--foreground)); border-color: hsl(var(--muted-foreground)); }}
+.date-pill.active {{ background: hsl(var(--foreground)); color: hsl(var(--background)); border-color: hsl(var(--foreground)); }}
+.date-pill-input {{ padding: 0.25rem 0.4rem; font-size: 0.7rem; background: hsl(var(--card)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); color: hsl(var(--foreground)); font-family: inherit; max-width: 130px; }}
+.balance-bar {{ height: 8px; background: hsl(var(--secondary)); border-radius: 4px; overflow: hidden; margin-top: 0.35rem; }}
+.balance-bar-fill {{ height: 100%; border-radius: 4px; transition: width 0.5s; }}
 </style>
 </head>
 <body>
@@ -2229,7 +2330,8 @@ function renderDailyChart(canvasId, daily) {{
     if (!ctx) return;
     var labels = daily.map(function(d) {{ var p = d.date.split('-'); return p[2] + ' ' + (monthNames[parseInt(p[1])-1] || ''); }});
     var costs = daily.map(function(d) {{ return d.cost; }});
-    new Chart(ctx, {{
+    window._charts = window._charts || {{}};
+    window._charts[canvasId] = new Chart(ctx, {{
         type: 'bar',
         data: {{
             labels: labels,
@@ -2334,10 +2436,63 @@ function buildPage(providers) {{
                 var topped = bal.topped_up || 0;
                 var granted = bal.total_granted || 0;
                 var totalEver = topped + granted;
+                var balanceUsedPct = totalEver > 0 ? Math.min(100, ((totalEver - available) / totalEver) * 100) : 0;
+                function balanceBarClass(pct) {{ return pct >= 90 ? 'red' : pct >= 70 ? 'orange' : pct >= 40 ? 'yellow' : 'green'; }}
+
+                // Cache stats
+                var cache = stats.cache || {{hit_tokens:0, miss_tokens:0, savings:0}};
+                var cacheTotal = cache.hit_tokens + cache.miss_tokens;
+                var cacheRate = cacheTotal > 0 ? (cache.hit_tokens / cacheTotal * 100) : 0;
+
+                // Model entries from stats
+                var modelEntries = [];
+                var modelKeys = Object.keys(stats.by_model || {{}});
+                for (var mi = 0; mi < modelKeys.length; mi++) {{
+                    if (modelKeys[mi] !== 'unknown') {{
+                        modelEntries.push({{key: modelKeys[mi], data: stats.by_model[modelKeys[mi]]}});
+                    }}
+                }}
+
+                // Weekly + Today from daily array
+                var dailyArr = stats.daily || [];
+                var todayCost = 0, todayReqs = 0, weeklyCost = 0, weeklyReqs = 0;
+                var todayStr = new Date().toISOString().slice(0,10);
+                if (dailyArr.length > 0) {{
+                    var lastDay = dailyArr[dailyArr.length - 1];
+                    if (lastDay.date === todayStr) {{ todayCost = lastDay.cost; todayReqs = lastDay.requests; }}
+                    var wStart = Math.max(0, dailyArr.length - 7);
+                    for (var wi = wStart; wi < dailyArr.length; wi++) {{
+                        weeklyCost += dailyArr[wi].cost;
+                        weeklyReqs += dailyArr[wi].requests;
+                    }}
+                }}
+
+                // ── Row 1: Balance ──
                 panelsHtml += '<div class="stat-cards">' +
-                    '<div class="stat-card"><div class="label">Available Balance</div><div class="value">$' + available.toFixed(2) + '</div><div class="sub">DeepSeek API</div></div>' +
-                    '<div class="stat-card"><div class="label">Total Spent</div><div class="value">$' + (spent != null ? spent.toFixed(2) : '—') + '</div><div class="sub">topped up $' + topped.toFixed(2) + ' + granted $' + granted.toFixed(2) + '</div></div>' +
+                    '<div class="stat-card"><div class="label">Available Balance</div><div class="value">$' + available.toFixed(2) + '</div><div class="sub">' + (bal.currency || 'USD') + '</div></div>' +
+                    '<div class="stat-card"><div class="label">Total Spent (API)</div><div class="value">' + (spent != null ? '$' + spent.toFixed(2) : '—') + '</div><div class="sub">topped $' + topped.toFixed(2) + ' + granted $' + granted.toFixed(2) + '</div></div>' +
+                    '<div class="stat-card"><div class="label">Balance Used</div><div class="value">' + balanceUsedPct.toFixed(1) + '%</div><div class="sub">of $' + totalEver.toFixed(2) + ' total</div><div class="balance-bar"><div class="balance-bar-fill ' + balanceBarClass(balanceUsedPct) + '" style="width:' + balanceUsedPct + '%"></div></div></div>' +
+                    '</div>';
+
+                // ── Row 2: Cache + Models ──
+                panelsHtml += '<div class="stat-cards">';
+                if (cacheTotal > 0) {{
+                    panelsHtml += '<div class="stat-card"><div class="label">Cache Hit Rate</div><div class="value">' + cacheRate.toFixed(1) + '%</div><div class="sub">' + formatTokens(cache.hit_tokens) + ' hit / ' + formatTokens(cache.miss_tokens) + ' miss</div></div>' +
+                        '<div class="stat-card"><div class="label">Cache Savings</div><div class="value">$' + cache.savings.toFixed(4) + '</div><div class="sub">from cache-hit discount</div></div>';
+                }}
+                for (var mi = 0; mi < modelEntries.length; mi++) {{
+                    var me = modelEntries[mi];
+                    if (me.data.requests > 0) {{
+                        panelsHtml += '<div class="stat-card"><div class="label">' + me.key + '</div><div class="value">$' + me.data.cost.toFixed(4) + '</div><div class="sub">' + me.data.requests + ' req · ' + formatTokens(me.data.prompt_tokens + me.data.completion_tokens) + ' tok</div></div>';
+                    }}
+                }}
+                panelsHtml += '</div>';
+
+                // ── Row 3: Gateway Spend / Weekly / Today ──
+                panelsHtml += '<div class="stat-cards">' +
                     '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + stats.totals.cost.toFixed(4) + '</div><div class="sub">' + stats.totals.requests + ' requests</div></div>' +
+                    '<div class="stat-card"><div class="label">Rolling Weekly</div><div class="value">$' + weeklyCost.toFixed(4) + '</div><div class="sub">' + weeklyReqs + ' requests</div></div>' +
+                    '<div class="stat-card"><div class="label">Today</div><div class="value">$' + todayCost.toFixed(4) + '</div><div class="sub">' + todayReqs + ' requests</div></div>' +
                     '</div>';
             }} else if (prov === 'opencode') {{
                 var monthly = (sum && sum.monthly) ? sum.monthly : {{tokens:0, cost:0, requests:0}};
@@ -2387,8 +2542,21 @@ function buildPage(providers) {{
                     '</div>';
             }}
 
+            // ── Date filter pills (DeepSeek only) ──
+            if (prov === 'deepseek') {{
+                panelsHtml += '<div class="date-filters" id="dateFilt-' + prov + '">' +
+                    '<button class="date-pill active" data-range="7" onclick="applyDateRange(this,\\'' + prov + '\\',7)">7 days</button>' +
+                    '<button class="date-pill" data-range="30" onclick="applyDateRange(this,\\'' + prov + '\\',30)">30 days</button>' +
+                    '<button class="date-pill" data-range="month" onclick="applyDateRange(this,\\'' + prov + '\\',\\'month\\')">This month</button>' +
+                    '<button class="date-pill" data-range="last" onclick="applyDateRange(this,\\'' + prov + '\\',\\'last\\')">Last month</button>' +
+                    '<input class="date-pill-input" type="date" id="dsFrom-' + prov + '" title="Start">' +
+                    '<input class="date-pill-input" type="date" id="dsTo-' + prov + '" title="End">' +
+                    '<button class="date-pill" data-range="custom" onclick="applyDateRange(this,\\'' + prov + '\\',\\'custom\\')">Apply</button>' +
+                    '</div>';
+            }}
+
             // ── Daily chart ──
-            panelsHtml += '<div class="chart-wrap"><h3 style="font-size:0.85rem;margin-bottom:0.5rem">Daily Spending (30 days)</h3><div style="height:250px"><canvas id="' + dailyChartId + '"></canvas></div></div>';
+            panelsHtml += '<div class="chart-wrap"><h3 style="font-size:0.85rem;margin-bottom:0.5rem" id="chartTitle-' + prov + '">Daily Spending (7 days)</h3><div style="height:250px"><canvas id="' + dailyChartId + '"></canvas></div></div>';
 
             // ── Breakdown tables ──
             panelsHtml += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">' +
@@ -2419,6 +2587,65 @@ window.switchTab = function(prov) {{
     var panel = document.getElementById('panel-' + prov);
     if (btn) btn.classList.add('active');
     if (panel) panel.classList.add('active');
+}};
+
+window.applyDateRange = function(btnEl, provider, range) {{
+    // Update pill styling
+    var container = btnEl.parentElement;
+    container.querySelectorAll('.date-pill').forEach(function(p) {{ p.classList.remove('active'); }});
+    btnEl.classList.add('active');
+
+    var start, end, label;
+    var today = new Date();
+    var d = new Date(today);
+
+    if (range === 'custom') {{
+        start = document.getElementById('dsFrom-' + provider).value;
+        end = document.getElementById('dsTo-' + provider).value;
+        if (!start || !end) return;
+        label = start + ' ~ ' + end;
+    }} else if (range === 7) {{
+        d.setDate(d.getDate() - 7);
+        start = d.toISOString().slice(0,10);
+        end = today.toISOString().slice(0,10);
+        label = '7 days';
+    }} else if (range === 30) {{
+        d.setDate(d.getDate() - 30);
+        start = d.toISOString().slice(0,10);
+        end = today.toISOString().slice(0,10);
+        label = '30 days';
+    }} else if (range === 'month') {{
+        start = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0,10);
+        end = today.toISOString().slice(0,10);
+        label = 'This month';
+    }} else if (range === 'last') {{
+        var firstDay = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        var lastDay = new Date(today.getFullYear(), today.getMonth(), 0);
+        start = firstDay.toISOString().slice(0,10);
+        end = lastDay.toISOString().slice(0,10);
+        label = 'Last month';
+    }}
+
+    // Update chart title
+    var titleEl = document.getElementById('chartTitle-' + provider);
+    if (titleEl) titleEl.textContent = 'Daily Spending (' + label + ')';
+
+    // Fetch fresh stats with date range
+    fetch('/api/usage/stats?provider=' + encodeURIComponent(provider) + '&start=' + start + '&end=' + end)
+        .then(function(r) {{ return r.json(); }})
+        .then(function(stats) {{
+            // Destroy old chart
+            var canvasKey = 'chart-daily-' + provider;
+            if (window._charts && window._charts[canvasKey]) {{
+                window._charts[canvasKey].destroy();
+            }}
+            renderDailyChart(canvasKey, stats.daily || []);
+            renderBreakdownTable('table-model-' + provider, stats.by_model || {{}}, 'Model');
+            renderBreakdownTable('table-profile-' + provider, stats.by_profile || {{}}, 'Profile');
+        }})
+        .catch(function(e) {{
+            console.error('Date filter fetch failed', e);
+        }});
 }};
 
 window.toggleSidebar = function() {{
