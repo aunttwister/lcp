@@ -174,6 +174,8 @@ class LCPHandler(BaseHTTPRequestHandler):
             self._serve_plugin_balances()
         elif self.path == "/api/cost-plugins/summary":
             self._serve_plugin_summary()
+        elif self.path == "/api/cost-plugins/subscriptions":
+            self._serve_plugin_subscriptions()
         elif self.path == "/api/usage/stats" or self.path.startswith("/api/usage/stats?"):
             self._serve_usage_stats_api()
         elif self.path == "/usage":
@@ -1033,6 +1035,11 @@ class LCPHandler(BaseHTTPRequestHandler):
         """Return rich provider summaries (usage limits, balance, etc.)."""
         data = get_registry().fetch_all_summaries()
         self._send_json({"plugin_summaries": data})
+
+    def _serve_plugin_subscriptions(self):
+        """Return subscription usage snapshots from all cost plugins."""
+        data = get_registry().fetch_all_subscriptions()
+        self._send_json({"plugin_subscriptions": data})
 
     def _serve_alerts_config(self):
         am = get_alert_manager()
@@ -2025,11 +2032,13 @@ function loadPluginStatus() {{
   Promise.all([
     fetch('/api/cost-plugins/usage').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_usage:{{}}}}}}),
     fetch('/api/cost-plugins/balances').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_balances:{{}}}}}}),
-    fetch('/api/cost-plugins/summary').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_summaries:{{}}}}}})
+    fetch('/api/cost-plugins/summary').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_summaries:{{}}}}}}),
+    fetch('/api/cost-plugins/subscriptions').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_subscriptions:{{}}}}}})
   ]).then(function(results) {{
     var allUsage = results[0].plugin_usage || {{}};
     var balances = results[1].plugin_balances || {{}};
     var pluginSummaries = results[2].plugin_summaries || {{}};
+    var subscriptions = results[3].plugin_subscriptions || {{}};
 
     var allProviders = Object.keys(allUsage).concat(Object.keys(balances));
     var uniqueProvs = allProviders.filter(function(v,i,a){{return a.indexOf(v)===i}}).filter(function(v){{return configuredProviders.indexOf(v) !== -1}});
@@ -2061,6 +2070,23 @@ function loadPluginStatus() {{
             'day ' + now.getDate() + '/' + moDays;
           if (om.tokens) detailLine += ' \\u00b7 ' + formatTokens(om.tokens) + ' tok';
           if (om.cost) detailLine += ' \\u00b7 $' + om.cost.toFixed(4);
+          // Subscription data from OpenCode web API
+          var sub = subscriptions[prov];
+          if (sub) {{
+            detailLine += '<br><span class="sb-sub-detail">';
+            if (sub.rolling_pct !== undefined && sub.rolling_pct !== null) {{
+              var resetMin = Math.floor(sub.rolling_reset_sec / 60);
+              detailLine += '5h: ' + sub.rolling_pct.toFixed(0) + '% used';
+              if (resetMin > 0) detailLine += ' \\u00b7 resets in ' + resetMin + 'm';
+            }}
+            if (sub.weekly_pct !== undefined && sub.weekly_pct !== null) {{
+              if (sub.rolling_pct !== undefined) detailLine += ' \\u00b7 ';
+              var wkResetHr = Math.floor(sub.weekly_reset_sec / 3600);
+              detailLine += 'Week: ' + sub.weekly_pct.toFixed(0) + '% used';
+              if (wkResetHr > 0) detailLine += ' \\u00b7 resets in ' + wkResetHr + 'h';
+            }}
+            detailLine += '</span>';
+          }}
           detailLine += '</span>';
         }} else if (prov === 'deepseek' && sum && sum.balance) {{
           var cur = sum.balance.currency || 'USD';

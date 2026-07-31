@@ -28,16 +28,17 @@ def main():
     get_circuit_breaker(config)
     logger.info("circuit_breaker_initialized")
 
-    # Initialize cost tracking plugins (imports auto-register via __init__.py)
-    from .api.cost_plugins import init_plugins
-    init_plugins()
-    logger.info("cost_plugins_initialized")
-
+    # ── Database (must exist before plugins that query it) ──────────────
     db_path = os.environ.get("COST_DB", config.database.get("path", "/app/data/costs.db"))
     assert db_path is not None
     engine = get_engine(db_path)
     Base.metadata.create_all(engine)
     logger.info("db_initialized", path=db_path)
+
+    # Initialize cost tracking plugins (imports auto-register via __init__.py)
+    from .api.cost_plugins import init_plugins
+    init_plugins(engine=engine)
+    logger.info("cost_plugins_initialized")
 
     data_dir = os.path.dirname(db_path) if os.path.dirname(db_path) else "data"
 

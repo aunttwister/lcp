@@ -715,6 +715,11 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     </div>
     {profile_card_html}
     {phase56_cards}
+    <div class="card" id="opencodeSubCard" style="display:none">
+      <div class="label">OpenCode Subscription</div>
+      <div class="value" id="opencodeSubValue">--</div>
+      <div class="sub" id="opencodeSubDetail"></div>
+    </div>
     </div>
     </details>
 
@@ -1611,11 +1616,13 @@ def render_dashboard(config, engine, headers, profile_filter=None):
       Promise.all([
         fetch('/api/cost-plugins/usage').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_usage:{{}}}}}}),
         fetch('/api/cost-plugins/balances').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_balances:{{}}}}}}),
-        fetch('/api/cost-plugins/summary').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_summaries:{{}}}}}})
+        fetch('/api/cost-plugins/summary').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_summaries:{{}}}}}}),
+        fetch('/api/cost-plugins/subscriptions').then(function(r){{return r.json()}}).catch(function(){{return {{plugin_subscriptions:{{}}}}}})
       ]).then(function(results) {{
         var allUsage = results[0].plugin_usage || {{}};
         var balances = results[1].plugin_balances || {{}};
         var pluginSummaries = results[2].plugin_summaries || {{}};
+        var subscriptions = results[3].plugin_subscriptions || {{}};
 
         var allProviders = Object.keys(allUsage).concat(Object.keys(balances));
         var uniqueProvs = allProviders.filter(function(v,i,a){{return a.indexOf(v)===i}}).filter(function(v){{return configuredProviders.indexOf(v) !== -1}});
@@ -1682,6 +1689,33 @@ def render_dashboard(config, engine, headers, profile_filter=None):
 
         // ── Header badge: active provider summary ──
         {plugin_header_info}
+
+        // ── OpenCode subscription card ──
+        var ocSub = subscriptions['opencode'];
+        var subCard = document.getElementById('opencodeSubCard');
+        var subValue = document.getElementById('opencodeSubValue');
+        var subDetail = document.getElementById('opencodeSubDetail');
+        if (ocSub && subCard) {{
+          subCard.style.display = '';
+          var parts = [];
+          if (ocSub.rolling_pct !== undefined && ocSub.rolling_pct !== null) {{
+            var resetMin = Math.floor(ocSub.rolling_reset_sec / 60);
+            parts.push('5h: ' + ocSub.rolling_pct.toFixed(0) + '%');
+            if (resetMin > 0) parts[parts.length-1] += ' (reset ' + resetMin + 'm)';
+          }}
+          if (ocSub.weekly_pct !== undefined && ocSub.weekly_pct !== null) {{
+            var resetHr = Math.floor(ocSub.weekly_reset_sec / 3600);
+            parts.push('Week: ' + ocSub.weekly_pct.toFixed(0) + '%');
+            if (resetHr > 0) parts[parts.length-1] += ' (reset ' + resetHr + 'h)';
+          }}
+          subValue.textContent = parts.join(' · ') || '--';
+          var pctVal = ocSub.rolling_pct || ocSub.weekly_pct || 0;
+          var cls = pctVal > 90 ? 'warn' : 'good';
+          subValue.className = 'value ' + cls;
+          if (ocSub.workspace_id) {{
+            subDetail.textContent = 'Workspace: ' + ocSub.workspace_id;
+          }}
+        }}
       }});
     }}
 

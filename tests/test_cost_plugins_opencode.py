@@ -1,13 +1,10 @@
 """Tests for the OpenCode cost tracking plugin.
 
-Creates a temporary SQLite database mirroring opencode.db's schema,
-injects sample messages, and verifies the plugin reads them correctly.
+Uses a temporary SQLite database with the gateway ``requests`` table
+(single source of truth).  Verifies the plugin reads and aggregates
+correctly via SQLAlchemy engine.
 """
 
-import json
-import os
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -16,79 +13,37 @@ from src.api.cost_plugins.opencode import OpenCodeCostPlugin, _OPENCODE_PRICING,
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-def _create_opencode_db(path: str) -> None:
-    """Create an opencode.db with session + message tables and sample rows."""
-    import sqlite3
-    conn = sqlite3.connect(path)
-    conn.execute("""
-        CREATE TABLE session (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            slug TEXT,
-            directory TEXT,
-            title TEXT,
-            version TEXT,
-            time_created INTEGER,
-            time_updated INTEGER
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE message (
-            id TEXT PRIMARY KEY,
-            session_id TEXT,
-            time_created INTEGER,
-            time_updated INTEGER,
-            data TEXT
-        )
-    """)
-    conn.execute("""
-        INSERT INTO session (id, project_id, slug, title, time_created)
-        VALUES ('sess-1', 'proj-a', 'test-session', 'Test Session', 1760000000)
-    """)
-    conn.commit()
-    conn.close()
+def _create_engine_and_table():
+    """Create a SQLAlchemy engine + ``requests`` table in a temp in-memory DB."""
+    from src.api.models import Base, get_engine
+    engine = get_engine(":memory:")
+    Base.metadata.create_all(engine, tables=[Base.metadata.tables["requests"]])
+    return engine
 
 
-def _insert_message(
-    db_path: str,
-    msg_id: str,
-    session_id: str,
-    timestamp: int,
-    role: str,
-    model_id: str,
-    provider_id: str,
-    input_tok: int = 0,
-    output_tok: int = 0,
-    cache_read: int = 0,
-    cache_write: int = 0,
-    reasoning: int = 0,
-    cost: float | None = None,
-) -> None:
-    """Insert a single message into the test DB."""
-    import sqlite3
-    data = {
-        "id": msg_id,
-        "sessionID": session_id,
-        "role": role,
-        "model": {"providerID": provider_id, "modelID": model_id},
-        "tokens": {
-            "input": input_tok,
-            "output": output_tok,
-            "reasoning": reasoning,
-            "cache": {"read": cache_read, "write": cache_write},
-        },
-        "time": {"created": timestamp, "completed": timestamp},
+def _insert_request(engine, **kwargs):
+    """Insert a row into the ``requests`` table."""
+    from src.api.models import Request, get_session
+    defaults = {
+        "timestamp": "2025-10-10T12:00:00",
+        "profile": "default",
+        "model": "deepseek-v4-pro",
+        "provider": "opencode",
+        "prompt_tokens": 500,
+        "completion_tokens": 200,
+        "cache_hit_tokens": 0,
+        "cache_miss_tokens": 0,
+        "cost": 0.0,
+        "latency_ms": 100,
+        "success": 1,
+        "error_type": None,
+        "tools_blocked": None,
     }
-    if cost is not None:
-        data["cost"] = cost
-
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
-        (msg_id, session_id, timestamp, timestamp, json.dumps(data)),
-    )
-    conn.commit()
-    conn.close()
+    defaults.update(kwargs)
+    with get_session(engine) as session:
+        req = Request(**defaults)
+        session.add(req)
+        session.commit()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -96,17 +51,15 @@ def _insert_message(
 # ═══════════════════════════════════════════════════════════════════════
 
 @pytest.fixture
-def opencode_db(tmp_path):
-    """Create a populated opencode.db and return its path."""
-    db_path = str(tmp_path / "opencode.db")
-    _create_opencode_db(db_path)
-    return db_path
+def engine():
+    """Create an in-memory SQLAlchemy engine with the requests table."""
+    return _create_engine_and_table()
 
 
 @pytest.fixture
-def plugin(opencode_db):
-    """Return an OpenCode plugin pointing at the test DB."""
-    return OpenCodeCostPlugin(db_path=opencode_db)
+def plugin(engine):
+    """Return an OpenCode plugin bound to the test engine."""
+    return OpenCodeCostPlugin(engine=engine)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -175,26 +128,22 @@ class TestOpenCodeCalculateCost:
         cost = plugin.calculate_cost("deepseek-v4-pro", {
             "completion_tokens": 200_000,
         })
-        # cache_hit=0, cache_miss=0 → cache_miss=usage.get("prompt_tokens", 0)=0
-        # cost = (0)*0.003625 + (0)*0.435 + (200K/1M)*0.87 = 0.174
         assert cost == pytest.approx(0.174)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# fetch_usage (reading from SQLite)
+# fetch_usage (reading from gateway requests table)
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestOpenCodeFetchUsage:
     def test_empty_db_returns_empty(self, plugin):
         assert plugin.fetch_usage() == []
 
-    def test_single_message(self, plugin, opencode_db):
-        _insert_message(
-            opencode_db, "msg-1", "sess-1",
-            timestamp=1760100000,  # 2025-10-10
-            role="assistant", model_id="deepseek-v4-pro",
-            provider_id="opencode",
-            input_tok=1000, output_tok=500,
+    def test_single_request(self, plugin, engine):
+        _insert_request(engine,
+            timestamp="2025-10-10T12:00:00",
+            model="deepseek-v4-pro",
+            prompt_tokens=1000, completion_tokens=500,
         )
         result = plugin.fetch_usage()
         assert len(result) == 1
@@ -206,14 +155,15 @@ class TestOpenCodeFetchUsage:
         assert row["completion_tokens"] == 500
         assert row["request_count"] == 1
 
-    def test_multiple_messages_same_day(self, plugin, opencode_db):
-        ts = 1760100000  # 2025-10-10
-        _insert_message(opencode_db, "msg-1", "sess-1", ts,
-                        "assistant", "deepseek-v4-pro", "opencode",
-                        input_tok=1000, output_tok=200)
-        _insert_message(opencode_db, "msg-2", "sess-1", ts + 60,
-                        "assistant", "deepseek-v4-pro", "opencode",
-                        input_tok=500, output_tok=100)
+    def test_multiple_requests_same_day(self, plugin, engine):
+        _insert_request(engine,
+            timestamp="2025-10-10T12:00:00",
+            prompt_tokens=1000, completion_tokens=200,
+        )
+        _insert_request(engine,
+            timestamp="2025-10-10T12:01:00",
+            prompt_tokens=500, completion_tokens=100,
+        )
         result = plugin.fetch_usage()
         assert len(result) == 1
         row = result[0]
@@ -221,31 +171,30 @@ class TestOpenCodeFetchUsage:
         assert row["completion_tokens"] == 300  # 200 + 100
         assert row["request_count"] == 2
 
-    def test_user_messages_ignored(self, plugin, opencode_db):
-        _insert_message(opencode_db, "msg-1", "sess-1", 1760100000,
-                        "user", "deepseek-v4-pro", "opencode",
-                        input_tok=100, output_tok=0)
-        _insert_message(opencode_db, "msg-2", "sess-1", 1760100000,
-                        "assistant", "deepseek-v4-pro", "opencode",
-                        input_tok=200, output_tok=100)
+    def test_only_opencode_provider(self, plugin, engine):
+        """Non-opencode requests should be excluded."""
+        _insert_request(engine,
+            timestamp="2025-10-10T12:00:00",
+            provider="openai", prompt_tokens=999,
+        )
         result = plugin.fetch_usage()
-        assert len(result) == 1
-        assert result[0]["prompt_tokens"] == 200
+        assert result == []
 
-    def test_free_model_no_cost(self, plugin, opencode_db):
-        _insert_message(opencode_db, "msg-1", "sess-1", 1760100000,
-                        "assistant", "qwen3-coder", "opencode",
-                        input_tok=5000, output_tok=2000)
+    def test_only_successful_requests(self, plugin, engine):
+        """Failed requests should be excluded."""
+        _insert_request(engine,
+            timestamp="2025-10-10T12:00:00",
+            success=0, error_type="timeout",
+            prompt_tokens=100, completion_tokens=50,
+        )
         result = plugin.fetch_usage()
-        assert result[0]["cost"] == 0.0
+        assert result == []
 
-    def test_date_filtering(self, plugin, opencode_db):
-        _insert_message(opencode_db, "msg-1", "sess-1", 1760000000,  # 2025-10-09
-                        "assistant", "deepseek-v4-pro", "opencode",
-                        input_tok=100, output_tok=10)
-        _insert_message(opencode_db, "msg-2", "sess-1", 1760100000,  # 2025-10-10
-                        "assistant", "deepseek-v4-pro", "opencode",
-                        input_tok=200, output_tok=20)
+    def test_date_filtering(self, plugin, engine):
+        _insert_request(engine, timestamp="2025-10-09T12:00:00",
+                        prompt_tokens=100, completion_tokens=10)
+        _insert_request(engine, timestamp="2025-10-10T12:00:00",
+                        prompt_tokens=200, completion_tokens=20)
         result = plugin.fetch_usage(start_date="2025-10-10")
         assert len(result) == 1
         assert result[0]["date"] == "2025-10-10"
@@ -254,88 +203,33 @@ class TestOpenCodeFetchUsage:
         assert len(result2) == 1
         assert result2[0]["date"] == "2025-10-09"
 
-    def test_no_db_file_returns_empty(self, tmp_path):
-        p = OpenCodeCostPlugin(db_path=str(tmp_path / "nonexistent.db"))
+    def test_no_engine_returns_empty(self):
+        p = OpenCodeCostPlugin(engine=None)
         assert p.fetch_usage() == []
 
-    def test_missing_data_column_handled_gracefully(self, plugin, opencode_db):
-        """Messages with no tokens field should be skipped."""
-        import sqlite3
-        conn = sqlite3.connect(opencode_db)
-        conn.execute(
-            "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
-            ("bad-msg", "sess-1", 1760100000, 1760100000,
-             json.dumps({"id": "bad-msg", "role": "assistant"})),
-        )
-        conn.commit()
-        conn.close()
-        # Should not crash, and return empty since no usable tokens
-        result = plugin.fetch_usage()
-        assert len(result) == 0
-
-    def test_fallback_provider_id(self, plugin, opencode_db):
-        """Messages with modelID at top level should still work."""
-        import sqlite3
-        conn = sqlite3.connect(opencode_db)
-        conn.execute(
-            "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
-            ("msg-legacy", "sess-1", 1760100000, 1760100000,
-             json.dumps({
-                 "id": "msg-legacy",
-                 "sessionID": "sess-1",
-                 "role": "assistant",
-                 "modelID": "deepseek-v4-flash",
-                 "providerID": "opencode",
-                 "tokens": {"input": 50, "output": 25, "reasoning": 0, "cache": {"read": 0, "write": 0}},
-                 "time": {"created": 1760100000},
-             })),
-        )
-        conn.commit()
-        conn.close()
-        result = plugin.fetch_usage()
-        assert len(result) == 1
-        assert result[0]["model"] == "deepseek-v4-flash"
+    def test_db_error_returns_empty(self, engine):
+        """Session error should return empty list gracefully."""
+        with patch("src.api.models.get_session",
+                   side_effect=RuntimeError("boom")):
+            p = OpenCodeCostPlugin(engine=engine)
+            result = p.fetch_usage()
+            assert result == []
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # fetch_balance
 # ═══════════════════════════════════════════════════════════════════════
 
-    def test_db_read_failure_returns_empty(self, tmp_path):
-        """Database read failure (sqlite3.Error) returns empty list."""
-        import sqlite3
-        db_path = tmp_path / "opencode.db"
-        # Create a valid SQLite file so os.path.isfile passes
-        conn = sqlite3.connect(str(db_path))
-        conn.close()
-        plugin = OpenCodeCostPlugin(db_path=str(db_path))
-        with patch("sqlite3.connect", side_effect=sqlite3.Error("corrupt")):
-            result = plugin.fetch_usage()
-            assert result == []
-
-    def test_bad_json_data_is_skipped(self, plugin, opencode_db):
-        """Messages with invalid JSON in data column are skipped."""
-        import sqlite3
-        conn = sqlite3.connect(opencode_db)
-        conn.execute(
-            "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
-            ("bad-json", "sess-1", 1760100000, 1760100000, "not valid json {{{"),
-        )
-        conn.commit()
-        conn.close()
-        result = plugin.fetch_usage()
-        # Only the bad JSON message exists (no valid assistant messages with tokens)
-        assert result == []
-
-
 class TestOpenCodeFetchBalance:
     def test_balance_always_none(self, plugin):
         assert plugin.fetch_balance() is None
 
 
-class TestOpenCodeFetchSummary:
-    """Tests for the rich summary (daily/weekly/monthly) from local DB."""
+# ═══════════════════════════════════════════════════════════════════════
+# fetch_summary
+# ═══════════════════════════════════════════════════════════════════════
 
+class TestOpenCodeFetchSummary:
     def test_summary_empty_db(self, plugin):
         """Empty DB returns zeros for all periods."""
         result = plugin.fetch_summary()
@@ -345,65 +239,70 @@ class TestOpenCodeFetchSummary:
             assert result[period]["cost"] == 0.0
             assert result[period]["requests"] == 0
 
-    def test_summary_with_data(self, opencode_db):
-        """Messages from today should appear in daily/weekly/monthly aggregates."""
-        import time as _time
-        now_ts = int(_time.time())
-        _insert_message(
-            opencode_db, "msg-1", "sess-1", now_ts - 3600,  # 1 hour ago
-            "assistant", "deepseek-v4-pro", "opencode",
-            input_tok=1000, output_tok=500, cache_read=200,
-        )
-        _insert_message(
-            opencode_db, "msg-2", "sess-1", now_ts - 1800,  # 30 min ago
-            "assistant", "deepseek-v4-pro", "opencode",
-            input_tok=2000, output_tok=1000,
-            cost=0.005,
-        )
-        plugin = OpenCodeCostPlugin(db_path=opencode_db)
+    def test_summary_with_data(self, engine):
+        """Recent requests should appear in daily/weekly/monthly aggregates."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        recent = now.strftime("%Y-%m-%dT%H:%M:%S")
+
+        _insert_request(engine, timestamp=recent,
+                        prompt_tokens=1000, completion_tokens=500,
+                        cost=0.00087)
+        _insert_request(engine, timestamp=recent,
+                        prompt_tokens=2000, completion_tokens=1000,
+                        cost=0.005)
+        plugin = OpenCodeCostPlugin(engine=engine)
         result = plugin.fetch_summary()
         assert result is not None
 
-        # Daily should capture both messages
-        # msg-1: _calc_msg_cost = 1000/1M*0.435 + 200/1M*0.003625 + 500/1M*0.87 = 0.000870725
-        # msg-2: explicit cost = 0.005
-        # total = 0.005870725 → rounded to 8 decimal places
         assert result["daily"]["tokens"] == 4500  # 1000+500+2000+1000
-        assert result["daily"]["cost"] == pytest.approx(0.00587073, rel=1e-5)
+        assert result["daily"]["cost"] == pytest.approx(0.00587, rel=1e-5)
         assert result["daily"]["requests"] == 2
 
-        # Weekly should be same as daily (both within 7 days)
+        # Weekly/monthly should be same (both within current window)
         assert result["weekly"]["tokens"] >= 4500
         assert result["weekly"]["requests"] >= 2
-
-        # Monthly should be same
         assert result["monthly"]["tokens"] >= 4500
 
-    def test_summary_ignores_non_assistant(self, opencode_db):
-        """User messages should not be counted in summary."""
-        import time as _time
-        now_ts = int(_time.time())
-        _insert_message(
-            opencode_db, "msg-1", "sess-1", now_ts - 60,
-            "user", "deepseek-v4-pro", "opencode",
-            input_tok=5000, output_tok=0,
-        )
-        plugin = OpenCodeCostPlugin(db_path=opencode_db)
-        result = plugin.fetch_summary()
-        assert result is not None
-        assert result["daily"]["tokens"] == 0
-        assert result["daily"]["requests"] == 0
-
-    def test_summary_none_when_db_missing(self, tmp_path):
-        """Should return None when the DB file doesn't exist."""
-        plugin = OpenCodeCostPlugin(db_path=str(tmp_path / "no_such.db"))
+    def test_summary_none_when_no_engine(self):
+        """Should return None when engine is None."""
+        plugin = OpenCodeCostPlugin(engine=None)
         assert plugin.fetch_summary() is None
 
-    def test_summary_none_on_db_error(self, opencode_db):
-        """Corrupt/inaccessible DB should return None gracefully."""
-        import sqlite3
-        with patch("src.api.cost_plugins.opencode.sqlite3.connect",
-                   side_effect=sqlite3.Error("boom")):
-            plugin = OpenCodeCostPlugin(db_path=opencode_db)
+    def test_summary_none_on_db_error(self, engine):
+        """DB error should return None gracefully."""
+        with patch("src.api.models.get_session",
+                   side_effect=RuntimeError("boom")):
+            plugin = OpenCodeCostPlugin(engine=engine)
             result = plugin.fetch_summary()
             assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# fetch_subscription
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestOpenCodeFetchSubscription:
+    def test_returns_none_when_no_cookie(self, plugin):
+        """When OPENCODE_COOKIE is not set, returns None."""
+        with patch.dict("os.environ", {}, clear=True):
+            assert plugin.fetch_subscription() is None
+
+    def test_returns_none_when_api_fails(self, plugin):
+        """When the API call raises, returns None."""
+        with patch.dict("os.environ", {"OPENCODE_COOKIE": "test-cookie"}):
+            with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
+                       side_effect=RuntimeError("network down")):
+                assert plugin.fetch_subscription() is None
+
+    def test_returns_subscription_data(self, plugin):
+        """Happy path: returns subscription snapshot."""
+        mock_data = {
+            "rolling_pct": 17.0, "weekly_pct": 75.0,
+            "rolling_reset_sec": 5944, "weekly_reset_sec": 278201,
+        }
+        with patch.dict("os.environ", {"OPENCODE_COOKIE": "test-cookie"}):
+            with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
+                       return_value=mock_data):
+                result = plugin.fetch_subscription()
+                assert result == mock_data

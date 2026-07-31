@@ -133,6 +133,20 @@ class CostPlugin(ABC):
         """
         return None
 
+    # ── Subscription usage (provider web API, optional) ────────────────────
+
+    def fetch_subscription(self) -> Optional[dict]:
+        """Fetch subscription usage snapshot from the provider web API.
+
+        Each plugin returns a provider-specific shape.  OpenCode example::
+
+            {"rolling_pct": 17.0, "weekly_pct": 75.0,
+             "rolling_reset_sec": 5944, "weekly_reset_sec": 278201}
+
+        Return *None* when subscription data is unavailable.
+        """
+        return None
+
     # ── Lifecycle hooks (optional) ─────────────────────────────────────────
 
     def on_startup(self) -> None:
@@ -245,6 +259,16 @@ class PluginRegistry:
             result[name] = plugin.fetch_summary()
         return result
 
+    def fetch_all_subscriptions(self) -> dict[str, Optional[dict]]:
+        """Fetch subscription snapshots from every plugin.
+
+        Returns {provider_name: subscription_dict_or_None}.
+        """
+        result: dict[str, Optional[dict]] = {}
+        for name, plugin in self._plugins.items():
+            result[name] = plugin.fetch_subscription()
+        return result
+
     def shutdown_all(self) -> None:
         for plugin in self._plugins.values():
             try:
@@ -268,11 +292,13 @@ def get_registry() -> PluginRegistry:
     return _registry
 
 
-def init_plugins(extra_plugins: Optional[list[CostPlugin]] = None) -> PluginRegistry:
+def init_plugins(extra_plugins: Optional[list[CostPlugin]] = None,
+                 engine: Any = None) -> PluginRegistry:
     """Initialize the global registry and register built-in plugins.
 
     May be called multiple times — subsequent calls are no-ops.
     Use *extra_plugins* to inject additional or test plugins.
+    Pass *engine* (SQLAlchemy engine) to plugins that need gateway DB access.
     """
     global _registry
     if _registry is not None:
@@ -284,7 +310,7 @@ def init_plugins(extra_plugins: Optional[list[CostPlugin]] = None) -> PluginRegi
             from .opencode import OpenCodeCostPlugin
             from .llamacpp import LlamaCppCostPlugin
             _registry.register(DeepSeekCostPlugin())
-            _registry.register(OpenCodeCostPlugin())
+            _registry.register(OpenCodeCostPlugin(engine=engine))
             _registry.register(LlamaCppCostPlugin())
         return _registry
 
@@ -293,7 +319,7 @@ def init_plugins(extra_plugins: Optional[list[CostPlugin]] = None) -> PluginRegi
     from .opencode import OpenCodeCostPlugin
     from .llamacpp import LlamaCppCostPlugin
     _registry.register(DeepSeekCostPlugin())
-    _registry.register(OpenCodeCostPlugin())
+    _registry.register(OpenCodeCostPlugin(engine=engine))
     _registry.register(LlamaCppCostPlugin())
 
     if extra_plugins:
