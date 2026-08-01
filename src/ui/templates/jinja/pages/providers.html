@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}LCP — Providers{% endblock %}
+{% set active_page = 'providers' %}
+
+{% block content %}
+<h1>Providers</h1>
+<p class="subtitle">Manage LLM API providers and their models</p>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:1rem">
+  <button class="btn-sm btn-primary" onclick="showAddProvForm()">+ Add Provider</button>
+  <select id="provPreset" onchange="loadPreset()" style="padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+    <option value="">-- Quick-add preset --</option>
+  </select>
+</div>
+
+<div class="prov-form" id="provForm" style="display:none">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+    <div>
+      <label>Provider Name</label>
+      <input id="provName" placeholder="e.g. openai">
+    </div>
+    <div>
+      <label>API Base URL</label>
+      <input id="provUrl" placeholder="https://api.openai.com/v1">
+    </div>
+    <div>
+      <label>API Key Env Var</label>
+      <input id="provKeyEnv" placeholder="OPENAI_API_KEY">
+    </div>
+    <div>
+      <label>Models (comma-separated)</label>
+      <input id="provModels" placeholder="gpt-4o, gpt-4o-mini">
+    </div>
+  </div>
+  <div style="display:flex;gap:0.5rem;margin-top:0.75rem">
+    <button class="btn-sm btn-success" id="provTestBtn" onclick="testProvider()">Test Connection</button>
+    <button class="btn-sm btn-primary" id="provSaveBtn" onclick="saveProvider()" disabled>Save Provider</button>
+    <button class="btn-sm" onclick="hideAddProvForm()">Cancel</button>
+  </div>
+  <div id="testResult" class="test-result" style="display:none"></div>
+</div>
+
+<div class="table-wrap" style="margin-top:0.75rem">
+<table>
+<thead><tr>
+  <th>Name</th><th>Base URL</th><th>Key Env</th><th>Models</th><th>Actions</th>
+</tr></thead>
+<tbody id="providersBody">
+{% if providers %}
+{% for name, pdata in providers.items() %}
+<tr>
+  <td><b>{{ name }}</b></td>
+  <td class="mono" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pdata.get('api_base', '—') }}</td>
+  <td>{{ pdata.get('api_key_env', '—') }}</td>
+  <td>{{ pdata.get('models', []) | join(', ') or '—' }}</td>
+  <td><button class="btn-sm" onclick="editProvider('{{ name }}')">Edit</button>
+      <button class="btn-sm btn-danger" onclick="deleteProvider('{{ name }}')">Del</button></td>
+</tr>
+{% endfor %}
+{% else %}
+<tr><td colspan="5" class="empty">No providers configured.</td></tr>
+{% endif %}
+</tbody>
+</table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+{% raw %}
+function loadPresets() {
+  api('GET', '/api/providers/presets').then(function(d) {
+    var sel = document.getElementById('provPreset');
+    Object.keys(d.presets || {}).forEach(function(k) {
+      sel.innerHTML += '<option value="' + k + '">' + k + '</option>';
+    });
+  });
+}
+
+function loadPreset() {
+  var key = document.getElementById('provPreset').value;
+  if (!key) return;
+  showAddProvForm();
+  api('GET', '/api/providers/presets').then(function(d) {
+    var p = (d.presets || {})[key];
+    if (!p) return;
+    document.getElementById('provName').value = key;
+    document.getElementById('provUrl').value = p.api_base || '';
+    document.getElementById('provModels').value = (p.models || []).join(', ');
+    document.getElementById('provKeyEnv').value = 'LCP_' + key.toUpperCase() + '_API_KEY';
+    document.getElementById('provSaveBtn').disabled = false;
+  });
+}
+
+function showAddProvForm() {
+  document.getElementById('provForm').style.display = 'block';
+  document.getElementById('provName').value = '';
+  document.getElementById('provUrl').value = '';
+  document.getElementById('provKeyEnv').value = '';
+  document.getElementById('provModels').value = '';
+  document.getElementById('testResult').style.display = 'none';
+  document.getElementById('provSaveBtn').disabled = true;
+}
+
+function hideAddProvForm() {
+  document.getElementById('provForm').style.display = 'none';
+}
+
+function testProvider() {
+  var resultEl = document.getElementById('testResult');
+  resultEl.style.display = 'block';
+  resultEl.textContent = 'Testing...';
+  resultEl.style.color = 'hsl(var(--amber-fg))';
+  api('POST', '/api/providers/test', {
+    api_base: document.getElementById('provUrl').value,
+    api_key: '',
+    model: (document.getElementById('provModels').value || 'default').split(',')[0].trim()
+  }).then(function(d) {
+    if (d.ok) {
+      resultEl.textContent = 'Connected — model: ' + d.model;
+      resultEl.style.color = 'hsl(var(--green-fg))';
+      document.getElementById('provSaveBtn').disabled = false;
+    } else {
+      resultEl.textContent = 'Failed: ' + (d.error || 'unknown');
+      resultEl.style.color = 'hsl(var(--red-fg))';
+    }
+  });
+}
+
+function editProvider(name) {
+  api('GET', '/api/providers').then(function(d) {
+    var p = (d.providers || {})[name];
+    if (!p) return;
+    showAddProvForm();
+    document.getElementById('provName').value = name;
+    document.getElementById('provUrl').value = p.api_base || '';
+    document.getElementById('provKeyEnv').value = p.api_key_env || '';
+    document.getElementById('provModels').value = (p.models || []).join(', ');
+    document.getElementById('provSaveBtn').disabled = false;
+  });
+}
+
+function saveProvider() {
+  var name = document.getElementById('provName').value.trim();
+  if (!name) { alert('Provider name is required'); return; }
+  var body = {
+    name: name,
+    api_base: document.getElementById('provUrl').value.trim(),
+    api_key_env: document.getElementById('provKeyEnv').value.trim(),
+    models: document.getElementById('provModels').value.split(',').map(function(s) { return s.trim(); }).filter(Boolean)
+  };
+  api('POST', '/api/providers', body).then(function(d) {
+    if (d.ok) { location.reload(); }
+    else { alert('Error: ' + (d.error || 'unknown')); }
+  });
+}
+
+function deleteProvider(name) {
+  if (!confirm('Delete provider "' + name + '"? This removes it from all profile chains.')) return;
+  api('DELETE', '/api/providers/' + name).then(function(d) {
+    if (d.ok) location.reload();
+    else alert('Error: ' + (d.error || 'unknown'));
+  });
+}
+
+loadPresets();
+{% endraw %}
+</script>
+{% endblock %}

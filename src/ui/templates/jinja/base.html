@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}LCP{% endblock %}</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+{% block head_extra %}{% endblock %}
+</head>
+<body>
+{% include "_sidebar.html" %}
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+<button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()" title="Toggle sidebar">☰</button>
+<div class="main-content">
+{% block content %}{% endblock %}
+</div>
+
+<script src="/static/js/api.js"></script>
+<script src="/static/js/sidebar.js"></script>
+<script>
+var monthly = {{ monthly_json | safe }};
+var configuredProviders = {{ configured_providers_json | safe }};
+</script>
+<script src="/static/js/plugin-status.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

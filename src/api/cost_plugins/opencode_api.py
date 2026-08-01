@@ -208,10 +208,12 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
         logger.warning("opencode_subscription_parse_failed")
         return None
 
-    # Heuristic: if percent ≤ 1, multiply by 100 (fraction → percentage)
+    # Heuristic: if percent < 1, multiply by 100 (fraction → percentage).
+    # OpenCode's ``usagePercent`` is already a percentage integer/float;
+    # true fractions like 0.5 or 0.01 need scaling, but 1.0 is just 1%.
     for key in ("rolling_pct", "weekly_pct", "monthly_pct"):
         val = result.get(key, 0)
-        if 0 < val <= 1:
+        if 0 < val < 1:
             result[key] = val * 100
 
     return SubscriptionSnapshot(
