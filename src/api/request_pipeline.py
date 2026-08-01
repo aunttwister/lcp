@@ -69,6 +69,8 @@ def normalize_messages_for_cache(messages: list[dict]) -> list[dict]:
     token sequences — maximizing cache-hit rate.
 
     IMPORTANT: Preserves tool_call_id on tool messages — providers require it.
+    IMPORTANT: Preserves reasoning_content on assistant messages — DeepSeek
+    thinking mode requires this field to be passed back in conversation history.
     """
     normalized = []
     for msg in messages:
@@ -89,13 +91,25 @@ def normalize_messages_for_cache(messages: list[dict]) -> list[dict]:
             # tool_calls → sanitize orphans all tool messages → conversation
             # collapses to flat user/assistant history → provider sees no tool
             # context and stops responding mid-stream.
-            normalized.append({
+            entry = {
                 "role": role,
                 "content": content,
                 "tool_calls": msg["tool_calls"],
-            })
+            }
+            if msg.get("reasoning_content"):
+                entry["reasoning_content"] = msg["reasoning_content"]
+            if msg.get("name"):
+                entry["name"] = msg["name"]
+            normalized.append(entry)
         else:
-            normalized.append({"role": role, "content": content})
+            entry = {"role": role, "content": content}
+            # DeepSeek thinking mode requires reasoning_content to be passed
+            # back in subsequent requests — omit it and get HTTP 400.
+            if role == "assistant" and msg.get("reasoning_content"):
+                entry["reasoning_content"] = msg["reasoning_content"]
+            if msg.get("name"):
+                entry["name"] = msg["name"]
+            normalized.append(entry)
     return normalized
 
 

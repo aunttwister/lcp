@@ -13,6 +13,7 @@ from unittest.mock import patch, MagicMock
 from src.api.request_pipeline import (
     strip_forbidden_tools,
     calculate_cost,
+    normalize_messages_for_cache,
 )
 from src.api.circuit_breaker import get_circuit_breaker
 from src.server import LCPHandler
@@ -110,6 +111,92 @@ class TestCalculateCost:
         result = calculate_cost("deepseek", "deepseek-v4-flash", {}, response, mock_config)
         assert result["cache_hit_tokens"] == 500
         assert result["cache_miss_tokens"] == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# normalize_messages_for_cache
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestNormalizeMessagesForCache:
+    def test_preserves_reasoning_content(self):
+        """Assistant message with reasoning_content keeps the field."""
+        messages = [
+            {"role": "user", "content": "Write a function"},
+            {"role": "assistant", "content": "Here it is:", "reasoning_content": "Let me think about this..."},
+        ]
+        result = normalize_messages_for_cache(messages)
+        assert len(result) == 2
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "Write a function"
+        assert result[1]["role"] == "assistant"
+        assert result[1]["content"] == "Here it is:"
+        assert result[1]["reasoning_content"] == "Let me think about this..."
+
+    def test_preserves_reasoning_with_tool_calls(self):
+        """Assistant with both tool_calls AND reasoning_content preserves both."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Let me write that file.",
+                "reasoning_content": "The user wants a file written...",
+                "tool_calls": [
+                    {"id": "call_1", "function": {"name": "write_file", "arguments": "{}"}}
+                ],
+            },
+        ]
+        result = normalize_messages_for_cache(messages)
+        assert len(result) == 1
+        assert result[0]["role"] == "assistant"
+        assert result[0]["tool_calls"] == messages[0]["tool_calls"]
+        assert result[0]["reasoning_content"] == "The user wants a file written..."
+
+    def test_strips_reasoning_from_non_assistant(self):
+        """System/user messages don't get reasoning_content preserved."""
+        messages = [
+            {"role": "system", "content": "You are helpful", "reasoning_content": "nope"},
+            {"role": "user", "content": "Hello", "reasoning_content": "nope"},
+        ]
+        result = normalize_messages_for_cache(messages)
+        assert len(result) == 2
+        assert "reasoning_content" not in result[0]
+        assert "reasoning_content" not in result[1]
+
+    def test_empty_reasoning_not_added(self):
+        """Empty/falsy reasoning_content is not added to normalized output."""
+        messages = [
+            {"role": "assistant", "content": "OK", "reasoning_content": ""},
+        ]
+        result = normalize_messages_for_cache(messages)
+        assert "reasoning_content" not in result[0]
+
+    def test_full_conversation_roundtrip(self):
+        """Mixed conversation: user → assistant(with reasoning) → assistant(tool_calls + reasoning) → tool."""
+        messages = [
+            {"role": "user", "content": "Write a function"},
+            {"role": "assistant", "content": "Sure", "reasoning_content": "I need to write a Python function..."},
+            {
+                "role": "assistant",
+                "content": "Here is the function:",
+                "reasoning_content": "The function will be simple...",
+                "tool_calls": [{"id": "call_1", "function": {"name": "write_file", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Wrote file successfully."},
+        ]
+        result = normalize_messages_for_cache(messages)
+        assert len(result) == 4
+        # User
+        assert result[0]["role"] == "user"
+        assert "reasoning_content" not in result[0]
+        # Assistant with reasoning, no tool_calls
+        assert result[1]["role"] == "assistant"
+        assert result[1]["reasoning_content"] == "I need to write a Python function..."
+        # Assistant with tool_calls + reasoning
+        assert result[2]["role"] == "assistant"
+        assert result[2]["reasoning_content"] == "The function will be simple..."
+        assert result[2]["tool_calls"] == messages[2]["tool_calls"]
+        # Tool
+        assert result[3]["role"] == "tool"
+        assert result[3]["tool_call_id"] == "call_1"
 
 
 # ═══════════════════════════════════════════════════════════════════════

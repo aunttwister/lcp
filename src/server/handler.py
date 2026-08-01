@@ -85,6 +85,41 @@ class LCPHandler(
         raw = self.rfile.read(content_length)
         return json.loads(raw)
 
+    def _serve_static(self):
+        """Serve static files (JS, CSS, etc.) from the Jinja2 templates/static dir."""
+        from pathlib import Path
+
+        relative = self.path[len("/static/"):]
+        if ".." in relative or relative.startswith("/"):
+            self._send_json({"error": "forbidden"}, 403)
+            return
+
+        static_dir = Path(__file__).resolve().parent.parent / "ui" / "templates" / "jinja" / "static"
+        file_path = (static_dir / relative).resolve()
+        if not str(file_path).startswith(str(static_dir.resolve())):
+            self._send_json({"error": "forbidden"}, 403)
+            return
+
+        content_type = {
+            ".js": "application/javascript",
+            ".css": "text/css",
+            ".html": "text/html",
+            ".svg": "image/svg+xml",
+            ".png": "image/png",
+        }.get(file_path.suffix, "application/octet-stream")
+
+        if not file_path.is_file():
+            self._send_json({"error": "not found"}, 404)
+            return
+
+        data = file_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
+
     # ── Routes ────────────────────────────────────────────────────────────
 
     def do_GET(self):
@@ -150,6 +185,8 @@ class LCPHandler(
             self._serve_usage_stats_api()
         elif self.path == "/api/usage/totals" or self.path.startswith("/api/usage/totals?"):
             self._serve_usage_totals_api()
+        elif self.path.startswith("/static/"):
+            self._serve_static()
         elif self.path == "/usage":
             self._serve_usage_page()
         else:
