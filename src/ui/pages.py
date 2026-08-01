@@ -10,7 +10,7 @@ from pathlib import Path
 from sqlalchemy import func
 
 
-def render_providers_page(config) -> str:
+def render_providers_page(config, engine=None) -> str:
     """Render the Providers management page."""
     from pathlib import Path
     _templates_dir = Path(__file__).parent / "templates"
@@ -200,12 +200,12 @@ function deleteProvider(name) {{
 
 loadPresets();
 </script>
-""" + render_sidebar_plugin_js(config) + """
+""" + render_sidebar_plugin_js(config, engine) + """
 </body>
 </html>"""
 
 
-def render_profiles_page(config) -> str:
+def render_profiles_page(config, engine=None) -> str:
     """Render the Profiles management page."""
     from pathlib import Path
     _templates_dir = Path(__file__).parent / "templates"
@@ -470,7 +470,7 @@ function saveProfileEdit() {{
 }}
 
 </script>
-""" + render_sidebar_plugin_js(config) + """
+""" + render_sidebar_plugin_js(config, engine) + """
 </body>
 </html>"""
 
@@ -736,7 +736,7 @@ function closeSidebar() {{
 
 loadKeys();
 </script>
-""" + render_sidebar_plugin_js(config) + """
+""" + render_sidebar_plugin_js(config, engine) + """
 </body>
 </html>"""
 
@@ -769,12 +769,15 @@ def render_sidebar_html(config, active_page: str = "") -> str:
     return sidebar
 
 
-def render_sidebar_plugin_js(config) -> str:
+def render_sidebar_plugin_js(config, engine=None) -> str:
     """Shared JS for sidebar plugin status rows (loadPluginStatus, toggle, etc.).
 
     Injects ``monthly`` gateway data and ``configuredProviders`` lists so
     that the sidebar plugin rows can fall back to the gateway DB when the
     provider plugin has no local data (e.g. OpenCode DB not on server).
+
+    Requires ``engine`` (SQLAlchemy) to query the gateway DB for monthly
+    totals.  When ``engine`` is None the monthly fallback is silently empty.
     """
     from datetime import date as _date
     from sqlalchemy import func
@@ -782,27 +785,27 @@ def render_sidebar_plugin_js(config) -> str:
     # Monthly data from gateway DB
     _first_of_month = _date.today().replace(day=1).isoformat()
     monthly_data = {}
-    try:
-        from src.main import get_session, engine
-        from src.api.models import RequestModel
-        with get_session(engine) as _s:
-            _monthly_rows = _s.query(
-                RequestModel.provider,
-                func.count(RequestModel.id).label("m_reqs"),
-                func.coalesce(func.sum(RequestModel.completion_tokens + RequestModel.prompt_tokens), 0).label("m_tokens"),
-                func.coalesce(func.sum(RequestModel.cost), 0).label("m_cost"),
-            ).filter(
-                RequestModel.timestamp >= _first_of_month,
-                RequestModel.success == 1,
-            ).group_by(RequestModel.provider).all()
-        for r in _monthly_rows:
-            monthly_data[r.provider] = {
-                "reqs": int(r.m_reqs),
-                "tokens": int(r.m_tokens),
-                "cost": float(r.m_cost),
-            }
-    except Exception:
-        pass
+    if engine is not None:
+        try:
+            from ..api.models import get_session, Request as RequestModel
+            with get_session(engine) as _s:
+                _monthly_rows = _s.query(
+                    RequestModel.provider,
+                    func.count(RequestModel.id).label("m_reqs"),
+                    func.coalesce(func.sum(RequestModel.completion_tokens + RequestModel.prompt_tokens), 0).label("m_tokens"),
+                    func.coalesce(func.sum(RequestModel.cost), 0).label("m_cost"),
+                ).filter(
+                    RequestModel.timestamp >= _first_of_month,
+                    RequestModel.success == 1,
+                ).group_by(RequestModel.provider).all()
+                for r in _monthly_rows:
+                    monthly_data[r.provider] = {
+                        "reqs": int(r.m_reqs),
+                        "tokens": int(r.m_tokens),
+                        "cost": float(r.m_cost),
+                    }
+        except Exception:
+            pass
 
     monthly_json = json.dumps(monthly_data)
     configured_json = json.dumps(sorted(config.providers.keys()))
@@ -943,7 +946,7 @@ setInterval(loadPluginStatus, 60000);
 </script>"""
 
 
-def render_usage_page(config) -> str:
+def render_usage_page(config, engine=None) -> str:
     """Render the Usage & Spending page with per-provider stats."""
     from pathlib import Path
     _templates_dir = Path(__file__).parent / "templates"
@@ -1386,7 +1389,7 @@ buildPage(configuredProviders).catch(function(e) {{
     console.error('Failed to load usage page', e);
 }});
 </script>
-""" + render_sidebar_plugin_js(config) + """
+""" + render_sidebar_plugin_js(config, engine) + """
 </body>
 </html>"""
 

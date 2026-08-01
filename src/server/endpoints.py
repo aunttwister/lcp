@@ -5,7 +5,7 @@ LCPHandler inherits from all of them via multiple inheritance.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, parse_qs
 
 from ..api.logging_config import get_logger
@@ -596,8 +596,28 @@ class UsageEndpoints:
                     .limit(days)
                     .all()
                 )
-                daily = [{"date": r.date, "cost": float(r.cost), "requests": r.requests}
-                         for r in reversed(daily_rows)]
+
+                # Build lookup of existing data keyed by date
+                daily_map = {r.date: {"cost": float(r.cost), "requests": r.requests} for r in daily_rows}
+
+                # Determine full date range to fill gaps with zero-usage days
+                if start_str and end_str:
+                    date_end = datetime.strptime(end_str, "%Y-%m-%d").date()
+                    date_start = datetime.strptime(start_str, "%Y-%m-%d").date()
+                else:
+                    date_end = datetime.utcnow().date()
+                    date_start = date_end - timedelta(days=days - 1)
+
+                # Generate every date in the range, inserting zeros for missing days
+                daily = []
+                d = date_start
+                while d <= date_end:
+                    ds = d.strftime("%Y-%m-%d")
+                    if ds in daily_map:
+                        daily.append({"date": ds, "cost": daily_map[ds]["cost"], "requests": daily_map[ds]["requests"]})
+                    else:
+                        daily.append({"date": ds, "cost": 0, "requests": 0})
+                    d += timedelta(days=1)
 
                 # Per-model aggregates (with cache tokens)
                 model_q = (
@@ -738,7 +758,7 @@ class UsageEndpoints:
     def _serve_usage_page(self):
         """Server-rendered Usage & Spending page."""
         from ..ui.pages import render_usage_page
-        html = render_usage_page(self.config)
+        html = render_usage_page(self.config, self.engine)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
@@ -825,7 +845,7 @@ class DashboardEndpoints:
     def _serve_providers_page(self):
         """Server-rendered Providers management page."""
         from ..ui.pages import render_providers_page
-        html = render_providers_page(self.config)
+        html = render_providers_page(self.config, self.engine)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
@@ -834,7 +854,7 @@ class DashboardEndpoints:
     def _serve_profiles_page(self):
         """Server-rendered Profiles management page."""
         from ..ui.pages import render_profiles_page
-        html = render_profiles_page(self.config)
+        html = render_profiles_page(self.config, self.engine)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
