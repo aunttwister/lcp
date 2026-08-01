@@ -356,7 +356,7 @@ class LCPHandler(
 
                 full_sse = b"".join(sse_parts)
                 last_chunk = extract_last_sse_chunk(full_sse)
-                if last_chunk and "usage" in last_chunk:
+                if last_chunk and last_chunk.get("usage"):
                     cost_info = {
                         "prompt_tokens": last_chunk["usage"].get("prompt_tokens", 0),
                         "completion_tokens": last_chunk["usage"].get("completion_tokens", 0),
