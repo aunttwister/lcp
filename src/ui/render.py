@@ -13,7 +13,29 @@ from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import func
 
 _templates_dir = Path(__file__).parent / "templates" / "jinja"
-_env = Environment(loader=FileSystemLoader(str(_templates_dir)), autoescape=True)
+_env = Environment(loader=FileSystemLoader(str(_templates_dir)), autoescape=True, extensions=["jinja2.ext.do"])
+
+
+def _fmt_num(n) -> str:
+    """Format a large number for display: 1.5M, 42.3K, 7."""
+    if n is None:
+        return "0"
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n/1_000:.1f}K"
+    return str(int(n))
+
+
+def _fmt_cost(c) -> str:
+    """Format a cost value as a dollar string."""
+    if c is None:
+        return "$0.000000"
+    return f"${float(c):.6f}"
+
+
+_env.filters["fmt_num"] = _fmt_num
+_env.filters["fmt_cost"] = _fmt_cost
 
 
 def _compute_monthly(engine) -> dict:
@@ -73,13 +95,17 @@ def render_page(template_name: str, config, engine=None, **kwargs) -> str:
         html = render_page("pages/providers.html", config=self.config, engine=self.engine)
     """
     monthly = _compute_monthly(engine)
-    providers = sorted(config.providers.keys()) if config is not None and hasattr(config, 'providers') else []
-    profiles = list(config.profiles.keys()) if config is not None and hasattr(config, 'profiles') else []
-    return _env.get_template(template_name).render(
-        config=config,
-        monthly=monthly,
-        monthly_json=json.dumps(monthly),
-        configured_providers_json=json.dumps(providers),
-        profiles=profiles,
-        **kwargs,
-    )
+    provider_names = sorted(config.providers.keys()) if config is not None and hasattr(config, 'providers') else []
+    profiles_list = list(config.profiles.keys()) if config is not None and hasattr(config, 'profiles') else []
+    ctx = {
+        "config": config,
+        "monthly": monthly,
+        "monthly_json": json.dumps(monthly),
+        "configured_providers_json": json.dumps(provider_names),
+        "providers": config.providers if config is not None and hasattr(config, 'providers') else {},
+        "profiles": profiles_list,
+        "profiles_dict": config.profiles if config is not None and hasattr(config, 'profiles') else {},
+    }
+    # Let caller-supplied kwargs override defaults (e.g. profile-filtered monthly)
+    ctx.update(kwargs)
+    return _env.get_template(template_name).render(**ctx)
