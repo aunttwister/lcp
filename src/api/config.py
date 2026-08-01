@@ -103,6 +103,14 @@ class Config:
     def database(self) -> dict:
         return self._data["database"]
 
+    @property
+    def model_limits(self) -> dict:
+        return self._data.get("model_limits", {})
+
+    def get_model_limits(self, model_id: str) -> dict | None:
+        """Return context_window, max_output_tokens, description for a model, or None."""
+        return self.model_limits.get(model_id)
+
     def get_profile(self, name: str) -> dict | None:
         return self.profiles.get(name)
 

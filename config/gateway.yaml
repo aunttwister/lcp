@@ -119,6 +119,15 @@ circuit_breaker:
   failures_dead: 6
   degraded_cooldown_seconds: 30
   dead_cooldown_seconds: 120
+model_limits:
+  deepseek-v4-pro:
+    context_window: 1000000
+    max_output_tokens: 384000
+    description: "DeepSeek V4 Pro — flagship MoE for coding, reasoning, and agentic work"
+  deepseek-v4-flash:
+    context_window: 1000000
+    max_output_tokens: 384000
+    description: "DeepSeek V4 Flash — fast lane for economical reasoning and long-context work"
 database:
   path: /app/data/costs.db
   wal_mode: true

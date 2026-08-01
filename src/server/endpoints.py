@@ -51,12 +51,27 @@ class HealthEndpoints:
     def _serve_models(self):
         models = []
         seen = set()
+        model_limits = self.config.model_limits
         for prof_name, prof_cfg in self.config.profiles.items():
             for step in prof_cfg["chain"]:
                 mid = step["model"]
                 if mid not in seen:
                     seen.add(mid)
-                    models.append({"id": mid, "object": "model", "owned_by": step["provider"]})
+                    entry = {
+                        "id": mid,
+                        "object": "model",
+                        "owned_by": step["provider"],
+                    }
+                    # Enrich with context window / output limits from config
+                    limits = model_limits.get(mid)
+                    if limits:
+                        if limits.get("context_window"):
+                            entry["context_window"] = limits["context_window"]
+                        if limits.get("max_output_tokens"):
+                            entry["max_output_tokens"] = limits["max_output_tokens"]
+                        if limits.get("description"):
+                            entry["description"] = limits["description"]
+                    models.append(entry)
         self._send_json({"object": "list", "data": models})
 
     def _serve_errors(self):
