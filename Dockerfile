@@ -2,13 +2,16 @@ FROM python:3.11-alpine
 
 WORKDIR /app
 
-# Install build deps, then remove them
+# Copy dependency manifest first (for layer caching)
+COPY pyproject.toml .
+
+# Install runtime deps from pyproject.toml, then clean up build tools
+COPY src/__init__.py ./src/__init__.py
 RUN apk add --no-cache gcc musl-dev && \
-    pip install --no-cache-dir structlog sqlalchemy alembic pyyaml tiktoken jinja2 && \
+    pip install --no-cache-dir . && \
     apk del gcc musl-dev
 
 # Copy application code
-COPY pyproject.toml .
 COPY src/ ./src/
 COPY config/ ./config/
 COPY alembic.ini .
