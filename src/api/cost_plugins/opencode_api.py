@@ -68,25 +68,6 @@ def _http_get(url: str, headers: dict[str, str], timeout: int = 15) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
-def _is_authenticated(raw: str) -> bool:
-    """Check whether the page returned signed-in content."""
-    raw_lower = raw.lower()
-    needles = (
-        '"login"', '"sign in"', '"auth/authorize"',
-        '"not associated with an account"',
-        '"actor of type \\"public\\""',
-        # OpenAuth hosted login page (cookie expired / invalid)
-        '<title>openauth</title>',
-    )
-    if any(n in raw_lower for n in needles):
-        logger.warning("opencode_not_authenticated_detected_login_page")
-        return False
-    # If we got redirected to auth, the page is tiny
-    if len(raw) < 2000:
-        return False
-    return True
-
-
 # ── SSR parsing ────────────────────────────────────────────────────────────
 
 _WRK_RE = re.compile(r'id\s*:\s*"(wrk_[a-zA-Z0-9]+)"', re.IGNORECASE)
@@ -192,7 +173,7 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
     """Fetch OpenCode subscription usage from the /go page SSR data.
 
     Returns a ``SubscriptionSnapshot`` or ``None`` when the cookie is
-    missing, invalid, or no subscription data is found.
+    missing, unreachable, or no subscription data is found in the page.
     """
     if not cookie or not cookie.strip():
         logger.debug("opencode_cookie_missing")
@@ -202,14 +183,11 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
     headers = _base_headers(cookie)
 
     # ── Step 1: discover workspace ID ──────────────────────────────────
-    # Prefer explicit env var; fall back to scraping the landing page.
     workspace_id: Optional[str] = os.environ.get("OPENCODE_WORKSPACE_ID", "").strip() or None
 
     if not workspace_id:
         try:
             raw = _http_get(_OPENCODE_BASE, headers)
-            if not _is_authenticated(raw):
-                return None
             ids = _extract_workspace_ids(raw)
             if ids:
                 workspace_id = ids[0]
@@ -228,9 +206,6 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
         raw = _http_get(url, headers)
     except (URLError, OSError) as exc:
         logger.warning("opencode_go_page_fetch_failed", error=str(exc))
-        return None
-
-    if not _is_authenticated(raw):
         return None
 
     result = _parse_ssr_subscription(raw)
