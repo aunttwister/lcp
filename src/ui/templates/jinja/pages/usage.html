@@ -249,14 +249,6 @@ function buildPage(providers) {
                     '<div class="stat-card"><div class="label">Today</div><div class="value">$' + todayCost.toFixed(4) + '</div><div class="sub">' + todayReqs + ' requests</div></div>' +
                     '</div>';
             } else if (prov === 'opencode') {
-                var monthly = (sum && sum.monthly) ? sum.monthly : {tokens:0, cost:0, requests:0};
-                var weekly = (sum && sum.weekly) ? sum.weekly : {tokens:0, cost:0, requests:0};
-                var daily = (sum && sum.daily) ? sum.daily : {tokens:0, cost:0, requests:0};
-                var gwMonthly = stats.totals || {cost:0, requests:0};
-                if (monthly.tokens === 0 && monthly.requests === 0) {
-                    monthly.requests = gwMonthly.requests || 0;
-                    monthly.cost = (monthly.cost || 0) || (gwMonthly.cost || 0);
-                }
                 var sub = subscriptions['opencode'] || {};
                 function barColor(pct) { return pct >= 90 ? 'red' : pct >= 70 ? 'orange' : pct >= 40 ? 'yellow' : 'green'; }
                 function fmtCountdown(sec) {
@@ -286,11 +278,6 @@ function buildPage(providers) {
                 if (barsHtml) {
                     panelsHtml += '<div class="usage-bars">' + barsHtml + '</div>';
                 }
-                panelsHtml += '<div class="stat-cards">' +
-                    '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + monthly.cost.toFixed(4) + '</div><div class="sub">' + monthly.requests + ' requests</div></div>' +
-                    '<div class="stat-card"><div class="label">Rolling Weekly</div><div class="value">' + formatTokens(weekly.tokens) + ' tok</div><div class="sub">$' + weekly.cost.toFixed(4) + ' \u00b7 ' + weekly.requests + ' requests</div></div>' +
-                    '<div class="stat-card"><div class="label">Today</div><div class="value">' + formatTokens(daily.tokens) + ' tok</div><div class="sub">$' + daily.cost.toFixed(4) + ' \u00b7 ' + daily.requests + ' requests</div></div>' +
-                    '</div>';
             } else {
                 panelsHtml += '<div class="stat-cards">' +
                     '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + stats.totals.cost.toFixed(4) + '</div><div class="sub">' + stats.totals.requests + ' requests</div></div>' +

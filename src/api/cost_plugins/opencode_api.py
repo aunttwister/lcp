@@ -77,8 +77,6 @@ def _is_authenticated(raw: str) -> bool:
         '"actor of type \\"public\\""',
         # OpenAuth hosted login page (cookie expired / invalid)
         '<title>openauth</title>',
-        '"continue with github"',
-        '"continue with google"',
     )
     if any(n in raw_lower for n in needles):
         logger.warning("opencode_not_authenticated_detected_login_page")
@@ -211,7 +209,6 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
         try:
             raw = _http_get(_OPENCODE_BASE, headers)
             if not _is_authenticated(raw):
-                logger.warning("opencode_not_authenticated")
                 return None
             ids = _extract_workspace_ids(raw)
             if ids:
@@ -234,7 +231,6 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
         return None
 
     if not _is_authenticated(raw):
-        logger.warning("opencode_not_authenticated_go")
         return None
 
     result = _parse_ssr_subscription(raw)
