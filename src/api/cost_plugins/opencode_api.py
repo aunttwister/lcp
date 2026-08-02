@@ -159,7 +159,8 @@ def _parse_ssr_subscription(text: str) -> Optional[dict]:
 
 
 def _debug_ssr_failure(text: str) -> None:
-    """Log a snippet of the SSR text around usage-like patterns for debugging."""
+    """Log snippets of the SSR text for diagnosis — inlined into the message
+    because structlog JSON output does not render ``extra`` keys."""
     for kw in ("rollingUsage", "weeklyUsage", "monthlyUsage", "usagePercent",
                "resetInSec", "subscription"):
         idx = text.find(kw)
@@ -168,17 +169,18 @@ def _debug_ssr_failure(text: str) -> None:
             end = min(len(text), idx + 300)
             snippet = text[start:end].replace("\n", "\\n").replace("\r", "")
             logger.warning(
-                "opencode_ssr_context",
-                extra={"ssr_keyword": kw, "ssr_snippet": snippet[:500]},
+                "opencode_ssr_context keyword=%s snippet=%s",
+                kw, snippet[:500],
             )
             return
 
-    if len(text) > 200:
-        tail = text[-500:].replace("\n", "\\n")
-        logger.warning(
-            "opencode_ssr_no_usage_found",
-            extra={"ssr_tail": tail[:500]},
-        )
+    # Nothing found at all — dump first and last chunks of the page.
+    head = text[:1500].replace("\n", "\\n")
+    tail = text[-1500:].replace("\n", "\\n")
+    logger.warning(
+        "opencode_ssr_no_usage_found head=%s tail=%s",
+        head, tail,
+    )
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
@@ -232,7 +234,12 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
 
     result = _parse_ssr_subscription(raw)
     if result is None:
-        logger.warning("opencode_subscription_parse_failed")
+        head = raw[:2000].replace("\n", "\\n")
+        tail = raw[-2000:].replace("\n", "\\n")
+        logger.warning(
+            "opencode_subscription_parse_failed len=%d head=%s tail=%s",
+            len(raw), head, tail,
+        )
         return None
 
     # Heuristic: if percent < 1, multiply by 100 (fraction → percentage).
