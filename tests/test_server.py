@@ -406,6 +406,40 @@ class TestStaticEndpoints:
         finally:
             LCPHandler.config.model_limits = original_limits
 
+    def test_models_per_profile_v1(self, temp_db):
+        """GET /l2/v1/models returns only l2 profile's models."""
+        h = TestHandler(path="/l2/v1/models", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert len(body["data"]) == 1
+        assert body["data"][0]["id"] == "deepseek-v4-pro"
+        assert len(body["data"][0]["providers"]) == 2  # opencode + deepseek
+
+    def test_models_per_profile_short(self, temp_db):
+        """GET /l2/models (no /v1) also works for oaicopilot compat."""
+        h = TestHandler(path="/l2/models", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert len(body["data"]) == 1
+        assert body["data"][0]["id"] == "deepseek-v4-pro"
+
+    def test_models_per_profile_l1(self, temp_db):
+        """GET /l1/models returns only l1 profile's flash model."""
+        h = TestHandler(path="/l1/models", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert len(body["data"]) == 1
+        assert body["data"][0]["id"] == "deepseek-v4-flash"
+
+    def test_models_per_profile_unknown_404(self, temp_db):
+        """Unknown profile in path returns 404."""
+        h = TestHandler(path="/nonexistent/models", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 404
+
     def test_errors(self, temp_db):
         h = TestHandler(path="/errors", engine=temp_db)
         h.do_GET()

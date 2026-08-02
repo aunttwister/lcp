@@ -144,6 +144,13 @@ class LCPHandler(
             self._serve_health()
         elif self.path == "/v1/models":
             self._serve_models()
+        elif self.path.endswith("/v1/models") or self.path.endswith("/models"):
+            # Per-profile: /coder/v1/models or /coder/models
+            profile = self._resolve_profile()
+            if profile and profile in self.config.profiles:
+                self._serve_models(profile=profile)
+            else:
+                self._send_json({"error": "not found"}, 404)
         elif self.path.startswith("/errors"):
             self._serve_errors()
         elif self.path == "/cache/stats":

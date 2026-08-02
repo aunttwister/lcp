@@ -48,7 +48,7 @@ class HealthEndpoints:
             "providers": provider_status,
         })
 
-    def _serve_models(self):
+    def _serve_models(self, profile: str | None = None):
         # Collect all providers per model: {model_id: [provider_names]}
         model_providers = {}
         model_provider_seen = {}  # {model_id: set(provider_names)} for dedup
@@ -56,7 +56,13 @@ class HealthEndpoints:
 
         model_limits = self.config.model_limits
 
-        for _prof_name, prof_cfg in self.config.profiles.items():
+        profiles_iter = (
+            [(profile, self.config.profiles[profile])]
+            if profile
+            else self.config.profiles.items()
+        )
+
+        for _prof_name, prof_cfg in profiles_iter:
             for step in prof_cfg["chain"]:
                 mid = step["model"]
                 provider = step["provider"]
