@@ -294,17 +294,15 @@ function buildPage(providers) {
                     '</div>';
             }
 
-            if (prov === 'deepseek') {
-                panelsHtml += '<div class="date-filters" id="dateFilt-' + prov + '">' +
-                    '<button class="date-pill active" data-range="7" onclick="applyDateRange(this,\'' + prov + '\',7)">7 days</button>' +
-                    '<button class="date-pill" data-range="30" onclick="applyDateRange(this,\'' + prov + '\',30)">30 days</button>' +
-                    '<button class="date-pill" data-range="month" onclick="applyDateRange(this,\'' + prov + '\',\'month\')">This month</button>' +
-                    '<button class="date-pill" data-range="last" onclick="applyDateRange(this,\'' + prov + '\',\'last\')">Last month</button>' +
-                    '<input class="date-pill-input" type="date" id="dsFrom-' + prov + '" title="Start">' +
-                    '<input class="date-pill-input" type="date" id="dsTo-' + prov + '" title="End">' +
-                    '<button class="date-pill" data-range="custom" onclick="applyDateRange(this,\'' + prov + '\',\'custom\')">Apply</button>' +
-                    '</div>';
-            }
+            panelsHtml += '<div class="date-filters" id="dateFilt-' + prov + '">' +
+                '<button class="date-pill active" data-range="7" onclick="applyDateRange(this,\'' + prov + '\',7)">7 days</button>' +
+                '<button class="date-pill" data-range="30" onclick="applyDateRange(this,\'' + prov + '\',30)">30 days</button>' +
+                '<button class="date-pill" data-range="month" onclick="applyDateRange(this,\'' + prov + '\',\'month\')">This month</button>' +
+                '<button class="date-pill" data-range="last" onclick="applyDateRange(this,\'' + prov + '\',\'last\')">Last month</button>' +
+                '<input class="date-pill-input" type="date" id="dsFrom-' + prov + '" title="Start">' +
+                '<input class="date-pill-input" type="date" id="dsTo-' + prov + '" title="End">' +
+                '<button class="date-pill" data-range="custom" onclick="applyDateRange(this,\'' + prov + '\',\'custom\')">Apply</button>' +
+                '</div>';
 
             panelsHtml += '<div class="chart-wrap"><h3 style="font-size:0.85rem;margin-bottom:0.5rem" id="chartTitle-' + prov + '">Daily Spending (7 days)</h3><div style="height:250px"><canvas id="' + dailyChartId + '"></canvas></div></div>';
 

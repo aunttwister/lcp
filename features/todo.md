@@ -17,12 +17,12 @@
    no token data (rolling, weekly, monthly) in this state — need proper
    resolution: either auto-create the DB schema on first use, or fail loudly.
 
-3. **Decouple cost plugin filters (OpenCode vs DeepSeek)**
+3. **~~Decouple cost plugin filters (OpenCode vs DeepSeek)~~** ✅ DONE
 
-   When a spending filter is set on DeepSeek in the dashboard, it incorrectly
+   ~~When a spending filter is set on DeepSeek in the dashboard, it incorrectly
    applies to the OpenCode Go page too. Each provider plugin needs its own
    isolated filter state. Also, introduce a spending filter on the OpenCode Go
-   page (currently missing).
+   page (currently missing).~~
 
 4. **Clarify usage widget green amounts**
 
