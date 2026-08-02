@@ -192,71 +192,10 @@ function buildPage(providers) {
             if (prov === 'deepseek') {
                 var bal = (sum && sum.balance) ? sum.balance : {};
                 var available = bal.available || 0;
-                var spent = bal.spent;
-                var topped = bal.topped_up || 0;
-                var granted = bal.total_granted || 0;
-                var totalEver = topped + granted;
-                var balanceUsedPct = totalEver > 0 ? Math.min(100, ((totalEver - available) / totalEver) * 100) : 0;
-                function balanceBarClass(pct) { return pct >= 90 ? 'red' : pct >= 70 ? 'orange' : pct >= 40 ? 'yellow' : 'green'; }
-
-                var cache = stats.cache || {hit_tokens:0, miss_tokens:0, savings:0};
-                var cacheTotal = cache.hit_tokens + cache.miss_tokens;
-                var cacheRate = cacheTotal > 0 ? (cache.hit_tokens / cacheTotal * 100) : 0;
-
-                var modelEntries = [];
-                var modelKeys = Object.keys(stats.by_model || {});
-                for (var mi = 0; mi < modelKeys.length; mi++) {
-                    if (modelKeys[mi] !== 'unknown') {
-                        modelEntries.push({key: modelKeys[mi], data: stats.by_model[modelKeys[mi]]});
-                    }
-                }
-
-                var dailyArr = stats.daily || [];
-                var todayCost = 0, todayReqs = 0, weeklyCost = 0, weeklyReqs = 0;
-                var todayStr = new Date().toISOString().slice(0,10);
-                if (dailyArr.length > 0) {
-                    var lastDay = dailyArr[dailyArr.length - 1];
-                    if (lastDay.date === todayStr) { todayCost = lastDay.cost; todayReqs = lastDay.requests; }
-                    var wStart = Math.max(0, dailyArr.length - 7);
-                    for (var wi = wStart; wi < dailyArr.length; wi++) {
-                        weeklyCost += dailyArr[wi].cost;
-                        weeklyReqs += dailyArr[wi].requests;
-                    }
-                }
-
                 panelsHtml += '<div class="stat-cards">' +
                     '<div class="stat-card"><div class="label">Available Balance</div><div class="value">$' + available.toFixed(2) + '</div><div class="sub">' + (bal.currency || 'USD') + '</div></div>' +
-                    '<div class="stat-card"><div class="label">Total Spent (API)</div><div class="value">' + (spent != null ? '$' + spent.toFixed(2) : '\u2014') + '</div><div class="sub">topped $' + topped.toFixed(2) + ' + granted $' + granted.toFixed(2) + '</div></div>' +
-                    '<div class="stat-card"><div class="label">Balance Used</div><div class="value">' + balanceUsedPct.toFixed(1) + '%</div><div class="sub">of $' + totalEver.toFixed(2) + ' total</div><div class="balance-bar"><div class="balance-bar-fill ' + balanceBarClass(balanceUsedPct) + '" style="width:' + balanceUsedPct + '%"></div></div></div>' +
-                    '</div>';
-
-                panelsHtml += '<div class="stat-cards">';
-                if (cacheTotal > 0) {
-                    panelsHtml += '<div class="stat-card"><div class="label">Cache Hit Rate</div><div class="value">' + cacheRate.toFixed(1) + '%</div><div class="sub">' + formatTokens(cache.hit_tokens) + ' hit / ' + formatTokens(cache.miss_tokens) + ' miss</div></div>' +
-                        '<div class="stat-card"><div class="label">Cache Savings</div><div class="value">$' + cache.savings.toFixed(4) + '</div><div class="sub">from cache-hit discount</div></div>';
-                }
-                for (var mi = 0; mi < modelEntries.length; mi++) {
-                    var me = modelEntries[mi];
-                    if (me.data.requests > 0) {
-                        panelsHtml += '<div class="stat-card"><div class="label">' + me.key + '</div><div class="value">$' + me.data.cost.toFixed(4) + '</div><div class="sub">' + me.data.requests + ' req \u00b7 ' + formatTokens(me.data.prompt_tokens + me.data.completion_tokens) + ' tok</div></div>';
-                    }
-                }
-                panelsHtml += '</div>';
-
-                panelsHtml += '<div class="stat-cards">' +
-                    '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + stats.totals.cost.toFixed(4) + '</div><div class="sub">' + stats.totals.requests + ' requests</div></div>' +
-                    '<div class="stat-card"><div class="label">Rolling Weekly</div><div class="value">$' + weeklyCost.toFixed(4) + '</div><div class="sub">' + weeklyReqs + ' requests</div></div>' +
-                    '<div class="stat-card"><div class="label">Today</div><div class="value">$' + todayCost.toFixed(4) + '</div><div class="sub">' + todayReqs + ' requests</div></div>' +
                     '</div>';
             } else if (prov === 'opencode') {
-                var monthly = (sum && sum.monthly) ? sum.monthly : {tokens:0, cost:0, requests:0};
-                var weekly = (sum && sum.weekly) ? sum.weekly : {tokens:0, cost:0, requests:0};
-                var daily = (sum && sum.daily) ? sum.daily : {tokens:0, cost:0, requests:0};
-                var gwMonthly = stats.totals || {cost:0, requests:0};
-                if (monthly.tokens === 0 && monthly.requests === 0) {
-                    monthly.requests = gwMonthly.requests || 0;
-                    monthly.cost = (monthly.cost || 0) || (gwMonthly.cost || 0);
-                }
                 var sub = subscriptions['opencode'] || {};
                 function barColor(pct) { return pct >= 90 ? 'red' : pct >= 70 ? 'orange' : pct >= 40 ? 'yellow' : 'green'; }
                 function fmtCountdown(sec) {
@@ -271,23 +210,12 @@ function buildPage(providers) {
                     return parts.join(' ');
                 }
                 var barsHtml = '';
-                if (sub.rolling_pct != null) {
-                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">5h Rolling</span><span class="bar-pct">' + sub.rolling_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.rolling_pct) + '" style="width:' + sub.rolling_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.rolling_reset_sec) + '</span><span>' + (sub.rolling_reset_at || '') + '</span></div></div>';
-                }
-                if (sub.weekly_pct != null) {
-                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Weekly</span><span class="bar-pct">' + sub.weekly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.weekly_pct) + '" style="width:' + sub.weekly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.weekly_reset_sec) + '</span><span>' + (sub.weekly_reset_at || '') + '</span></div></div>';
-                }
                 if (sub.monthly_pct != null) {
-                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Monthly</span><span class="bar-pct">' + sub.monthly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.monthly_pct) + '" style="width:' + sub.monthly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.monthly_reset_sec) + '</span><span>' + (sub.monthly_reset_at || '') + '</span></div></div>';
+                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Monthly Usage</span><span class="bar-pct">' + sub.monthly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.monthly_pct) + '" style="width:' + sub.monthly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.monthly_reset_sec) + '</span><span>' + (sub.monthly_reset_at || '') + '</span></div></div>';
                 }
                 if (barsHtml) {
                     panelsHtml += '<div class="usage-bars">' + barsHtml + '</div>';
                 }
-                panelsHtml += '<div class="stat-cards">' +
-                    '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + monthly.cost.toFixed(4) + '</div><div class="sub">' + monthly.requests + ' requests</div></div>' +
-                    '<div class="stat-card"><div class="label">Rolling Weekly</div><div class="value">' + formatTokens(weekly.tokens) + ' tok</div><div class="sub">$' + weekly.cost.toFixed(4) + ' \u00b7 ' + weekly.requests + ' requests</div></div>' +
-                    '<div class="stat-card"><div class="label">Today</div><div class="value">' + formatTokens(daily.tokens) + ' tok</div><div class="sub">$' + daily.cost.toFixed(4) + ' \u00b7 ' + daily.requests + ' requests</div></div>' +
-                    '</div>';
             } else {
                 panelsHtml += '<div class="stat-cards">' +
                     '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + stats.totals.cost.toFixed(4) + '</div><div class="sub">' + stats.totals.requests + ' requests</div></div>' +
@@ -319,7 +247,9 @@ function buildPage(providers) {
 
         providers.forEach(function(prov, i) {
             var stats = statsList[i] || {daily:[], by_model:{}, by_profile:{}};
-            renderDailyChart('chart-daily-' + prov, stats.daily);
+            // Initial chart shows only last 7 days (matches active 7-day pill)
+            var initialDaily = (stats.daily || []).slice(-7);
+            renderDailyChart('chart-daily-' + prov, initialDaily);
             renderBreakdownTable('table-model-' + prov, stats.by_model, 'Model');
             renderBreakdownTable('table-profile-' + prov, stats.by_profile, 'Profile');
         });
@@ -350,12 +280,12 @@ window.applyDateRange = function(btnEl, provider, range) {
         if (!start || !end) return;
         label = start + ' ~ ' + end;
     } else if (range === 7) {
-        d.setDate(d.getDate() - 7);
+        d.setDate(d.getDate() - 6);
         start = d.toISOString().slice(0,10);
         end = today.toISOString().slice(0,10);
         label = '7 days';
     } else if (range === 30) {
-        d.setDate(d.getDate() - 30);
+        d.setDate(d.getDate() - 29);
         start = d.toISOString().slice(0,10);
         end = today.toISOString().slice(0,10);
         label = '30 days';

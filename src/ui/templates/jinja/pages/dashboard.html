@@ -149,9 +149,9 @@
     <div class="sub">{{ cache_hit_tokens_fmt }} hit / {{ cache_miss_tokens_fmt }} miss</div>
   </div>
   <div class="card">
-    <div class="label">Cache Savings</div>
+    <div class="label">Cache Savings (est.)</div>
     <div class="value good">{{ cache_savings_fmt }}</div>
-    <div class="sub">prefix caching discount</div>
+    <div class="sub" title="Estimated: cache-hit tokens × (miss price − hit price). Not actual account credit.">est. from prompt cache discount</div>
   </div>
   <div class="card">
     <div class="label">Output Tokens</div>

@@ -24,11 +24,11 @@
    isolated filter state. Also, introduce a spending filter on the OpenCode Go
    page (currently missing).~~
 
-4. **Clarify usage widget green amounts**
+4. **~~Clarify usage widget green amounts~~** ✅ DONE
 
-   The green currency amounts shown below usage charts are confusing.
+   ~~The green currency amounts shown below usage charts are confusing.
    Document what they represent (estimated savings? cache hits? something else?)
-   and consider a clearer label or tooltip in the UI.
+   and consider a clearer label or tooltip in the UI.~~
 
 5. **Redesign the Summary page**
 
