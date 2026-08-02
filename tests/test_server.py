@@ -25,7 +25,10 @@ def _setup_handler_config(temp_db):
     cfg.profiles = {
         "l2": {
             "forbidden_tools": ["write_file"],
-            "chain": [{"provider": "opencode", "model": "deepseek-v4-pro", "base_url": "https://test/v1"}],
+            "chain": [
+                {"provider": "opencode", "model": "deepseek-v4-pro", "base_url": "https://test/v1"},
+                {"provider": "deepseek", "model": "deepseek-v4-pro", "base_url": "https://test/v1"},
+            ],
             "auth_required": True,
         },
         "l1": {
@@ -54,6 +57,10 @@ def _setup_handler_config(temp_db):
     ]
     cfg.circuit_breaker = {"failures_dead": 5, "dead_cooldown_seconds": 300, "failures_degraded": 3, "degraded_cooldown_seconds": 60}
     cfg.database = {"path": "/tmp/test.db", "wal_mode": True}
+    cfg.model_limits = {
+        "deepseek-v4-pro": {"context_window": 1000000, "max_output_tokens": 384000, "description": "pro model"},
+        "deepseek-v4-flash": {"context_window": 1000000, "max_output_tokens": 384000, "description": "flash model"},
+    }
     cfg.get_profile = lambda name: cfg.profiles.get(name)
     cfg.get_pricing = lambda provider, model: next((p for p in cfg.pricing if p["provider"] == provider and p["model"] == model), cfg.pricing[0])
     cfg.get_provider_key = lambda name: "test-key"
@@ -361,6 +368,43 @@ class TestStaticEndpoints:
         h = TestHandler(path="/v1/models", engine=temp_db)
         h.do_GET()
         assert _status(h) == 200
+        body = _json_body(h)
+        assert "data" in body
+        assert isinstance(body["data"], list)
+        assert len(body["data"]) == 2  # deepseek-v4-pro, deepseek-v4-flash
+
+        # Verify deepseek-v4-pro entry (first in chain, owned_by=opencode)
+        pro = next((m for m in body["data"] if m["id"] == "deepseek-v4-pro"), None)
+        assert pro is not None
+        assert pro["object"] == "model"
+        assert pro["owned_by"] == "opencode"
+        assert pro["context_window"] == 1000000
+        assert pro["max_output_tokens"] == 384000
+
+        # OpenRouter providers array — both opencode and deepseek offer this model
+        assert "providers" in pro
+        assert isinstance(pro["providers"], list)
+        assert len(pro["providers"]) == 2
+        provider_names = {p["provider"] for p in pro["providers"]}
+        assert provider_names == {"opencode", "deepseek"}
+        for p in pro["providers"]:
+            assert p["context_length"] == 1000000
+            assert p["supports_tools"] is True
+
+    def test_models_no_limits_falls_back_to_default_context_length(self, temp_db):
+        """When model_limits is empty/missing, providers use 128000 default."""
+        original_limits = LCPHandler.config.model_limits
+        try:
+            LCPHandler.config.model_limits = {}
+            h = TestHandler(path="/v1/models", engine=temp_db)
+            h.do_GET()
+            body = _json_body(h)
+            for m in body["data"]:
+                for p in m["providers"]:
+                    assert p["context_length"] == 128000
+                    assert p["supports_tools"] is True
+        finally:
+            LCPHandler.config.model_limits = original_limits
 
     def test_errors(self, temp_db):
         h = TestHandler(path="/errors", engine=temp_db)

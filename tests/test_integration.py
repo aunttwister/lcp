@@ -74,6 +74,17 @@ class TestHealth:
         data = json.loads(body)
         assert "data" in data
         assert isinstance(data["data"], list)
+        # Verify OpenRouter-compatible format when models are present
+        for model in data["data"]:
+            assert "id" in model
+            assert "object" in model
+            assert "providers" in model
+            assert isinstance(model["providers"], list)
+            for p in model["providers"]:
+                assert "provider" in p
+                assert "context_length" in p
+                assert "supports_tools" in p
+                assert p["supports_tools"] is True
 
 
 # ── Cache Stats ────────────────────────────────────────────────────────

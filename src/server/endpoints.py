@@ -49,29 +49,61 @@ class HealthEndpoints:
         })
 
     def _serve_models(self):
-        models = []
-        seen = set()
+        # Collect all providers per model: {model_id: [provider_names]}
+        model_providers = {}
+        model_provider_seen = {}  # {model_id: set(provider_names)} for dedup
+        model_owned_by = {}
+
         model_limits = self.config.model_limits
-        for prof_name, prof_cfg in self.config.profiles.items():
+
+        for _prof_name, prof_cfg in self.config.profiles.items():
             for step in prof_cfg["chain"]:
                 mid = step["model"]
-                if mid not in seen:
-                    seen.add(mid)
-                    entry = {
-                        "id": mid,
-                        "object": "model",
-                        "owned_by": step["provider"],
-                    }
-                    # Enrich with context window / output limits from config
-                    limits = model_limits.get(mid)
-                    if limits:
-                        if limits.get("context_window"):
-                            entry["context_window"] = limits["context_window"]
-                        if limits.get("max_output_tokens"):
-                            entry["max_output_tokens"] = limits["max_output_tokens"]
-                        if limits.get("description"):
-                            entry["description"] = limits["description"]
-                    models.append(entry)
+                provider = step["provider"]
+
+                if mid not in model_provider_seen:
+                    model_provider_seen[mid] = set()
+                    model_providers[mid] = []
+
+                if provider not in model_provider_seen[mid]:
+                    model_provider_seen[mid].add(provider)
+                    model_providers[mid].append(provider)
+
+                # First-seen provider becomes owned_by
+                if mid not in model_owned_by:
+                    model_owned_by[mid] = provider
+
+        models = []
+        for mid, providers in model_providers.items():
+            limits = model_limits.get(mid, {})
+            context_len = limits.get("context_window")
+
+            entry = {
+                "id": mid,
+                "object": "model",
+                "owned_by": model_owned_by[mid],
+            }
+
+            # Existing enrichment fields (backward compat)
+            if context_len:
+                entry["context_window"] = context_len
+            if limits.get("max_output_tokens"):
+                entry["max_output_tokens"] = limits["max_output_tokens"]
+            if limits.get("description"):
+                entry["description"] = limits["description"]
+
+            # OpenRouter-compatible providers array
+            entry["providers"] = [
+                {
+                    "provider": p,
+                    "context_length": context_len or 128000,
+                    "supports_tools": True,
+                }
+                for p in providers
+            ]
+
+            models.append(entry)
+
         self._send_json({"object": "list", "data": models})
 
     def _serve_errors(self):
