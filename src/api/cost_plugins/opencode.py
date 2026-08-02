@@ -249,6 +249,12 @@ class OpenCodeCostPlugin(CostPlugin):
         is unreachable.
         """
         try:
+            if os.environ.get("LCP_MOCK_PLUGIN_DATA"):
+                return {
+                    "monthly_pct": 12.0, "monthly_reset_sec": 1209600,
+                    "rolling_pct": 17.0, "rolling_reset_sec": 5944,
+                    "weekly_pct": 75.0, "weekly_reset_sec": 278201,
+                }
             from .opencode_api import fetch_subscription_dict
             cookie = os.environ.get("OPENCODE_COOKIE")
             if not cookie:

@@ -480,16 +480,9 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   transition: background 0.1s;
 }
 .sb-provider-row:hover { background: hsl(var(--secondary) / 0.4); }
-.sb-provider-top {
-  display: flex; align-items: center; gap: 0.25rem;
-}
 .sb-provider-name {
   font-weight: 600; font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 0.625rem; color: hsl(var(--foreground));
-}
-.sb-provider-cost {
-  color: hsl(var(--green-fg)); font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 0.5625rem; margin-left: auto;
 }
 .sb-provider-detail {
   display: block;

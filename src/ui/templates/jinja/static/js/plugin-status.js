@@ -32,13 +32,9 @@ function loadPluginStatus() {
       uniqueProvs.forEach(function (prov) {
         var bal = balances[prov];
         var usg = allUsage[prov] || [];
-        var totalCost = usg.reduce(function (s, r) { return s + r.cost; }, 0);
         var totalTokens = usg.reduce(function (s, r) { return s + r.prompt_tokens + r.completion_tokens; }, 0);
 
         // Fallback to gateway DB when plugin has no usage data
-        if (totalCost === 0 && monthly[prov]) {
-          totalCost = monthly[prov].cost || 0;
-        }
         if (totalTokens === 0 && monthly[prov]) {
           totalTokens = monthly[prov].tokens || 0;
         }
@@ -46,41 +42,12 @@ function loadPluginStatus() {
 
         var detailLine = '';
         if (prov === 'opencode') {
-          var om = (sum && sum.monthly) ? sum.monthly : (monthly[prov] || {});
-          detailLine = '<span class="sb-provider-detail">' +
-            'month: ' + formatTokens(om.tokens || totalTokens) + ' tok';
-          if (om.cost) detailLine += ' \u00b7 $' + om.cost.toFixed(4);
           var sub = subscriptions[prov];
-          if (sub) {
-            detailLine += '<br><span class="sb-sub-detail">';
-            var parts = [];
-            if (sub.rolling_pct != null) {
-              var resetMin = Math.floor(sub.rolling_reset_sec / 60);
-              var r = '5h: ' + sub.rolling_pct.toFixed(0) + '% used';
-              if (resetMin > 0) r += ' \u00b7 resets in ' + resetMin + 'm';
-              parts.push(r);
-            }
-            if (sub.weekly_pct != null) {
-              var wkResetHr = Math.floor(sub.weekly_reset_sec / 3600);
-              var w = 'week: ' + sub.weekly_pct.toFixed(0) + '% used';
-              if (wkResetHr > 0) w += ' \u00b7 resets in ' + wkResetHr + 'h';
-              parts.push(w);
-            }
-            if (sub.monthly_pct != null) {
-              var moResetDay = Math.floor(sub.monthly_reset_sec / 86400);
-              var m = 'month: ' + sub.monthly_pct.toFixed(0) + '% used';
-              if (moResetDay > 0) m += ' \u00b7 resets in ' + moResetDay + 'd';
-              parts.push(m);
-            }
-            detailLine += parts.join('<br>');
-            detailLine += '</span>';
+          if (sub && sub.monthly_pct != null) {
+            detailLine = '<span class="sb-provider-detail">monthly: ' + sub.monthly_pct.toFixed(0) + '%</span>';
           }
-          detailLine += '</span>';
         } else if (prov === 'deepseek' && sum && sum.balance) {
-          var cur = sum.balance.currency || 'USD';
-          detailLine = '<span class="sb-provider-detail">' + cur + ' ' + sum.balance.available.toFixed(2) + ' available';
-          if (sum.balance.spent !== null) detailLine += ' \u00b7 spent ' + cur + ' ' + sum.balance.spent.toFixed(2);
-          detailLine += '</span>';
+          detailLine = '<span class="sb-provider-detail">available balance: $' + sum.balance.available.toFixed(2) + '</span>';
         } else if (bal && bal.balance !== null && bal.balance !== undefined) {
           var currency = bal.currency || 'USD';
           detailLine = '<span class="sb-provider-detail">' + currency + ' ' + bal.balance.toFixed(2) + ' balance</span>';
@@ -94,10 +61,7 @@ function loadPluginStatus() {
         }
 
         rows += '<div class="sb-provider-row">' +
-          '<div class="sb-provider-top">' +
           '<span class="sb-provider-name">' + prov + '</span>' +
-          '<span class="sb-provider-cost">$' + totalCost.toFixed(4) + '</span>' +
-          '</div>' +
           (detailLine ? detailLine : '') +
           '</div>';
       });

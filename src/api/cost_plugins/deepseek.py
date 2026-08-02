@@ -97,6 +97,10 @@ class DeepSeekCostPlugin(CostPlugin):
 
         api_key = self._api_key()
         if not api_key:
+            if os.environ.get("LCP_MOCK_PLUGIN_DATA"):
+                self._balance_cache = {"balance": 20.00, "currency": "USD", "total_granted": 25.00, "topped_up": 25.00}
+                self._balance_cached_at = now
+                return self._balance_cache
             return None
 
         try:
