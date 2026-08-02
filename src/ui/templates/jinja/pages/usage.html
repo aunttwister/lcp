@@ -280,12 +280,6 @@ function buildPage(providers) {
                     return mon + ' ' + day + ' ' + h + ':' + min;
                 }
                 var barsHtml = '';
-                if (sub.rolling_pct != null) {
-                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">5h Rolling</span><span class="bar-pct">' + sub.rolling_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.rolling_pct) + '" style="width:' + sub.rolling_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.rolling_reset_sec) + '</span><span>' + fmtResetAt(sub.rolling_reset_sec) + '</span></div></div>';
-                }
-                if (sub.weekly_pct != null) {
-                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Weekly</span><span class="bar-pct">' + sub.weekly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.weekly_pct) + '" style="width:' + sub.weekly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.weekly_reset_sec) + '</span><span>' + fmtResetAt(sub.weekly_reset_sec) + '</span></div></div>';
-                }
                 if (sub.monthly_pct != null) {
                     barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Monthly</span><span class="bar-pct">' + sub.monthly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.monthly_pct) + '" style="width:' + sub.monthly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.monthly_reset_sec) + '</span><span>' + fmtResetAt(sub.monthly_reset_sec) + '</span></div></div>';
                 }

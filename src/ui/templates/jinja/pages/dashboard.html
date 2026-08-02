@@ -1121,14 +1121,8 @@ function loadPluginStatus() {
           var detailLine = '';
           if (prov === 'opencode') {
             var sub = subscriptions[prov];
-            if (sub) {
-              var parts = [];
-              if (sub.rolling_pct != null) parts.push('5h: ' + sub.rolling_pct.toFixed(0) + '%');
-              if (sub.weekly_pct != null) parts.push('week: ' + sub.weekly_pct.toFixed(0) + '%');
-              if (sub.monthly_pct != null) parts.push('monthly: ' + sub.monthly_pct.toFixed(0) + '%');
-              if (parts.length > 0) {
-                detailLine = '<span class="sb-provider-detail">' + parts.join('<br>') + '</span>';
-              }
+            if (sub && sub.monthly_pct != null) {
+              detailLine = '<span class="sb-provider-detail">monthly: ' + sub.monthly_pct.toFixed(0) + '%</span>';
             }
           } else if (prov === 'deepseek' && sum && sum.balance) {
             detailLine = '<span class="sb-provider-detail">available balance: $' + sum.balance.available.toFixed(2) + '</span>';
@@ -1163,24 +1157,15 @@ function loadPluginStatus() {
     var subDetail = document.getElementById('opencodeSubDetail');
     if (ocSub && subCard) {
       subCard.style.display = '';
-      var parts = [];
-      if (ocSub.rolling_pct !== undefined && ocSub.rolling_pct !== null) {
-        var resetMin = Math.floor(ocSub.rolling_reset_sec / 60);
-        parts.push('5h: ' + ocSub.rolling_pct.toFixed(0) + '%');
-        if (resetMin > 0) parts[parts.length-1] += ' (reset ' + resetMin + 'm)';
-      }
-      if (ocSub.weekly_pct !== undefined && ocSub.weekly_pct !== null) {
-        var resetHr = Math.floor(ocSub.weekly_reset_sec / 3600);
-        parts.push('Week: ' + ocSub.weekly_pct.toFixed(0) + '%');
-        if (resetHr > 0) parts[parts.length-1] += ' (reset ' + resetHr + 'h)';
-      }
       if (ocSub.monthly_pct !== undefined && ocSub.monthly_pct !== null) {
         var resetDay = Math.floor(ocSub.monthly_reset_sec / 86400);
-        parts.push('Month: ' + ocSub.monthly_pct.toFixed(0) + '%');
-        if (resetDay > 0) parts[parts.length-1] += ' (reset ' + resetDay + 'd)';
+        var txt = 'Month: ' + ocSub.monthly_pct.toFixed(0) + '%';
+        if (resetDay > 0) txt += ' (reset ' + resetDay + 'd)';
+        subValue.textContent = txt;
+      } else {
+        subValue.textContent = '--';
       }
-      subValue.textContent = parts.join(' · ') || '--';
-      var pctVal = ocSub.rolling_pct || ocSub.weekly_pct || ocSub.monthly_pct || 0;
+      var pctVal = ocSub.monthly_pct || 0;
       var cls = pctVal > 90 ? 'warn' : 'good';
       subValue.className = 'value ' + cls;
       if (ocSub.workspace_id) {

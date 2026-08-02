@@ -75,8 +75,13 @@ def _is_authenticated(raw: str) -> bool:
         '"login"', '"sign in"', '"auth/authorize"',
         '"not associated with an account"',
         '"actor of type \\"public\\""',
+        # OpenAuth hosted login page (cookie expired / invalid)
+        '<title>openauth</title>',
+        '"continue with github"',
+        '"continue with google"',
     )
     if any(n in raw_lower for n in needles):
+        logger.warning("opencode_not_authenticated_detected_login_page")
         return False
     # If we got redirected to auth, the page is tiny
     if len(raw) < 2000:
