@@ -89,22 +89,21 @@ def _is_authenticated(raw: str) -> bool:
 _WRK_RE = re.compile(r'id\s*:\s*"(wrk_[a-zA-Z0-9]+)"', re.IGNORECASE)
 
 # Match the full lite.subscription.get data in the $R SSR block.
-# Format: lite.subscription.get["wrk_..."]...rollingUsage:$R[N]={status:"ok",...}
-_SUB_COMBINED_RE = re.compile(
-    r'lite\.subscription\.get\["wrk_[^"]+"\]'
-    r'.+?'
-    r'rollingUsage:\$R\[\d+\]=\{status:"[^"]*",resetInSec:(\d+),usagePercent:(\d+(?:\.\d+)?)\}'
-    r'.+?'
-    r'weeklyUsage:\$R\[\d+\]=\{status:"[^"]*",resetInSec:(\d+),usagePercent:(\d+(?:\.\d+)?)\}'
-    r'.+?'
-    r'monthlyUsage:\$R\[\d+\]=\{status:"[^"]*",resetInSec:(\d+),usagePercent:(\d+(?:\.\d+)?)\}',
+_SUBSCRIBE_BLOCK_START_RE = re.compile(
+    r'lite\.subscription\.get\["wrk_[^"]+"\]',
     re.DOTALL,
 )
 
-# Per-window fallback regex
-_USAGE_BLOCK_RE = re.compile(
+# Step 1: find each (rollingUsage|weeklyUsage|monthlyUsage):$R[N]={...} block.
+_BLOCK_RE = re.compile(
     r'(rollingUsage|weeklyUsage|monthlyUsage)'
-    r':\$R\[\d+\]=\{status:"([^"]*)",resetInSec:(\d+),usagePercent:(\d+(?:\.\d+)?)\}',
+    r':\$R\[\d+\]=\{(.+?)\}',
+)
+
+# Step 2: extract resetInSec / usagePercent from inside a block (any order).
+_RESET_RE = re.compile(r'(?:resetInSec|resetIn)\s*:\s*(-?\d+)')
+_USAGE_PCT_RE = re.compile(
+    r'(?:usagePercent|usagePct|usage|pct)\s*:\s*(\d+(?:\.\d+)?)',
 )
 
 
@@ -119,24 +118,27 @@ def _parse_ssr_subscription(text: str) -> Optional[dict]:
     Looks for ``lite.subscription.get`` query result containing
     rollingUsage, weeklyUsage, monthlyUsage objects.
     """
-    # Approach 1: single combined regex
-    m = _SUB_COMBINED_RE.search(text)
-    if m:
-        return {
-            "rolling_reset_sec": int(m.group(1)),
-            "rolling_pct": float(m.group(2)),
-            "weekly_reset_sec": int(m.group(3)),
-            "weekly_pct": float(m.group(4)),
-            "monthly_reset_sec": int(m.group(5)),
-            "monthly_pct": float(m.group(6)),
-        }
+    # Find the subscription.get block to scope our search.
+    sub_start = _SUBSCRIBE_BLOCK_START_RE.search(text)
+    if sub_start:
+        end_pos = min(len(text), sub_start.end() + 20000)
+        block = text[sub_start.start():end_pos]
+    else:
+        block = text
 
-    # Approach 2: per-window blocks individually
+    # Collect per-window matches — two-step: find blocks, then extract values.
     result: dict = {}
-    for m in _USAGE_BLOCK_RE.finditer(text):
+    for m in _BLOCK_RE.finditer(block):
         window = m.group(1)  # rollingUsage, weeklyUsage, monthlyUsage
-        reset_sec = int(m.group(3))
-        pct = float(m.group(4))
+        body = m.group(2)    # content inside { ... }
+
+        reset_m = _RESET_RE.search(body)
+        pct_m = _USAGE_PCT_RE.search(body)
+        if not reset_m or not pct_m:
+            continue
+
+        reset_sec = int(reset_m.group(1))
+        pct = float(pct_m.group(1))
 
         if "rolling" in window:
             result["rolling_reset_sec"] = reset_sec
@@ -151,7 +153,32 @@ def _parse_ssr_subscription(text: str) -> Optional[dict]:
     if "rolling_pct" in result and "rolling_reset_sec" in result:
         return result
 
+    # Debug: log a snippet around any usage-like patterns for diagnosis
+    _debug_ssr_failure(block)
     return None
+
+
+def _debug_ssr_failure(text: str) -> None:
+    """Log a snippet of the SSR text around usage-like patterns for debugging."""
+    for kw in ("rollingUsage", "weeklyUsage", "monthlyUsage", "usagePercent",
+               "resetInSec", "subscription"):
+        idx = text.find(kw)
+        if idx >= 0:
+            start = max(0, idx - 100)
+            end = min(len(text), idx + 300)
+            snippet = text[start:end].replace("\n", "\\n").replace("\r", "")
+            logger.warning(
+                "opencode_ssr_context",
+                extra={"ssr_keyword": kw, "ssr_snippet": snippet[:500]},
+            )
+            return
+
+    if len(text) > 200:
+        tail = text[-500:].replace("\n", "\\n")
+        logger.warning(
+            "opencode_ssr_no_usage_found",
+            extra={"ssr_tail": tail[:500]},
+        )
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
