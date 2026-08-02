@@ -211,19 +211,6 @@ function buildPage(providers) {
                     }
                 }
 
-                var dailyArr = stats.daily || [];
-                var todayCost = 0, todayReqs = 0, weeklyCost = 0, weeklyReqs = 0;
-                var todayStr = new Date().toISOString().slice(0,10);
-                if (dailyArr.length > 0) {
-                    var lastDay = dailyArr[dailyArr.length - 1];
-                    if (lastDay.date === todayStr) { todayCost = lastDay.cost; todayReqs = lastDay.requests; }
-                    var wStart = Math.max(0, dailyArr.length - 7);
-                    for (var wi = wStart; wi < dailyArr.length; wi++) {
-                        weeklyCost += dailyArr[wi].cost;
-                        weeklyReqs += dailyArr[wi].requests;
-                    }
-                }
-
                 panelsHtml += '<div class="stat-cards">' +
                     '<div class="stat-card"><div class="label">Available Balance</div><div class="value">$' + available.toFixed(2) + '</div><div class="sub">' + (bal.currency || 'USD') + '</div></div>' +
                     '<div class="stat-card"><div class="label">Total Spent (API)</div><div class="value">' + (spent != null ? '$' + spent.toFixed(2) : '\u2014') + '</div><div class="sub">topped $' + topped.toFixed(2) + ' + granted $' + granted.toFixed(2) + '</div></div>' +
@@ -242,12 +229,6 @@ function buildPage(providers) {
                     }
                 }
                 panelsHtml += '</div>';
-
-                panelsHtml += '<div class="stat-cards">' +
-                    '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + stats.totals.cost.toFixed(4) + '</div><div class="sub">' + stats.totals.requests + ' requests</div></div>' +
-                    '<div class="stat-card"><div class="label">Rolling Weekly</div><div class="value">$' + weeklyCost.toFixed(4) + '</div><div class="sub">' + weeklyReqs + ' requests</div></div>' +
-                    '<div class="stat-card"><div class="label">Today</div><div class="value">$' + todayCost.toFixed(4) + '</div><div class="sub">' + todayReqs + ' requests</div></div>' +
-                    '</div>';
             } else if (prov === 'opencode') {
                 var sub = subscriptions['opencode'] || {};
                 function barColor(pct) { return pct >= 90 ? 'red' : pct >= 70 ? 'orange' : pct >= 40 ? 'yellow' : 'green'; }
@@ -271,7 +252,14 @@ function buildPage(providers) {
                     var min = String(resetDate.getMinutes()).padStart(2, '0');
                     return mon + ' ' + day + ' ' + h + ':' + min;
                 }
+
                 var barsHtml = '';
+                if (sub.rolling_pct != null) {
+                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Rolling (5h)</span><span class="bar-pct">' + sub.rolling_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.rolling_pct) + '" style="width:' + sub.rolling_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.rolling_reset_sec) + '</span><span>' + fmtResetAt(sub.rolling_reset_sec) + '</span></div></div>';
+                }
+                if (sub.weekly_pct != null) {
+                    barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Weekly</span><span class="bar-pct">' + sub.weekly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.weekly_pct) + '" style="width:' + sub.weekly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.weekly_reset_sec) + '</span><span>' + fmtResetAt(sub.weekly_reset_sec) + '</span></div></div>';
+                }
                 if (sub.monthly_pct != null) {
                     barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Monthly</span><span class="bar-pct">' + sub.monthly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.monthly_pct) + '" style="width:' + sub.monthly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.monthly_reset_sec) + '</span><span>' + fmtResetAt(sub.monthly_reset_sec) + '</span></div></div>';
                 }
