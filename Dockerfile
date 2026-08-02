@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install build deps, then remove them
 RUN apk add --no-cache gcc musl-dev && \
-    pip install --no-cache-dir structlog sqlalchemy alembic pyyaml tiktoken && \
+    pip install --no-cache-dir structlog sqlalchemy alembic pyyaml tiktoken jinja2 && \
     apk del gcc musl-dev
 
 # Copy application code
