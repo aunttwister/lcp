@@ -375,7 +375,17 @@ class LCPHandler(
                     cost_info["cost"] = estimate_cost_from_tokens(
                         provider, model, cost_info, self.config
                     )
-                    record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools)
+                else:
+                    # SSE stream without usage — fall back to pre-flight estimation
+                    cost_info = {
+                        "prompt_tokens": estimation["prompt_tokens"],
+                        "completion_tokens": 0,
+                        "cache_hit_tokens": 0,
+                        "cache_miss_tokens": estimation["prompt_tokens"],
+                        "cost": estimation["estimated_total_cost"],
+                        "latency_ms": latency_ms,
+                    }
+                record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools)
 
                 logger.info(
                     "request_complete",
