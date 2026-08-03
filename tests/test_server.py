@@ -371,13 +371,17 @@ class TestStaticEndpoints:
         body = _json_body(h)
         assert "data" in body
         assert isinstance(body["data"], list)
-        assert len(body["data"]) == 2  # deepseek-v4-pro, deepseek-v4-flash
+        # 2 models + 4 profiles (l2, l1, career, cron)
+        assert len(body["data"]) == 6
+
+        # ── Verify model entries ──
 
         # Verify deepseek-v4-pro entry (first in chain, owned_by=opencode)
         pro = next((m for m in body["data"] if m["id"] == "deepseek-v4-pro"), None)
         assert pro is not None
         assert pro["object"] == "model"
         assert pro["owned_by"] == "opencode"
+        assert pro["kind"] == "model"
         assert pro["context_window"] == 1000000
         assert pro["max_output_tokens"] == 384000
 
@@ -390,6 +394,24 @@ class TestStaticEndpoints:
         for p in pro["providers"]:
             assert p["context_length"] == 1000000
             assert p["supports_tools"] is True
+
+        # ── Verify profile entries ──
+
+        # l2 profile should appear as a virtual model
+        l2 = next((m for m in body["data"] if m["id"] == "l2"), None)
+        assert l2 is not None
+        assert l2["object"] == "model"
+        assert l2["owned_by"] == "lcp"
+        assert l2["kind"] == "profile"
+        assert l2["context_window"] == 1000000
+        assert len(l2["providers"]) == 2  # opencode + deepseek in l2 chain
+
+        # career profile — single chain step
+        career = next((m for m in body["data"] if m["id"] == "career"), None)
+        assert career is not None
+        assert career["kind"] == "profile"
+        assert len(career["providers"]) == 1
+        assert career["providers"][0]["model"] == "deepseek-v4-flash"
 
     def test_models_no_limits_falls_back_to_default_context_length(self, temp_db):
         """When model_limits is empty/missing, providers use 128000 default."""
@@ -407,14 +429,22 @@ class TestStaticEndpoints:
             LCPHandler.config.model_limits = original_limits
 
     def test_models_per_profile_v1(self, temp_db):
-        """GET /l2/v1/models returns only l2 profile's models."""
+        """GET /l2/v1/models returns l2 profile's models + the profile itself."""
         h = TestHandler(path="/l2/v1/models", engine=temp_db)
         h.do_GET()
         assert _status(h) == 200
         body = _json_body(h)
-        assert len(body["data"]) == 1
-        assert body["data"][0]["id"] == "deepseek-v4-pro"
-        assert len(body["data"][0]["providers"]) == 2  # opencode + deepseek
+        # 1 model + 1 profile = 2 entries
+        assert len(body["data"]) == 2
+        model_ids = {m["id"] for m in body["data"]}
+        assert model_ids == {"deepseek-v4-pro", "l2"}
+        # Model entry
+        pro = next(m for m in body["data"] if m["id"] == "deepseek-v4-pro")
+        assert len(pro["providers"]) == 2  # opencode + deepseek
+        # Profile entry
+        prof = next(m for m in body["data"] if m["id"] == "l2")
+        assert prof["kind"] == "profile"
+        assert prof["owned_by"] == "lcp"
 
     def test_models_per_profile_short(self, temp_db):
         """GET /l2/models (no /v1) also works for oaicopilot compat."""
@@ -422,17 +452,21 @@ class TestStaticEndpoints:
         h.do_GET()
         assert _status(h) == 200
         body = _json_body(h)
-        assert len(body["data"]) == 1
-        assert body["data"][0]["id"] == "deepseek-v4-pro"
+        # 1 model + 1 profile
+        assert len(body["data"]) == 2
+        model_ids = {m["id"] for m in body["data"]}
+        assert model_ids == {"deepseek-v4-pro", "l2"}
 
     def test_models_per_profile_l1(self, temp_db):
-        """GET /l1/models returns only l1 profile's flash model."""
+        """GET /l1/models returns l1 profile's flash model + the profile itself."""
         h = TestHandler(path="/l1/models", engine=temp_db)
         h.do_GET()
         assert _status(h) == 200
         body = _json_body(h)
-        assert len(body["data"]) == 1
-        assert body["data"][0]["id"] == "deepseek-v4-flash"
+        # 1 model + 1 profile
+        assert len(body["data"]) == 2
+        model_ids = {m["id"] for m in body["data"]}
+        assert model_ids == {"deepseek-v4-flash", "l1"}
 
     def test_models_per_profile_unknown_404(self, temp_db):
         """Unknown profile in path returns 404."""

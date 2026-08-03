@@ -88,9 +88,8 @@ class HealthEndpoints:
                 "id": mid,
                 "object": "model",
                 "owned_by": model_owned_by[mid],
+                "kind": "model",
             }
-
-            # Existing enrichment fields (backward compat)
             if context_len:
                 entry["context_window"] = context_len
             if limits.get("max_output_tokens"):
@@ -98,7 +97,6 @@ class HealthEndpoints:
             if limits.get("description"):
                 entry["description"] = limits["description"]
 
-            # OpenRouter-compatible providers array
             entry["providers"] = [
                 {
                     "provider": p,
@@ -107,8 +105,44 @@ class HealthEndpoints:
                 }
                 for p in providers
             ]
-
             models.append(entry)
+
+        # ── Emit profile entries as virtual models ──
+        for prof_name, prof_cfg in profiles_iter:
+            chain = prof_cfg.get("chain", [])
+            if not chain:
+                continue
+
+            profile_providers = []
+            max_context = 0
+            profile_description = ""
+
+            for step in chain:
+                mid = step["model"]
+                provider = step["provider"]
+                limits = model_limits.get(mid, {})
+                ctx = limits.get("context_window", 128000)
+                profile_providers.append({
+                    "provider": provider,
+                    "model": mid,
+                    "context_length": ctx,
+                    "supports_tools": True,
+                })
+                if ctx > max_context:
+                    max_context = ctx
+                # Use first model's description as fallback
+                if not profile_description and limits.get("description"):
+                    profile_description = limits["description"]
+
+            models.append({
+                "id": prof_name,
+                "object": "model",
+                "owned_by": "lcp",
+                "kind": "profile",
+                "context_window": max_context,
+                "description": profile_description or f"Profile with {len(chain)} provider(s) in chain",
+                "providers": profile_providers,
+            })
 
         self._send_json({"object": "list", "data": models})
 
