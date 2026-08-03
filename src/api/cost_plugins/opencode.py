@@ -259,11 +259,15 @@ class OpenCodeCostPlugin(CostPlugin):
             cookie = os.environ.get("OPENCODE_COOKIE")
             if not cookie:
                 logger.debug("opencode_cookie_not_configured")
-                return None
-            return fetch_subscription_dict(cookie)
+                return {"_error": "auth_failed", "detail": "OPENCODE_COOKIE not set"}
+            data = fetch_subscription_dict(cookie)
+            if data is None:
+                logger.warning("subscription_fetch_returned_none")
+                return {"_error": "auth_failed", "detail": "Invalid or expired OPENCODE_COOKIE, or API unreachable"}
+            return data
         except Exception as exc:
             logger.warning("subscription_fetch_failed", error=str(exc))
-            return None
+            return {"_error": "api_error", "detail": str(exc)}
 
 
 

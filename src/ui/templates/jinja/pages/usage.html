@@ -208,6 +208,12 @@ function buildPage(providers) {
                 panelsHtml += '<div class="stat-cards">' + statCardsHtml + '</div>';
             } else if (prov === 'opencode') {
                 var sub = subscriptions['opencode'] || {};
+                if (sub._error) {
+                    var errMsg = sub._error === 'auth_failed'
+                        ? 'OpenCode subscription data unavailable — OPENCODE_COOKIE not configured or invalid. Set the environment variable to enable usage progress bars.'
+                        : 'OpenCode subscription API error: ' + (sub.detail || 'unknown');
+                    panelsHtml += '<div class="stat-card" style="border-left:3px solid #f97316;margin-bottom:1rem"><div class="label" style="color:#f97316">⚠ Subscription Status</div><div class="value" style="font-size:0.85rem;font-weight:400">' + errMsg + '</div></div>';
+                }
                 function barColor(pct) { return pct >= 90 ? 'red' : pct >= 70 ? 'orange' : pct >= 40 ? 'yellow' : 'green'; }
                 function fmtCountdown(sec) {
                     if (!sec || sec <= 0) return '';

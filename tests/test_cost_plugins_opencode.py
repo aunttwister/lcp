@@ -283,17 +283,30 @@ class TestOpenCodeFetchSummary:
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestOpenCodeFetchSubscription:
-    def test_returns_none_when_no_cookie(self, plugin):
-        """When OPENCODE_COOKIE is not set, returns None."""
+    def test_returns_error_when_no_cookie(self, plugin):
+        """When OPENCODE_COOKIE is not set, returns error dict."""
         with patch.dict("os.environ", {}, clear=True):
-            assert plugin.fetch_subscription() is None
+            result = plugin.fetch_subscription()
+            assert result is not None
+            assert result["_error"] == "auth_failed"
 
-    def test_returns_none_when_api_fails(self, plugin):
-        """When the API call raises, returns None."""
+    def test_returns_error_when_api_returns_none(self, plugin):
+        """When the API call returns None (invalid cookie, etc.), returns error dict."""
+        with patch.dict("os.environ", {"OPENCODE_COOKIE": "test-cookie"}):
+            with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
+                       return_value=None):
+                result = plugin.fetch_subscription()
+                assert result is not None
+                assert result["_error"] == "auth_failed"
+
+    def test_returns_error_when_api_raises(self, plugin):
+        """When the API call raises, returns error dict."""
         with patch.dict("os.environ", {"OPENCODE_COOKIE": "test-cookie"}):
             with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
                        side_effect=RuntimeError("network down")):
-                assert plugin.fetch_subscription() is None
+                result = plugin.fetch_subscription()
+                assert result is not None
+                assert result["_error"] == "api_error"
 
     def test_returns_subscription_data(self, plugin):
         """Happy path: returns subscription snapshot."""
