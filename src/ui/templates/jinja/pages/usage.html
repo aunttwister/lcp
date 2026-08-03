@@ -72,6 +72,8 @@
 {% raw %}
 // ── State ──
 var monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+window._tabState = {};
+var INITIAL_DAYS = 7;
 document.getElementById('genTime').textContent = new Date().toISOString().replace('T',' ').slice(0,19) + ' UTC';
 
 function formatTokens(n) {
@@ -144,8 +146,9 @@ function renderBreakdownTable(containerId, data, labelKey) {
     el.innerHTML = html;
 }
 
-function loadStats(provider) {
-    return fetch('/api/usage/stats?provider=' + encodeURIComponent(provider) + '&days=30')
+function loadStats(provider, days) {
+    days = days || INITIAL_DAYS;
+    return fetch('/api/usage/stats?provider=' + encodeURIComponent(provider) + '&days=' + days)
         .then(function(r) { return r.json(); });
 }
 
@@ -280,6 +283,8 @@ function buildPage(providers) {
 
         providers.forEach(function(prov, i) {
             var stats = statsList[i] || {daily:[], by_model:{}, by_profile:{}};
+            // Initialize per-tab state on first load
+            window._tabState[prov] = { range: String(INITIAL_DAYS), label: INITIAL_DAYS + ' days' };
             renderDailyChart('chart-daily-' + prov, stats.daily);
             renderBreakdownTable('table-model-' + prov, stats.by_model, 'Model');
             renderBreakdownTable('table-profile-' + prov, stats.by_profile, 'Profile');
@@ -294,6 +299,16 @@ window.switchTab = function(prov) {
     var panel = document.getElementById('panel-' + prov);
     if (btn) btn.classList.add('active');
     if (panel) panel.classList.add('active');
+
+    // Restore this tab's saved chart title from state
+    var st = window._tabState[prov];
+    var titleEl = document.getElementById('chartTitle-' + prov);
+    if (titleEl && st && st.label) {
+        titleEl.textContent = 'Daily Spending (' + st.label + ')';
+    }
+    if (!st) {
+        window._tabState[prov] = { range: '7', label: '7 days' };
+    }
 };
 
 window.applyDateRange = function(btnEl, provider, range) {
@@ -331,6 +346,9 @@ window.applyDateRange = function(btnEl, provider, range) {
         end = lastDay.toISOString().slice(0,10);
         label = 'Last month';
     }
+
+    // Save per-tab state so this tab remembers its selected range
+    window._tabState[provider] = { range: String(range), label: label };
 
     var titleEl = document.getElementById('chartTitle-' + provider);
     if (titleEl) titleEl.textContent = 'Daily Spending (' + label + ')';
