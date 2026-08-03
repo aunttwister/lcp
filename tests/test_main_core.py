@@ -95,7 +95,7 @@ class TestForwardRequest:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.read.return_value = b'{"choices":[{"message":{"content":"hello"}}]}'
-            mock_urlopen.return_value.__enter__.return_value = mock_resp
+            mock_urlopen.return_value = mock_resp
             mock_config.get_provider_key.return_value = None
 
             result_body, status = forward_request(provider_cfg, body, mock_config)
@@ -209,7 +209,7 @@ class TestTryChain:
                 mock_resp = MagicMock()
                 mock_resp.status = 200
                 mock_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
-                return MagicMock(__enter__=lambda s: mock_resp, __exit__=lambda s,*a: None)
+                return mock_resp
 
             with patch("urllib.request.urlopen", side_effect=urlopen_side):
                 result_body, status, provider, model = try_chain(
