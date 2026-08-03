@@ -378,10 +378,10 @@ class LCPHandler(
                 else:
                     # SSE stream without usage — fall back to pre-flight estimation
                     cost_info = {
-                        "prompt_tokens": estimation["prompt_tokens"],
+                        "prompt_tokens": estimation["input_tokens"],
                         "completion_tokens": 0,
                         "cache_hit_tokens": 0,
-                        "cache_miss_tokens": estimation["prompt_tokens"],
+                        "cache_miss_tokens": estimation["input_tokens"],
                         "cost": estimation["estimated_total_cost"],
                         "latency_ms": latency_ms,
                     }
