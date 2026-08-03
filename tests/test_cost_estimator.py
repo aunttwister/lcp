@@ -1,7 +1,6 @@
 """Tests for cost_estimator.py"""
 import pytest
-import sys
-from src.api.cost_estimator import count_tokens, estimate_tokens, estimate_from_request
+from src.api.cost_estimator import count_tokens, estimate_tokens, estimate_from_request, estimate_cost
 
 def test_count_tokens_simple():
     n = count_tokens([{"role": "user", "content": "hello world"}])
@@ -59,3 +58,55 @@ def test_count_tokens_vision_content():
     }]
     n = count_tokens(msgs)
     assert n >= 4
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# estimate_cost
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestEstimateCost:
+    """Tests for estimate_cost()."""
+
+    def test_basic_estimation(self):
+        result = estimate_cost("deepseek-v4-pro", 1000, max_tokens=500)
+        assert result["input_tokens"] == 1000
+        assert result["estimated_output_tokens"] == 500
+        assert result["estimated_input_cost"] > 0
+        assert result["estimated_output_cost"] > 0
+        assert result["estimated_total_cost"] > 0
+        assert result["currency"] == "USD"
+        # total = input + output
+        assert (result["estimated_total_cost"]
+                == round(result["estimated_input_cost"] + result["estimated_output_cost"], 8))
+
+    def test_known_model_uses_correct_pricing(self):
+        """deepseek-v4-pro uses 0.435 input / 0.87 output per 1M tokens."""
+        result = estimate_cost("deepseek-v4-pro", 1_000_000, max_tokens=1_000_000)
+        assert result["estimated_input_cost"] == 0.435
+        assert result["estimated_output_cost"] == 0.87
+        assert result["estimated_total_cost"] == 1.305
+
+    def test_unknown_model_falls_back_to_default(self):
+        """Unknown models fall back to 0.435/0.87 pricing."""
+        result = estimate_cost("nonexistent-model", 1_000_000, max_tokens=1_000_000)
+        assert result["estimated_input_cost"] == 0.435
+        assert result["estimated_output_cost"] == 0.87
+
+    def test_custom_pricing(self):
+        """Custom pricing dict overrides defaults."""
+        custom = {"cache_miss": 1.50, "output": 3.00}
+        result = estimate_cost("irrelevant", 1_000_000, max_tokens=500_000, pricing=custom)
+        assert result["estimated_input_cost"] == 1.50
+        assert result["estimated_output_cost"] == 1.50  # 500k / 1M * 3.00
+
+    def test_pricing_with_input_key(self):
+        """Pricing dict using 'input' instead of 'cache_miss' works too."""
+        custom = {"input": 2.00, "output": 4.00}
+        result = estimate_cost("irrelevant", 1_000_000, max_tokens=1_000_000, pricing=custom)
+        assert result["estimated_input_cost"] == 2.00
+
+    def test_zero_tokens(self):
+        result = estimate_cost("deepseek-v4-pro", 0, max_tokens=0)
+        assert result["estimated_input_cost"] == 0.0
+        assert result["estimated_output_cost"] == 0.0
+        assert result["estimated_total_cost"] == 0.0
