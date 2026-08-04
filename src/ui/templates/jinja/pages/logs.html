@@ -183,7 +183,7 @@ function fetchLogs() {
             '<td class="mono">' + r.id + '</td>' +
             '<td class="mono">' + time + '</td>' +
             '<td>' + r.profile + '</td>' +
-            '<td class="mono" title="' + r.model + '">' + r.model.replace('deepseek-v4-','') + '</td>' +
+            '<td class="mono" title="' + r.model + '">' + r.model + '</td>' +
             '<td>' + r.provider + '</td>' +
             '<td>' + statusHtml + '</td>' +
             '<td class="num mono">' + fmtNum(r.prompt_tokens || 0) + '</td>' +
@@ -191,7 +191,7 @@ function fetchLogs() {
             '<td class="num mono">' + fmtNum(r.cache_hit_tokens || 0) + '</td>' +
             '<td class="num mono">' + fmtNum(r.cache_miss_tokens || 0) + '</td>' +
             '<td class="num mono">$' + (r.cost || 0).toFixed(6) + '</td>' +
-            '<td class="num mono saved-col">$' + (r.saved || 0).toFixed(6) + '</td>' +
+            '<td class="num mono saved-col">' + (r.cache_hit_tokens > 0 ? '$' + (r.saved || 0).toFixed(6) : '\u2014') + '</td>' +
             '<td class="num mono">' + (r.latency_ms / 1000).toFixed(1) + 's</td>' +
             errCell +
             '</tr>';
