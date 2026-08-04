@@ -41,13 +41,13 @@
 </div>
 
 <!-- ── Provider Edit Modal (opened from sidebar) ── -->
-<div class="modal-overlay" id="provEditModal">
-<div class="modal" style="width:min(560px,95vw)">
-  <div class="modal-header">
-    <h2 id="pemTitle"></h2>
-    <button class="modal-close" onclick="closeProvEditModal()">✕</button>
+<div class="modal-overlay dialog-overlay" id="provEditModal">
+<div class="modal dialog-content" style="width:min(560px,95vw)">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title" id="pemTitle"></h2>
+    <button class="modal-close dialog-close" onclick="closeProvEditModal()">✕</button>
   </div>
-  <div class="modal-body">
+  <div class="modal-body dialog-body">
     <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem">
       <span style="font-size:0.75rem;font-weight:600" id="pemStatus"></span>
     </div>
@@ -75,16 +75,16 @@
 </div>
 
 <!-- ── API Keys Modal ── -->
-<div class="modal-overlay" id="keysModal">
-<div class="modal" style="width:min(500px,95vw)">
-  <div class="modal-header">
-    <h2>API Keys</h2>
-    <button class="modal-close" onclick="closeKeysModal()">✕</button>
+<div class="modal-overlay dialog-overlay" id="keysModal">
+<div class="modal dialog-content" style="width:min(500px,95vw)">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title">API Keys</h2>
+    <button class="modal-close dialog-close" onclick="closeKeysModal()">✕</button>
   </div>
-  <div class="modal-body">
+  <div class="modal-body dialog-body">
     <div id="keysList"><div class="empty">Loading...</div></div>
   </div>
-  <div class="modal-footer">
+  <div class="modal-footer dialog-footer">
     <button class="btn-sm btn-primary" onclick="generateKey()">+ Generate Key</button>
     <button class="btn-sm" onclick="closeKeysModal()">Close</button>
   </div>
@@ -92,18 +92,18 @@
 </div>
 
 <!-- ── Profile Config Modal ── -->
-<div class="modal-overlay" id="profileConfigModal">
-<div class="modal" style="width:min(520px,95vw)">
-  <div class="modal-header">
-    <h2 id="pcmTitle">Profile: L2</h2>
-    <button class="modal-close" onclick="closeProfileConfig()">✕</button>
+<div class="modal-overlay dialog-overlay" id="profileConfigModal">
+<div class="modal dialog-content" style="width:min(520px,95vw)">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title" id="pcmTitle">Profile: L2</h2>
+    <button class="modal-close dialog-close" onclick="closeProfileConfig()">✕</button>
   </div>
-  <div class="modal-tabs" id="pcmTabs">
-    <button class="modal-tab active" data-tab="pcm-apikeys">API Keys</button>
-    <button class="modal-tab" data-tab="pcm-url">Copyable URL</button>
+  <div class="modal-tabs dialog-tabs" id="pcmTabs">
+    <button class="modal-tab dialog-tab active" data-tab="pcm-apikeys">API Keys</button>
+    <button class="modal-tab dialog-tab" data-tab="pcm-url">Copyable URL</button>
     <!-- future tabs here -->
   </div>
-  <div class="modal-body" id="pcmBody">
+  <div class="modal-body dialog-body" id="pcmBody">
     <!-- Tab: API Keys -->
     <div class="tab-panel active" id="panel-pcm-apikeys">
       <div id="pcmKeysList"><div class="empty">Loading...</div></div>
@@ -122,7 +122,7 @@
       <pre id="pcmCurl" style="background:hsl(var(--secondary));padding:0.5rem;border-radius:var(--radius);font-size:0.75rem;overflow-x:auto;margin-top:0.25rem"></pre>
     </div>
   </div>
-  <div class="modal-footer">
+  <div class="modal-footer dialog-footer">
     <button class="btn-sm" onclick="closeProfileConfig()">Close</button>
   </div>
 </div>
@@ -446,13 +446,13 @@ function openProviderModal() {
   if (sidebar && !sidebar.classList.contains('collapsed')) {
     sidebar.classList.add('collapsed');
   }
-  document.getElementById('provModal').classList.add('open');
   _activeTab = '';
   loadProviders();
+  openDialog('provModal');
 }
 
 function closeProviderModal() {
-  document.getElementById('provModal').classList.remove('open');
+  closeDialog('provModal');
   // Restore sidebar
   var sidebar = document.getElementById('sidebar');
   if (sidebar && sidebar.classList.contains('collapsed')) {
@@ -766,11 +766,7 @@ function showPhDetail(event, el) {
     '<div class="phm-label">Consecutive Failures</div><div class="phm-value">'+data.failures+data.tripped+'</div>'+
     '<div class="phm-label">Last Success</div><div class="phm-value">'+data.last_success+'</div>'+
     '<div class="phm-label">Last Failure</div><div class="phm-value">'+data.last_failure+'</div>';
-  document.getElementById('phDetailModal').classList.add('open');
-}
-function closePhDetail(event) {
-  if (event && event.target !== document.getElementById('phDetailModal')) return;
-  document.getElementById('phDetailModal').classList.remove('open');
+  openDialog('phDetailModal');
 }
 
 /* ── Sidebar Tree ── */
@@ -799,10 +795,10 @@ function editProviderFromSidebar(event, el) {
   document.getElementById('pemKeyEnv').value = ds.keyenv || '';
   document.getElementById('pemModels').value = ds.models || '';
   document.getElementById('pemTestResult').style.display = 'none';
-  document.getElementById('provEditModal').classList.add('open');
+  openDialog('provEditModal');
 }
 function closeProvEditModal() {
-  document.getElementById('provEditModal').classList.remove('open');
+  closeDialog('provEditModal');
 }
 var _pemTestPassed = true;
 function testPemProvider() {
@@ -890,12 +886,11 @@ function openProfileConfig(event, profile) {
   document.getElementById('pcmCurl').textContent = 'curl -H "Authorization: Bearer lcp_YOUR_KEY" ' + window._hostUrl + '/' + profile + '/chat/completions';
   switchPcmTab('pcm-apikeys');
   loadProfileKeys(profile);
-  var modal = document.getElementById('profileConfigModal');
-  if (modal) { modal.classList.add('open'); }
+  openDialog('profileConfigModal');
 }
 
 function closeProfileConfig() {
-  document.getElementById('profileConfigModal').classList.remove('open');
+  closeDialog('profileConfigModal');
 }
 
 function switchPcmTab(tabId) {
@@ -967,28 +962,14 @@ document.addEventListener('DOMContentLoaded', function() {
       if (tab && tab.dataset.tab) switchPcmTab(tab.dataset.tab);
     });
   }
-  // Backdrop click to close profile config modal
-  var pcm = document.getElementById('profileConfigModal');
-  if (pcm) {
-    pcm.addEventListener('click', function(e) {
-      if (e.target === pcm) closeProfileConfig();
-    });
-  }
-  // Backdrop click to close keys modal
-  var km = document.getElementById('keysModal');
-  if (km) {
-    km.addEventListener('click', function(e) {
-      if (e.target === km) closeKeysModal();
-    });
-  }
 });
 
 function openKeysModal() {
   loadKeys();
-  document.getElementById('keysModal').classList.add('open');
+  openDialog('keysModal');
 }
 function closeKeysModal() {
-  document.getElementById('keysModal').classList.remove('open');
+  closeDialog('keysModal');
 }
 function loadKeys() {
   api('GET', '/api/keys').then(function(d) {
@@ -1080,29 +1061,29 @@ function deleteKey(id) {
 
 {% block body_end %}
 <!-- ── Provider Modal ── -->
-<div class="modal-overlay" id="provModal">
-<div class="modal">
-  <div class="modal-header">
-    <h2>Provider Configuration</h2>
-    <button class="modal-close" onclick="closeProviderModal()">✕</button>
+<div class="modal-overlay dialog-overlay" id="provModal">
+<div class="modal dialog-content">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title">Provider Configuration</h2>
+    <button class="modal-close dialog-close" onclick="closeProviderModal()">✕</button>
   </div>
   <!-- Desktop tabs -->
-  <div class="modal-tabs" id="modalTabs"></div>
+  <div class="modal-tabs dialog-tabs" id="modalTabs"></div>
   <!-- Mobile dropdown -->
   <div class="tab-dropdown">
     <select id="tabDropdown" onchange="switchTab(this.value)"></select>
   </div>
-  <div class="modal-body" id="modalBody">
+  <div class="modal-body dialog-body" id="modalBody">
     <!-- Tab panels injected by JS -->
   </div>
   <!-- Provider add form (below tabs, shared) -->
-  <div class="modal-body" style="border-top:1px solid hsl(var(--card-border));padding-top:0.75rem" id="provFormSection">
+  <div class="modal-body dialog-body" style="border-top:1px solid hsl(var(--border));padding-top:0.75rem" id="provFormSection">
     <div class="section-label" style="display:flex;justify-content:space-between;align-items:center">
       <span>All Providers</span>
       <button class="btn-sm btn-primary" onclick="showAddProvForm()">+ Add Provider</button>
     </div>
     <div id="provList" class="prov-list" style="margin-top:0.5rem">Loading...</div>
-    <div id="provForm" class="modal-prov-form" style="display:none">
+    <div id="provForm" class="modal-prov-form dialog-form" style="display:none">
       <label>Provider Name</label>
       <input id="provName" placeholder="e.g. opencode">
       <label>API Base URL</label>
@@ -1123,7 +1104,7 @@ function deleteKey(id) {
       <div id="testResult" class="test-result" style="display:none"></div>
     </div>
   </div>
-  <div class="modal-footer">
+  <div class="modal-footer dialog-footer">
     <span style="font-size:0.6875rem;color:hsl(var(--muted-foreground));margin-right:auto;align-self:center" id="saveStatus"></span>
     <button class="btn-sm" onclick="closeProviderModal()">Close</button>
     <button class="btn-sm btn-primary" id="btnSaveAll" onclick="saveAllChains()">Save All Chains</button>
@@ -1132,13 +1113,13 @@ function deleteKey(id) {
 </div>
 
 <!-- ── Provider Health Detail Modal ── -->
-<div class="ph-modal-overlay" id="phDetailModal" onclick="closePhDetail(event)">
-<div class="ph-modal" onclick="event.stopPropagation()">
-  <div class="ph-modal-header">
-    <span class="ph-modal-title" id="phModalTitle"></span>
-    <button class="modal-close" onclick="closePhDetail()">✕</button>
+<div class="ph-modal-overlay dialog-overlay" id="phDetailModal">
+<div class="ph-modal dialog-content" onclick="event.stopPropagation()">
+  <div class="ph-modal-header dialog-header">
+    <span class="ph-modal-title dialog-title" id="phModalTitle"></span>
+    <button class="modal-close dialog-close" onclick="closeDialog('phDetailModal')">✕</button>
   </div>
-  <div class="ph-modal-body" id="phModalBody"></div>
+  <div class="ph-modal-body dialog-body" id="phModalBody"></div>
 </div>
 </div>
 {% endblock %}

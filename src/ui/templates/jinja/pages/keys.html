@@ -22,13 +22,13 @@
 </div>
 
 <!-- Create Key Modal -->
-<div class="modal-overlay" id="createKeyModal">
-<div class="modal" style="width:min(500px,95vw)">
-  <div class="modal-header">
-    <h2>Create API Key</h2>
-    <button class="modal-close" onclick="closeCreateKeyModal()">✕</button>
+<div class="modal-overlay dialog-overlay" id="createKeyModal">
+<div class="modal dialog-content" style="width:min(500px,95vw)">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title">Create API Key</h2>
+    <button class="modal-close dialog-close" onclick="closeCreateKeyModal()">✕</button>
   </div>
-  <div class="modal-body">
+  <div class="modal-body dialog-body">
     <div style="display:grid;gap:0.75rem">
       <div>
         <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Key Name</label>
@@ -51,7 +51,7 @@
       </div>
     </div>
   </div>
-  <div class="modal-footer">
+  <div class="modal-footer dialog-footer">
     <button class="btn-sm btn-primary" onclick="createKey()">Create</button>
     <button class="btn-sm" onclick="closeCreateKeyModal()">Cancel</button>
   </div>
@@ -59,13 +59,13 @@
 </div>
 
 <!-- Show Key Modal -->
-<div class="modal-overlay" id="showKeyModal">
-<div class="modal" style="width:min(450px,95vw)">
-  <div class="modal-header">
-    <h2>Key Created</h2>
-    <button class="modal-close" onclick="closeShowKeyModal()">✕</button>
+<div class="modal-overlay dialog-overlay" id="showKeyModal">
+<div class="modal dialog-content" style="width:min(450px,95vw)">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title">Key Created</h2>
+    <button class="modal-close dialog-close" onclick="closeShowKeyModal()">✕</button>
   </div>
-  <div class="modal-body">
+  <div class="modal-body dialog-body">
     <div class="phm-label">API Key (copy now — won't be shown again)</div>
     <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.25rem">
       <code id="shownKey" style="flex:1;background:hsl(var(--secondary));padding:0.5rem;border-radius:var(--radius);font-size:0.8125rem;word-break:break-all;user-select:all"></code>
@@ -73,7 +73,7 @@
     </div>
     <div id="shownKeyInfo" style="margin-top:0.5rem;font-size:0.75rem;color:hsl(var(--muted-foreground))"></div>
   </div>
-  <div class="modal-footer">
+  <div class="modal-footer dialog-footer">
     <button class="btn-sm" onclick="closeShowKeyModal();loadKeys()">Done</button>
   </div>
 </div>
@@ -119,15 +119,15 @@ function loadKeys() {
 }
 
 function showCreateKeyModal() {
-  document.getElementById('createKeyModal').classList.add('open');
+  openDialog('createKeyModal');
   _selectedProfiles = [];
   loadProfilesForKeys();
 }
 function closeCreateKeyModal() {
-  document.getElementById('createKeyModal').classList.remove('open');
+  closeDialog('createKeyModal');
   _selectedProfiles = [];
 }
-function closeShowKeyModal() { document.getElementById('showKeyModal').classList.remove('open'); }
+function closeShowKeyModal() { closeDialog('showKeyModal'); }
 
 function loadProfilesForKeys() {
   api('GET', '/api/profiles').then(function(d) {
