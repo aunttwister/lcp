@@ -6,6 +6,7 @@ LCPHandler inherits from all of them via multiple inheritance.
 
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from urllib.parse import urlparse, parse_qs
 
 from ..api.logging_config import get_logger
@@ -25,6 +26,14 @@ logger = get_logger("lcp.server")
 
 class HealthEndpoints:
     """Health, models, errors, cache stats, metrics, export."""
+
+    config: Any
+    engine: Any
+    _send_json: Any
+    send_response: Any
+    send_header: Any
+    end_headers: Any
+    wfile: Any
 
     def _serve_health(self):
         provider_status = {}
@@ -80,35 +89,6 @@ class HealthEndpoints:
                     model_owned_by[mid] = provider
 
         models = []
-        for mid, providers in model_providers.items():
-            limits = model_limits.get(mid, {})
-            context_len = limits.get("context_window")
-
-            entry = {
-                "id": mid,
-                "object": "model",
-                "owned_by": model_owned_by[mid],
-                "kind": "model",
-            }
-            if context_len:
-                entry["context_window"] = context_len
-                entry["max_model_len"] = context_len
-                entry["context_length"] = context_len
-            if limits.get("max_output_tokens"):
-                entry["max_output_tokens"] = limits["max_output_tokens"]
-            if limits.get("description"):
-                entry["description"] = limits["description"]
-
-            entry["providers"] = [
-                {
-                    "provider": p,
-                    "context_length": context_len or 128000,
-                    "supports_tools": True,
-                }
-                for p in providers
-            ]
-            models.append(entry)
-
         # ── Emit profile entries as virtual models ──
         for prof_name, prof_cfg in profiles_iter:
             chain = prof_cfg.get("chain", [])
@@ -118,6 +98,7 @@ class HealthEndpoints:
             profile_providers = []
             max_context = 0
             profile_description = ""
+            profile_supports_vision = False
 
             for step in chain:
                 mid = step["model"]
@@ -132,6 +113,8 @@ class HealthEndpoints:
                 })
                 if ctx > max_context:
                     max_context = ctx
+                if limits.get("supports_vision", False):
+                    profile_supports_vision = True
                 # Use first model's description as fallback
                 if not profile_description and limits.get("description"):
                     profile_description = limits["description"]
@@ -144,6 +127,7 @@ class HealthEndpoints:
                 "context_window": max_context,
                 "max_model_len": max_context,
                 "context_length": max_context,
+                "supports_vision": profile_supports_vision,
                 "description": profile_description or f"Profile with {len(chain)} provider(s) in chain",
                 "providers": profile_providers,
             })
@@ -264,6 +248,10 @@ class HealthEndpoints:
 
 class ProviderEndpoints:
     """Provider CRUD, testing, chain reorder."""
+
+    config: Any
+    _send_json: Any
+    _read_body: Any
 
     def _serve_providers_list(self):
         cfg = self.config
@@ -410,6 +398,11 @@ class ProviderEndpoints:
 class ProfileEndpoints:
     """Profile CRUD."""
 
+    config: Any
+    headers: Any
+    _send_json: Any
+    _read_body: Any
+
     def _serve_profiles_list(self):
         """Return all profiles with their gateway URLs."""
         profiles = {}
@@ -483,6 +476,9 @@ class ProfileEndpoints:
 
 class KeyEndpoints:
     """API key CRUD."""
+
+    _send_json: Any
+    _read_body: Any
 
     def _serve_keys_list(self):
         km = get_key_manager()
@@ -562,6 +558,10 @@ class KeyEndpoints:
 class AlertEndpoints:
     """Alert listing, config, webhook testing."""
 
+    path: Any
+    _send_json: Any
+    _read_body: Any
+
     def _serve_alerts_list(self):
         am = get_alert_manager()
         limit = 100
@@ -612,6 +612,9 @@ class AlertEndpoints:
 class PluginEndpoints:
     """Cost tracking plugin endpoints."""
 
+    path: Any
+    _send_json: Any
+
     def _serve_plugin_usage(self):
         """Return aggregated usage from all cost tracking plugins."""
         qs = parse_qs(urlparse(self.path).query)
@@ -641,12 +644,21 @@ class PluginEndpoints:
 class UsageEndpoints:
     """Usage statistics and usage page."""
 
+    config: Any
+    engine: Any
+    path: Any
+    _send_json: Any
+    send_response: Any
+    send_header: Any
+    end_headers: Any
+    wfile: Any
+
     def _serve_usage_stats_api(self):
         """Return per-provider aggregates: daily spending, by-model, by-profile.
 
         Accepts ?provider=X&days=N or ?provider=X&start=YYYY-MM-DD&end=YYYY-MM-DD.
         """
-        from sqlalchemy import func
+        from sqlalchemy import func, true
 
         qs = parse_qs(urlparse(self.path).query)
         provider = qs.get("provider", [None])[0]
@@ -666,7 +678,7 @@ class UsageEndpoints:
                     base_filter.append(RequestModel.timestamp <= end_str + "T23:59:59")
                     daily_date_filter = RequestModel.timestamp.between(start_str, end_str + "T23:59:59")
                 else:
-                    daily_date_filter = True
+                    daily_date_filter = true()
 
                 # Daily spending trend
                 daily_q = (
@@ -860,6 +872,15 @@ class UsageEndpoints:
 
 class DashboardEndpoints:
     """Dashboard, daily costs, recent requests, and management page rendering."""
+
+    config: Any
+    engine: Any
+    headers: Any
+    _send_json: Any
+    send_response: Any
+    send_header: Any
+    end_headers: Any
+    wfile: Any
 
     def _serve_dashboard(self, profile_filter: str | None = None):
         """Server-rendered dashboard."""

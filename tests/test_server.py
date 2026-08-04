@@ -371,29 +371,8 @@ class TestStaticEndpoints:
         body = _json_body(h)
         assert "data" in body
         assert isinstance(body["data"], list)
-        # 2 models + 4 profiles (l2, l1, career, cron)
-        assert len(body["data"]) == 6
-
-        # ── Verify model entries ──
-
-        # Verify deepseek-v4-pro entry (first in chain, owned_by=opencode)
-        pro = next((m for m in body["data"] if m["id"] == "deepseek-v4-pro"), None)
-        assert pro is not None
-        assert pro["object"] == "model"
-        assert pro["owned_by"] == "opencode"
-        assert pro["kind"] == "model"
-        assert pro["context_window"] == 1000000
-        assert pro["max_output_tokens"] == 384000
-
-        # OpenRouter providers array — both opencode and deepseek offer this model
-        assert "providers" in pro
-        assert isinstance(pro["providers"], list)
-        assert len(pro["providers"]) == 2
-        provider_names = {p["provider"] for p in pro["providers"]}
-        assert provider_names == {"opencode", "deepseek"}
-        for p in pro["providers"]:
-            assert p["context_length"] == 1000000
-            assert p["supports_tools"] is True
+        # Only profiles are now exposed
+        assert len(body["data"]) == 4
 
         # ── Verify profile entries ──
 
@@ -434,13 +413,10 @@ class TestStaticEndpoints:
         h.do_GET()
         assert _status(h) == 200
         body = _json_body(h)
-        # 1 model + 1 profile = 2 entries
-        assert len(body["data"]) == 2
+        # 1 profile only (raw models hidden)
+        assert len(body["data"]) == 1
         model_ids = {m["id"] for m in body["data"]}
-        assert model_ids == {"deepseek-v4-pro", "l2"}
-        # Model entry
-        pro = next(m for m in body["data"] if m["id"] == "deepseek-v4-pro")
-        assert len(pro["providers"]) == 2  # opencode + deepseek
+        assert model_ids == {"l2"}
         # Profile entry
         prof = next(m for m in body["data"] if m["id"] == "l2")
         assert prof["kind"] == "profile"
@@ -452,21 +428,21 @@ class TestStaticEndpoints:
         h.do_GET()
         assert _status(h) == 200
         body = _json_body(h)
-        # 1 model + 1 profile
-        assert len(body["data"]) == 2
+        # 1 profile only (raw models hidden)
+        assert len(body["data"]) == 1
         model_ids = {m["id"] for m in body["data"]}
-        assert model_ids == {"deepseek-v4-pro", "l2"}
+        assert model_ids == {"l2"}
 
     def test_models_per_profile_l1(self, temp_db):
-        """GET /l1/models returns l1 profile's flash model + the profile itself."""
+        """GET /l1/models returns l1 profile entry only."""
         h = TestHandler(path="/l1/models", engine=temp_db)
         h.do_GET()
         assert _status(h) == 200
         body = _json_body(h)
-        # 1 model + 1 profile
-        assert len(body["data"]) == 2
+        # 1 profile only (raw models hidden)
+        assert len(body["data"]) == 1
         model_ids = {m["id"] for m in body["data"]}
-        assert model_ids == {"deepseek-v4-flash", "l1"}
+        assert model_ids == {"l1"}
 
     def test_models_per_profile_unknown_404(self, temp_db):
         """Unknown profile in path returns 404."""

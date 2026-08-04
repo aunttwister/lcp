@@ -7,7 +7,7 @@ services:
       - "8734:8734"
     volumes:
       - llm-cost-tracker_cost_data:/app/data
-      - ./config/gateway.yaml:/app/config/gateway.yaml:ro
+      - ./config/gateway.yaml:/app/config/gateway.yaml
     env_file:
       - .env
     environment:
