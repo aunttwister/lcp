@@ -535,7 +535,6 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   padding-left: 0.125rem;
 }
 
-/* ── Expandable Card Stacks ── */
 /* ── Expandable Key Stacks ── */
 .lcp-stack {
   margin-bottom: 0.75rem !important;
