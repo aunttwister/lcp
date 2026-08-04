@@ -102,6 +102,37 @@ curl http://localhost:8734/l2/v1/chat/completions \
   }'
 ```
 
+## VS Code Integration
+
+Use the [**GitHub Copilot LLM Gateway**](https://marketplace.visualstudio.com/items?itemName=arbs-io.github-copilot-llm-gateway)
+extension by Andrew Butson to make your LCP profiles appear directly in GitHub Copilot Chat as
+model providers. **All your profiles (coder, l2, career, etc.) show up in the Copilot model
+picker with their full context windows and capabilities.**
+
+### Setup
+
+1. Install the extension: `arbs-io.github-copilot-llm-gateway`
+2. In VS Code settings, search for **"Copilot Llm Gateway"** and set:
+   - **Server URL**: `https://lcp.example.com/v1` (or your LCP instance)
+   - **API Key**: your LCP API key (from the Keys dashboard)
+3. (Optional) **Model Context Windows**: if you need to override server-reported context sizes
+4. **Disable "Enable Image Input"** — your LCP profiles use text-only models (deepseek-v4 etc.).
+   The gateway already blocks image requests with a clear error as a safety net.
+
+> **Why this extension?** Unlike OAI Copilot (which requires manually configuring each model
+> and doesn't support automatic discovery), the LLM Gateway extension fetches `/v1/models`
+> from your LCP instance and populates the model picker automatically. Profile entries like
+> `coder`, `l2`, and `career` appear with their correct 1M context windows, tool-calling
+> support, and the `supports_vision: false` flag that the gateway reports.
+
+### Troubleshooting
+
+- **Models don't appear?** Run "GitHub Copilot LLM Gateway: Refresh Models" from the command palette.
+- **128k context instead of 1M?** Ensure your LCP instance is running the latest version that
+  serves `max_model_len` and `context_length` in `/v1/models`.
+- **"model does not support vision" errors?** Make sure "Enable Image Input" is turned **off**
+  in the extension settings — your DeepSeek models are text-only.
+
 ## Configuration
 
 Everything lives in `config/gateway.yaml`. Hot-reloaded — edit while the server is running, no
