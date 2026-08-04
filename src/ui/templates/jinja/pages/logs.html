@@ -4,40 +4,69 @@
 
 {% block head_extra %}
 <style>
-.logs-toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }
-.logs-toolbar select, .logs-toolbar input { padding: 0.35rem 0.5rem; font-size: 0.8rem; background: hsl(var(--card)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); color: hsl(var(--foreground)); font-family: inherit; }
-.logs-toolbar .pill-btn { padding: 0.3rem 0.7rem; font-size: 0.75rem; background: hsl(var(--secondary)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); color: hsl(var(--muted-foreground)); cursor: pointer; }
-.logs-toolbar .pill-btn.active { background: hsl(var(--foreground)); color: hsl(var(--background)); border-color: hsl(var(--foreground)); }
+.logs-toolbar { display: flex; gap: 0.625rem; margin-bottom: 1.25rem; flex-wrap: wrap; align-items: center; position: relative; }
+/* ── shadcn-style dropdown triggers ── */
+.dropdown-trigger { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.7rem; font-size: 0.8rem; background: hsl(var(--card)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); color: hsl(var(--foreground)); cursor: pointer; font-family: inherit; transition: border-color 0.15s, box-shadow 0.15s; white-space: nowrap; }
+.dropdown-trigger:hover { border-color: hsl(var(--ring)); box-shadow: 0 0 0 2px hsl(var(--ring) / 0.15); }
+.dropdown-trigger .chevron { font-size: 0.6rem; opacity: 0.5; }
+.dropdown-menu { background: hsl(var(--card)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); box-shadow: 0 4px 20px rgb(0 0 0 / 0.18); min-width: 180px; max-height: 260px; overflow-y: auto; padding: 0.3rem; z-index: 50; }
+.dd-item { padding: 0.4rem 0.65rem; font-size: 0.78rem; cursor: pointer; border-radius: calc(var(--radius) - 2px); transition: background 0.1s; }
+.dd-item:hover { background: hsl(var(--secondary)); }
+.dd-item.active { background: hsl(var(--secondary)); font-weight: 600; }
+/* ── shadcn segmented control ── */
+.segmented { display: inline-flex; background: hsl(var(--secondary)); border-radius: var(--radius); padding: 2px; }
+.segmented button { padding: 0.3rem 0.75rem; font-size: 0.75rem; background: none; border: none; border-radius: calc(var(--radius) - 2px); color: hsl(var(--muted-foreground)); cursor: pointer; font-weight: 500; font-family: inherit; transition: all 0.15s; }
+.segmented button.active { background: hsl(var(--background)); color: hsl(var(--foreground)); box-shadow: 0 1px 3px rgb(0 0 0 / 0.08); }
+/* ── table ── */
 .logs-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
-.logs-table th { text-align: left; padding: 0.45rem 0.55rem; border-bottom: 2px solid hsl(var(--card-border)); color: hsl(var(--muted-foreground)); font-weight: 600; font-size: 0.68rem; text-transform: uppercase; white-space: nowrap; }
-.logs-table td { padding: 0.38rem 0.55rem; border-bottom: 1px solid hsl(var(--card-border) / 0.4); white-space: nowrap; }
-.logs-table tr:hover td { background: hsl(var(--card) / 0.5); }
+.logs-table th { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 2px solid hsl(var(--card-border)); color: hsl(var(--muted-foreground)); font-weight: 600; font-size: 0.68rem; text-transform: uppercase; white-space: nowrap; letter-spacing: 0.03em; }
+.logs-table td { padding: 0.42rem 0.6rem; border-bottom: 1px solid hsl(var(--card-border) / 0.35); white-space: nowrap; }
+.logs-table tbody tr { transition: background 0.1s; }
+.logs-table tbody tr:hover { background: hsl(var(--card) / 0.6); }
 .logs-table .mono { font-family: 'SF Mono', Monaco, monospace; font-size: 0.72rem; }
 .logs-table .num { text-align: right; font-variant-numeric: tabular-nums; }
-.logs-table .badge-success { background: #166534; color: #86efac; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.65rem; font-weight: 600; }
-.logs-table .badge-error { background: #7f1d1d; color: #fca5a5; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.65rem; font-weight: 600; }
-.logs-table .saved-col { color: #4ade80; }
-.logs-pagination { display: flex; gap: 0.5rem; align-items: center; margin-top: 1rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
-.logs-pagination button { padding: 0.3rem 0.7rem; font-size: 0.75rem; background: hsl(var(--secondary)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); color: hsl(var(--foreground)); cursor: pointer; }
-.logs-pagination button:disabled { opacity: 0.4; cursor: default; }
-.logs-summary { font-size: 0.75rem; color: hsl(var(--muted-foreground)); margin-bottom: 0.75rem; }
+.logs-table .badge-ok { display: inline-block; background: #14532d; color: #86efac; padding: 0.12rem 0.45rem; border-radius: 3px; font-size: 0.65rem; font-weight: 600; }
+.logs-table .badge-err { display: inline-block; background: #7f1d1d; color: #fca5a5; padding: 0.12rem 0.45rem; border-radius: 3px; font-size: 0.65rem; font-weight: 600; cursor: help; }
+.logs-table .err-cell { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.saved-col { color: #4ade80; }
+/* ── pagination ── */
+.logs-pagination { display: flex; gap: 0.4rem; align-items: center; margin-top: 1rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
+.logs-pagination button { padding: 0.35rem 0.7rem; font-size: 0.75rem; background: hsl(var(--secondary)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); color: hsl(var(--foreground)); cursor: pointer; font-family: inherit; }
+.logs-pagination button:disabled { opacity: 0.35; cursor: default; }
+.logs-pagination .page-info { padding: 0 0.5rem; font-variant-numeric: tabular-nums; }
+.logs-summary { font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
+/* ── tooltip for errors ── */
+.error-tooltip { position: relative; }
+.error-tooltip .tooltip-text { visibility: hidden; opacity: 0; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: hsl(var(--foreground)); color: hsl(var(--background)); padding: 0.45rem 0.65rem; border-radius: var(--radius); font-size: 0.7rem; max-width: 400px; min-width: 200px; white-space: pre-wrap; word-break: break-word; z-index: 100; margin-bottom: 6px; pointer-events: none; transition: opacity 0.15s; box-shadow: 0 4px 12px rgb(0 0 0 / 0.2); }
+.error-tooltip:hover .tooltip-text { visibility: visible; opacity: 1; }
 </style>
 {% endblock %}
 
 {% block content %}
 <h1>Logs</h1>
-<p class="subtitle">Filterable request history — all fields, all requests</p>
+<p class="subtitle">Filterable request history — tokens, cost, cache savings, errors</p>
 
 <div class="logs-toolbar" id="logToolbar">
-  <select id="logProfileFilter" onchange="fetchLogs()">
-    <option value="">All Profiles</option>
-  </select>
-  <select id="logProviderFilter" onchange="fetchLogs()">
-    <option value="">All Providers</option>
-  </select>
-  <button class="pill-btn active" data-status="all" onclick="setStatus('all')">All</button>
-  <button class="pill-btn" data-status="success" onclick="setStatus('success')">Success</button>
-  <button class="pill-btn" data-status="error" onclick="setStatus('error')">Errors</button>
+  <div style="position:relative">
+    <button class="dropdown-trigger" id="profileTrigger" onclick="toggleDropdown('profile')">
+      <span id="profileLabel">All Profiles</span><span class="chevron">▾</span>
+    </button>
+    <div class="dropdown-menu" id="profileMenu" style="display:none;position:absolute;margin-top:4px"></div>
+  </div>
+
+  <div style="position:relative">
+    <button class="dropdown-trigger" id="providerTrigger" onclick="toggleDropdown('provider')">
+      <span id="providerLabel">All Providers</span><span class="chevron">▾</span>
+    </button>
+    <div class="dropdown-menu" id="providerMenu" style="display:none;position:absolute;margin-top:4px"></div>
+  </div>
+
+  <div class="segmented">
+    <button class="active" data-status="all" onclick="setStatus('all', this)">All</button>
+    <button data-status="success" onclick="setStatus('success', this)">Success</button>
+    <button data-status="error" onclick="setStatus('error', this)">Errors</button>
+  </div>
+
   <span style="flex:1"></span>
   <span class="logs-summary" id="logSummary">Loading...</span>
 </div>
@@ -65,24 +94,61 @@
 {% block scripts %}
 <script>
 var currentStatus = 'all';
+var currentProfile = '';
+var currentProvider = '';
 var currentOffset = 0;
 var pageSize = 100;
-var metaProfiles = [];
-var metaProviders = [];
 
-function setStatus(s) {
-  currentStatus = s; currentOffset = 0;
-  document.querySelectorAll('#logToolbar .pill-btn').forEach(function(b) {
-    b.classList.toggle('active', b.dataset.status === s);
-  });
+/* ── Dropdowns ── */
+function toggleDropdown(kind) {
+  var menu = document.getElementById(kind + 'Menu');
+  var isOpen = menu.style.display === 'block';
+  closeAllDropdowns();
+  if (!isOpen) { menu.style.display = 'block'; }
+}
+
+function selectDropdown(kind, value, label) {
+  document.getElementById(kind + 'Label').textContent = label;
+  if (kind === 'profile') currentProfile = value;
+  else currentProvider = value;
+  currentOffset = 0;
+  closeAllDropdowns();
   fetchLogs();
 }
 
+function closeAllDropdowns() {
+  document.getElementById('profileMenu').style.display = 'none';
+  document.getElementById('providerMenu').style.display = 'none';
+}
+
+function buildDropdown(menuId, items, allLabel) {
+  var kind = menuId === 'profileMenu' ? 'profile' : 'provider';
+  var current = kind === 'profile' ? currentProfile : currentProvider;
+  var html = '<div class="dd-item' + (current === '' ? ' active' : '') + '" onclick="selectDropdown(\'' + kind + '\', \'\', \'' + allLabel + '\')">' + allLabel + '</div>';
+  items.forEach(function(it) {
+    html += '<div class="dd-item' + (current === it.name ? ' active' : '') + '" onclick="selectDropdown(\'' + kind + '\', \'' + it.name + '\', \'' + it.name + '\')">' + it.name + ' <span style="color:hsl(var(--muted-foreground));font-size:0.7rem">(' + it.count + ')</span></div>';
+  });
+  document.getElementById(menuId).innerHTML = html;
+}
+
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.dropdown-trigger') && !e.target.closest('.dropdown-menu')) { closeAllDropdowns(); }
+});
+
+/* ── Segmented status ── */
+function setStatus(s, btn) {
+  currentStatus = s; currentOffset = 0;
+  document.querySelectorAll('.segmented button').forEach(function(b) { b.classList.toggle('active', b.dataset.status === s); });
+  fetchLogs();
+}
+
+/* ── Escape ── */
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+/* ── Fetch ── */
 function fetchLogs() {
-  var profile = document.getElementById('logProfileFilter').value;
-  var provider = document.getElementById('logProviderFilter').value;
   var params = new URLSearchParams({
-    profile: profile, provider: provider, status: currentStatus,
+    profile: currentProfile, provider: currentProvider, status: currentStatus,
     limit: String(pageSize), offset: String(currentOffset)
   });
 
@@ -90,33 +156,14 @@ function fetchLogs() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.error) {
-        document.getElementById('logBody').innerHTML =
-          '<tr><td colspan="14" class="empty" style="color:#fca5a5">' + data.error + '</td></tr>';
+        document.getElementById('logBody').innerHTML = '<tr><td colspan="14" class="empty" style="color:#fca5a5">' + esc(data.error) + '</td></tr>';
         return;
       }
 
-      // Update filter dropdowns
-      if (data.profiles && metaProfiles.length === 0) {
-        metaProfiles = data.profiles;
-        var ps = document.getElementById('logProfileFilter');
-        data.profiles.forEach(function(p) {
-          var o = document.createElement('option');
-          o.value = p.name; o.textContent = p.name + ' (' + p.count + ')';
-          ps.appendChild(o);
-        });
-      }
-      if (data.providers && metaProviders.length === 0) {
-        metaProviders = data.providers;
-        var pv = document.getElementById('logProviderFilter');
-        data.providers.forEach(function(p) {
-          var o = document.createElement('option');
-          o.value = p.name; o.textContent = p.name + ' (' + p.count + ')';
-          pv.appendChild(o);
-        });
-      }
+      if (data.profiles) buildDropdown('profileMenu', data.profiles, 'All Profiles');
+      if (data.providers) buildDropdown('providerMenu', data.providers, 'All Providers');
 
-      document.getElementById('logSummary').textContent =
-        data.total + ' requests · showing ' + (data.offset+1) + '–' + (data.offset + data.rows.length);
+      document.getElementById('logSummary').textContent = data.total + ' requests · ' + (data.offset+1) + '\u2013' + (data.offset + data.rows.length);
 
       var html = '';
       if (data.rows.length === 0) {
@@ -125,9 +172,13 @@ function fetchLogs() {
         data.rows.forEach(function(r) {
           var t = r.timestamp || '';
           var time = t.length >= 19 ? t.slice(11,19) : t;
+          var detailAttr = r.error_detail ? ' title="' + esc(r.error_detail).slice(0,300) + '"' : '';
           var statusHtml = r.success
-            ? '<span class="badge-success">ok</span>'
-            : '<span class="badge-error">' + (r.error_type || 'err') + '</span>';
+            ? '<span class="badge-ok">ok</span>'
+            : '<span class="badge-err"' + detailAttr + '>' + (r.error_type || 'err') + '</span>';
+          var errCell = r.error_detail
+            ? '<td class="error-tooltip"><span class="err-cell">' + (r.error_type || '') + '</span><span class="tooltip-text">' + esc(r.error_detail).slice(0, 500) + '</span></td>'
+            : '<td>' + (r.error_type || '') + '</td>';
           html += '<tr>' +
             '<td class="mono">' + r.id + '</td>' +
             '<td class="mono">' + time + '</td>' +
@@ -142,20 +193,19 @@ function fetchLogs() {
             '<td class="num mono">$' + (r.cost || 0).toFixed(6) + '</td>' +
             '<td class="num mono saved-col">$' + (r.saved || 0).toFixed(6) + '</td>' +
             '<td class="num mono">' + (r.latency_ms / 1000).toFixed(1) + 's</td>' +
-            '<td>' + (r.error_type || '') + '</td>' +
+            errCell +
             '</tr>';
         });
       }
       document.getElementById('logBody').innerHTML = html;
 
-      // Pagination
-      var totalPages = Math.ceil(data.total / pageSize);
+      var totalPages = Math.ceil(data.total / pageSize) || 1;
       var curPage = Math.floor(data.offset / pageSize) + 1;
-      var pgHtml = '<button onclick="goPage(0)" ' + (data.offset === 0 ? 'disabled' : '') + '>First</button>';
+      var pgHtml = '<button onclick="goPage(0)" ' + (data.offset === 0 ? 'disabled' : '') + '>\u2190 First</button>';
       pgHtml += '<button onclick="goPage(' + Math.max(0, data.offset-pageSize) + ')" ' + (data.offset === 0 ? 'disabled' : '') + '>Prev</button>';
-      pgHtml += '<span>Page ' + curPage + ' of ' + totalPages + '</span>';
+      pgHtml += '<span class="page-info">Page ' + curPage + ' of ' + totalPages + '</span>';
       pgHtml += '<button onclick="goPage(' + (data.offset+pageSize) + ')" ' + (data.offset+pageSize >= data.total ? 'disabled' : '') + '>Next</button>';
-      pgHtml += '<button onclick="goPage(' + (totalPages-1)*pageSize + ')" ' + (data.offset+pageSize >= data.total ? 'disabled' : '') + '>Last</button>';
+      pgHtml += '<button onclick="goPage(' + Math.max(0, (totalPages-1)*pageSize) + ')" ' + (data.offset+pageSize >= data.total ? 'disabled' : '') + '>Last \u2192</button>';
       document.getElementById('logPagination').innerHTML = pgHtml;
     });
 }
@@ -168,6 +218,8 @@ function fmtNum(n) {
   return String(n || 0);
 }
 
+buildDropdown('profileMenu', [], 'All Profiles');
+buildDropdown('providerMenu', [], 'All Providers');
 fetchLogs();
 </script>
 {% endblock %}

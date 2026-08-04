@@ -63,7 +63,7 @@ class TestRecordCost:
             row = conn.execute(text("SELECT * FROM requests")).fetchone()
             assert row is not None
             assert row[11] == 0  # success
-            assert "forbidden_tool" in str(row[13])
+            assert "forbidden_tool" in str(row[14])  # tools_blocked (shifted by error_detail)
 
     def test_empty_tools_blocked(self, temp_db):
         cost_info = {"prompt_tokens": 10, "completion_tokens": 5,

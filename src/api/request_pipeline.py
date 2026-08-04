@@ -453,7 +453,8 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
 # ── Cost Recording ───────────────────────────────────────────────────────────
 
 def record_cost(engine, profile: str, model: str, provider: str, cost_info: dict,
-                success: bool, error_type: str | None, tools_blocked: list[str]) -> None:
+                success: bool, error_type: str | None, tools_blocked: list[str],
+                error_detail: str | None = None) -> None:
     """Record cost data to SQLite and track against budgets."""
     cost = cost_info.get("cost", 0)
 
@@ -471,6 +472,7 @@ def record_cost(engine, profile: str, model: str, provider: str, cost_info: dict
             latency_ms=cost_info.get("latency_ms", 0),
             success=1 if success else 0,
             error_type=error_type,
+            error_detail=error_detail,
             tools_blocked=",".join(tools_blocked) if tools_blocked else None,
         )
         session.add(req)

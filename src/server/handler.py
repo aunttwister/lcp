@@ -487,7 +487,8 @@ class LCPHandler(
             logger.error("all_providers_failed", profile=profile, error=str(e))
             cost_info = {"prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0,
                          "cache_miss_tokens": 0, "cost": 0, "latency_ms": 0}
-            record_cost(self.engine, profile, "unknown", "unknown", cost_info, False, "all_providers_failed", [])
+            record_cost(self.engine, profile, "unknown", "unknown", cost_info, False,
+                       "all_providers_failed", [], error_detail=str(e))
             body_bytes = json.dumps({"error": str(e)}).encode("utf-8")
             self.send_response(502)
             self.send_header("Content-Type", "application/json")

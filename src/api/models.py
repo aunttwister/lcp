@@ -42,6 +42,7 @@ class Request(Base):
     latency_ms = Column(Integer, default=0)
     success = Column(Integer, default=1)  # 1=success, 0=failure
     error_type = Column(String, nullable=True)
+    error_detail = Column(Text, nullable=True)  # full traceback or error message
     tools_blocked = Column(String, nullable=True)  # comma-separated list
 
 
