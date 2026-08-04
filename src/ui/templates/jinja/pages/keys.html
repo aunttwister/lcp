@@ -12,16 +12,8 @@
     style="padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem;width:200px">
 </div>
 
-<div class="table-wrap">
-<table id="keysTable">
-<thead><tr>
-  <th>Name</th><th>Prefix</th><th>Profiles</th><th>Spend</th><th>Limit</th><th>Status</th><th>Created</th><th>Actions</th>
-</tr></thead>
-<tbody id="keysBody"><tr><td colspan="8" class="empty">Loading...</td></tr></tbody>
-</table>
-</div>
+<div id="keyStacks"><div class="empty">Loading...</div></div>
 
-<!-- Create Key Modal -->
 <div class="modal-overlay dialog-overlay" id="createKeyModal">
 <div class="modal dialog-content" style="width:min(500px,95vw)">
   <div class="modal-header dialog-header">
@@ -58,7 +50,6 @@
 </div>
 </div>
 
-<!-- Show Key Modal -->
 <div class="modal-overlay dialog-overlay" id="showKeyModal">
 <div class="modal dialog-content" style="width:min(450px,95vw)">
   <div class="modal-header dialog-header">
@@ -83,147 +74,64 @@
 {% block scripts %}
 <script>
 {% raw %}
-function loadKeys() {
-  api('GET', '/api/keys').then(function(d) {
-    var keys = d.keys || [];
-    var html = '';
-    if (keys.length === 0) {
-      html = '<tr><td colspan="8" class="empty">No keys yet. Create one above.</td></tr>';
-    } else {
-      keys.forEach(function(k) {
-        var spend = '$' + (k.total_spend || 0).toFixed(4);
-        var limit = k.spend_limit > 0 ? '$' + k.spend_limit.toFixed(2) : '\u221e';
-        var statusBadge = k.status === 'active'
-          ? '<span class="badge badge-success">active</span>'
-          : '<span class="badge badge-error">revoked</span>';
-        html += '<tr data-search="' + (k.name||'') + ' ' + (k.key_prefix||'') + '">' +
-          '<td>' + (k.name || '\u2014') + '</td>' +
-          '<td class="mono">' + (k.key_prefix || '\u2014') + '</td>' +
-          '<td>' + (k.allowed_profiles || 'all') + '</td>' +
-          '<td class="cost mono">' + spend + '</td>' +
-          '<td class="cost mono">' + limit + '</td>' +
-          '<td>' + statusBadge + '</td>' +
-          '<td class="mono" style="font-size:0.6875rem">' + (k.created_at||'').slice(0,10) + '</td>' +
-          '<td>' +
-            (k.status === 'active'
-              ? '<button class="btn-sm" onclick="rotateKey(' + k.id + ')" title="Rotate">\u21bb</button> '
-                + '<button class="btn-sm btn-danger" onclick="revokeKey(' + k.id + ')" title="Revoke">\u2715</button>'
-              : '<span style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">' + (k.revoked_at||'').slice(0,10) + '</span>'
-            ) +
-          '</td>' +
-        '</tr>';
-      });
-    }
-    document.getElementById('keysBody').innerHTML = html;
-  });
+function loadKeys(){api('GET','/api/keys').then(function(d){
+var keys=d.keys||[],groups={};
+keys.forEach(function(k){var nm=k.name||'unnamed';if(!groups[nm])groups[nm]={active:null,revoked:[]};if(k.status==='active')groups[nm].active=k;else groups[nm].revoked.push(k)});
+Object.values(groups).forEach(function(g){g.revoked.sort(function(a,b){return (b.revoked_at||'')>(a.revoked_at||'')?1:-1})});
+var html='';
+Object.keys(groups).sort().forEach(function(name){
+var g=groups[name],count=g.revoked.length,sid='sk-'+name.replace(/[^a-zA-Z0-9]/g,'_');
+html+='<table class="lcp-stack" id="'+sid+'" aria-expanded="false" data-search="'+esc(name)+'"><thead>';
+html+='<tr class="lcp-stack-trigger" onclick="toggleStack(\''+sid+'\')">';
+html+='<th><span class="lcp-stack-title">'+esc(name)+' <span class="lcp-stack-chevron">▾</span></span></th>';
+if(g.active){
+html+='<th class="mono" style="font-size:0.75rem;font-weight:400">'+esc(g.active.key_prefix)+'</th>';
+html+='<th style="font-size:0.75rem;font-weight:400">'+(g.active.allowed_profiles||'all')+'</th>';
+html+='<th class="cost mono" style="font-size:0.75rem;font-weight:400">$'+(g.active.total_spend||0).toFixed(4)+'</th>';
+html+='<th class="cost mono" style="font-size:0.75rem;font-weight:400">'+(g.active.spend_limit>0?'$'+g.active.spend_limit.toFixed(2):'∞')+'</th>';
+html+='<th><span class="badge badge-success">active</span></th>';
+html+='<th class="mono" style="font-weight:400">'+(g.active.created_at||'').slice(0,10)+'</th>';
+html+='<th style="white-space:nowrap">';
+if(count>0)html+='<span class="lcp-stack-count">+'+count+'</span> ';
+html+='<button class="btn-sm" onclick="event.stopPropagation();rotateKey('+g.active.id+')" title="Rotate">↻</button>';
+html+='<button class="btn-sm btn-danger" style="margin-left:0.125rem" onclick="event.stopPropagation();revokeKey('+g.active.id+')" title="Revoke">✕</button>';
+html+='</th>';
+}else{
+html+='<th colspan="5"></th><th><span class="badge badge-error">all revoked</span></th><th></th>';
+if(count>0)html+='<th><span class="lcp-stack-count">'+count+'</span></th>';
 }
-
-function showCreateKeyModal() {
-  openDialog('createKeyModal');
-  _selectedProfiles = [];
-  loadProfilesForKeys();
+html+='</tr></thead>';
+html+='<tbody class="lcp-stack-body">';
+if(count>0){
+g.revoked.forEach(function(rk){
+html+='<tr>';
+html+='<td></td>';
+html+='<td class="mono" style="font-size:0.75rem">'+esc(rk.key_prefix)+'</td>';
+html+='<td style="font-size:0.75rem">'+(rk.allowed_profiles||'all')+'</td>';
+html+='<td class="cost mono">$'+(rk.total_spend||0).toFixed(4)+'</td>';
+html+='<td class="cost mono">'+(rk.spend_limit>0?'$'+rk.spend_limit.toFixed(2):'∞')+'</td>';
+html+='<td><span class="badge badge-error">revoked</span></td>';
+html+='<td class="mono" style="font-size:0.6875rem">'+(rk.revoked_at||'').slice(0,10)+'</td>';
+html+='<td></td>';
+html+='</tr>';
+});
 }
-function closeCreateKeyModal() {
-  closeDialog('createKeyModal');
-  _selectedProfiles = [];
-}
-function closeShowKeyModal() { closeDialog('showKeyModal'); }
-
-function loadProfilesForKeys() {
-  api('GET', '/api/profiles').then(function(d) {
-    var profiles = Object.keys(d.profiles || {});
-    var html = '';
-    profiles.forEach(function(p) {
-      html += '<span class="profile-pill" data-profile="' + p + '" onclick="toggleProfilePill(this)" style="padding:0.25rem 0.625rem;border-radius:9999px;font-size:0.75rem;font-weight:600;cursor:pointer;border:1px solid hsl(var(--card-border));background:hsl(var(--secondary)/0.3);color:hsl(var(--muted-foreground));transition:all 0.15s;user-select:none">' + p.toUpperCase() + '</span>';
-    });
-    if (!html) html = '<span style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">No profiles configured</span>';
-    document.getElementById('newKeyProfilesPills').innerHTML = html;
-  });
-}
-
-var _selectedProfiles = [];
-
-function toggleProfilePill(el) {
-  var p = el.getAttribute('data-profile');
-  var idx = _selectedProfiles.indexOf(p);
-  if (idx >= 0) {
-    _selectedProfiles.splice(idx, 1);
-    el.style.background = 'hsl(var(--secondary)/0.3)';
-    el.style.color = 'hsl(var(--muted-foreground))';
-    el.style.borderColor = 'hsl(var(--card-border))';
-  } else {
-    _selectedProfiles.push(p);
-    el.style.background = 'hsl(var(--primary))';
-    el.style.color = 'hsl(var(--primary-foreground))';
-    el.style.borderColor = 'hsl(var(--primary))';
-  }
-}
-
-function createKey() {
-  var name = document.getElementById('newKeyName').value.trim();
-  var limit = parseFloat(document.getElementById('newKeyLimit').value) || 0;
-  var expires = document.getElementById('newKeyExpires').value;
-  api('POST', '/api/keys', {
-    name: name || 'API Key',
-    allowed_profiles: _selectedProfiles.join(','),
-    spend_limit: limit,
-    expires_at: expires ? expires + 'T00:00:00' : ''
-  }).then(function(d) {
-    if (d.key) {
-      document.getElementById('shownKey').textContent = d.key;
-      document.getElementById('shownKeyInfo').innerHTML =
-        'Name: <b>' + d.name + '</b> \u00b7 ID: ' + d.id + '<br>' +
-        'Profiles: ' + (d.allowed_profiles || 'all') + ' \u00b7 Limit: $' + (d.spend_limit || 0);
-      closeCreateKeyModal();
-      openDialog('showKeyModal');
-    } else {
-      alert('Error: ' + (d.error || 'unknown'));
-    }
-  });
-}
-
-function copyShownKey() {
-  var btn = event.target;
-  navigator.clipboard.writeText(document.getElementById('shownKey').textContent).then(function() {
-    var origText = btn.textContent;
-    btn.textContent = 'Copied!';
-    setTimeout(function() {
-      btn.textContent = origText;
-    }, 1500);
-  });
-}
-
-function rotateKey(id) {
-  if (!confirm('Rotate this key? The old key will be revoked and a new one generated.')) return;
-  api('POST', '/api/keys/' + id + '/rotate').then(function(d) {
-    if (d.key) {
-      document.getElementById('shownKey').textContent = d.key;
-      document.getElementById('shownKeyInfo').innerHTML =
-        'Rotated from ID: ' + d.old_id + ' \u2192 <b>' + d.id + '</b><br>' +
-        'Name: <b>' + d.name + '</b>';
-      openDialog('showKeyModal');
-    } else {
-      alert('Error: ' + (d.error || 'unknown'));
-    }
-  });
-}
-
-function revokeKey(id) {
-  if (!confirm('Revoke this key? It will no longer work for API calls.')) return;
-  api('DELETE', '/api/keys/' + id).then(function(d) {
-    if (d.ok) loadKeys();
-    else alert('Error: ' + (d.error || 'unknown'));
-  });
-}
-
-function filterKeys() {
-  var q = document.getElementById('keySearch').value.toLowerCase();
-  document.querySelectorAll('#keysBody tr').forEach(function(tr) {
-    var txt = (tr.getAttribute('data-search') || '').toLowerCase();
-    tr.style.display = txt.includes(q) ? '' : 'none';
-  });
-}
-
+html+='</tbody></table>';
+});
+document.getElementById('keyStacks').innerHTML=html||'<div class="empty">No keys yet.</div>';
+})}
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function showCreateKeyModal(){openDialog('createKeyModal');_selectedProfiles=[];loadProfilesForKeys()}
+function closeCreateKeyModal(){closeDialog('createKeyModal');_selectedProfiles=[]}
+function closeShowKeyModal(){closeDialog('showKeyModal')}
+function loadProfilesForKeys(){api('GET','/api/profiles').then(function(d){var profiles=Object.keys(d.profiles||{}),html='';profiles.forEach(function(p){html+='<span class="profile-pill" data-profile="'+p+'" onclick="toggleProfilePill(this)" style="padding:0.25rem 0.625rem;border-radius:9999px;font-size:0.75rem;font-weight:600;cursor:pointer;border:1px solid hsl(var(--card-border));background:hsl(var(--secondary)/0.3);color:hsl(var(--muted-foreground));transition:all 0.15s;user-select:none">'+p.toUpperCase()+'</span>'});if(!html)html='<span style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">No profiles configured</span>';document.getElementById('newKeyProfilesPills').innerHTML=html})}
+var _selectedProfiles=[];
+function toggleProfilePill(el){var p=el.getAttribute('data-profile'),idx=_selectedProfiles.indexOf(p);if(idx>=0){_selectedProfiles.splice(idx,1);el.style.background='hsl(var(--secondary)/0.3)';el.style.color='hsl(var(--muted-foreground))';el.style.borderColor='hsl(var(--card-border))'}else{_selectedProfiles.push(p);el.style.background='hsl(var(--primary))';el.style.color='hsl(var(--primary-foreground))';el.style.borderColor='hsl(var(--primary))'}}
+function createKey(){var name=document.getElementById('newKeyName').value.trim(),limit=parseFloat(document.getElementById('newKeyLimit').value)||0,expires=document.getElementById('newKeyExpires').value;api('POST','/api/keys',{name:name||'API Key',allowed_profiles:_selectedProfiles.join(','),spend_limit:limit,expires_at:expires?expires+'T00:00:00':''}).then(function(d){if(d.key){document.getElementById('shownKey').textContent=d.key;document.getElementById('shownKeyInfo').innerHTML='Name: <b>'+d.name+'</b> · ID: '+d.id+'<br>Profiles: '+(d.allowed_profiles||'all')+' · Limit: $'+(d.spend_limit||0);closeCreateKeyModal();openDialog('showKeyModal')}else{alert('Error: '+(d.error||'unknown'))}})}
+function copyShownKey(){var btn=event.target;navigator.clipboard.writeText(document.getElementById('shownKey').textContent).then(function(){var o=btn.textContent;btn.textContent='Copied!';setTimeout(function(){btn.textContent=o},1500)})}
+function rotateKey(id){if(!confirm('Rotate this key?'))return;api('POST','/api/keys/'+id+'/rotate').then(function(d){if(d.key){document.getElementById('shownKey').textContent=d.key;document.getElementById('shownKeyInfo').innerHTML='Rotated from ID: '+d.old_id+' → <b>'+d.id+'</b><br>Name: <b>'+d.name+'</b>';openDialog('showKeyModal')}else{alert('Error: '+(d.error||'unknown'))}})}
+function revokeKey(id){if(!confirm('Revoke this key?'))return;api('DELETE','/api/keys/'+id).then(function(d){if(d.ok)loadKeys();else alert('Error: '+(d.error||'unknown'))})}
+function filterKeys(){var q=document.getElementById('keySearch').value.toLowerCase();document.querySelectorAll('#keyStacks .lcp-stack').forEach(function(s){s.style.display=(s.getAttribute('data-search')||'').toLowerCase().includes(q)?'':'none'})}
 loadKeys();
 {% endraw %}
 </script>

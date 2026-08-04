@@ -356,9 +356,6 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .sb-copy-btn:hover { opacity: 1; }
 
 /* ── Dialog / Modal (shadcn-style) ── */
-/* Body scroll lock when any dialog is open */
-body.lcp-dialog-open { overflow: hidden; }
-
 .dialog-overlay, .modal-overlay {
   position: fixed; inset: 0; z-index: 200;
   display: flex;
@@ -536,6 +533,62 @@ body.lcp-dialog-open { overflow: hidden; }
   font-family: 'SF Mono', 'Fira Code', monospace;
   opacity: 0.75; line-height: 1.4;
   padding-left: 0.125rem;
+}
+
+/* ── Expandable Card Stacks ── */
+/* ── Expandable Key Stacks ── */
+.lcp-stack {
+  margin-bottom: 0.75rem !important;
+}
+.lcp-stack-trigger {
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+.lcp-stack-trigger:hover { background: hsl(var(--secondary) / 0.3); }
+.lcp-stack-trigger th {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid hsl(var(--card-border));
+  vertical-align: middle;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: hsl(var(--foreground));
+  text-align: left;
+}
+.lcp-stack.expanded .lcp-stack-trigger th {
+  background: hsl(var(--secondary) / 0.2);
+}
+.lcp-stack-title {
+  font-size: 0.8125rem; font-weight: 600;
+  color: hsl(var(--foreground));
+}
+.lcp-stack-count {
+  font-size: 0.6875rem; color: hsl(var(--muted-foreground));
+  background: hsl(var(--secondary));
+  padding: 0.0625rem 0.4375rem;
+  border-radius: 9999px;
+}
+.lcp-stack-chevron {
+  font-size: 0.625rem; color: hsl(var(--muted-foreground));
+  transition: transform 0.2s ease;
+}
+.lcp-stack.expanded .lcp-stack-chevron {
+  transform: rotate(180deg);
+}
+.lcp-stack-body {
+  display: none;
+}
+.lcp-stack.expanded .lcp-stack-body {
+  display: table-row-group;
+}
+.lcp-stack-body td {
+  padding: 0.375rem 0.75rem;
+}
+.lcp-stack-body tr:hover td {
+  background: hsl(var(--secondary) / 0.3);
+}
 }
 
 @media (max-width: 768px) {
