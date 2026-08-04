@@ -217,3 +217,74 @@ class TestTryChain:
                 assert status == 200
                 assert provider == "goodco"
                 assert model == "good-model"
+
+    def test_image_content_rejected_for_non_vision_model(self, mock_config):
+        """Chain skips provider when model doesn't support vision but body has images."""
+        from src.api.request_pipeline import try_chain, AllProvidersFailedError
+        mock_config.model_limits = {
+            "blind-model": {"context_window": 100000, "supports_vision": False},
+        }
+
+        profile_cfg = {
+            "chain": [
+                {"provider": "testco", "base_url": "https://api.example.com/v1", "model": "blind-model"},
+            ],
+            "forbidden_tools": [],
+        }
+        body = {
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Describe this image"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                ]},
+            ]
+        }
+        mock_config.profiles = {"l2": profile_cfg}
+        mock_config.providers = {
+            "testco": {"api_key_env": "KEY", "base_url": "https://api.example.com/v1"},
+        }
+        mock_config.get_provider_key.return_value = None
+
+        with patch.dict(os.environ, {"KEY": "test"}):
+            with pytest.raises(AllProvidersFailedError) as exc:
+                try_chain("l2", profile_cfg, body, mock_config)
+            assert "does not support vision" in str(exc.value)
+
+    def test_image_content_allowed_for_vision_model(self, mock_config):
+        """Chain proceeds when model supports vision and body has images."""
+        from src.api.request_pipeline import try_chain, forward_request
+        mock_config.model_limits = {
+            "vision-model": {"context_window": 100000, "supports_vision": True},
+        }
+
+        profile_cfg = {
+            "chain": [
+                {"provider": "testco", "base_url": "https://api.example.com/v1", "model": "vision-model"},
+            ],
+            "forbidden_tools": [],
+        }
+        body = {
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Describe this image"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                ]},
+            ]
+        }
+        mock_config.profiles = {"l2": profile_cfg}
+        mock_config.providers = {
+            "testco": {"api_key_env": "KEY", "base_url": "https://api.example.com/v1"},
+        }
+        mock_config.get_provider_key.return_value = None
+
+        with patch.dict(os.environ, {"KEY": "test"}):
+            with patch("urllib.request.urlopen") as mock_urlopen:
+                mock_resp = MagicMock()
+                mock_resp.status = 200
+                mock_resp.read.return_value = b'{"choices":[{"message":{"content":"an image"}}]}'
+                mock_urlopen.return_value = mock_resp
+
+                result_body, status, provider, model = try_chain(
+                    "l2", profile_cfg, body, mock_config)
+                assert status == 200
+                assert model == "vision-model"

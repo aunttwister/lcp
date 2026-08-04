@@ -122,6 +122,11 @@ class LCPHandler(
 
     # ── Routes ────────────────────────────────────────────────────────────
 
+    # Configurable models endpoint paths (env: LCP_MODELS_PATHS, default: /v1/models,/models)
+    _models_paths = set(
+        p.strip() for p in os.environ.get("LCP_MODELS_PATHS", "/v1/models,/models").split(",") if p.strip()
+    )
+
     def do_GET(self):
         logger.debug("request_start", method="GET", path=self.path,
                      client_ip=self.client_address[0])
@@ -142,9 +147,9 @@ class LCPHandler(
                 self._serve_dashboard()
         elif self.path == "/health":
             self._serve_health()
-        elif self.path == "/v1/models":
+        elif self.path in self._models_paths:
             self._serve_models()
-        elif self.path.endswith("/v1/models") or self.path.endswith("/models"):
+        elif any(self.path.endswith("/" + p.lstrip("/")) for p in self._models_paths):
             # Per-profile: /coder/v1/models or /coder/models
             profile = self._resolve_profile()
             if profile and profile in self.config.profiles:
@@ -258,11 +263,6 @@ class LCPHandler(
                                client_ip=self.client_address[0], model=model_name)
                 self._send_json({"error": f"unknown profile in path: {self.path}. Use /PROFILE/chat/completions or set model to a profile name."}, 400)
                 return
-
-        profile_cfg = self.config.get_profile(profile)
-        if profile_cfg is None:
-            self._send_json({"error": f"profile not found: {profile}"}, 400)
-            return
 
         profile_cfg = self.config.get_profile(profile)
         if profile_cfg is None:

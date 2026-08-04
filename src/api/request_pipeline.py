@@ -120,6 +120,17 @@ def normalize_tools_for_cache(tools: list[dict]) -> list[dict]:
     return sorted(tools, key=lambda t: t.get("function", {}).get("name", ""))
 
 
+def has_image_content(messages: list[dict]) -> bool:
+    """Return True if any message contains an image_url content block."""
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if block.get("type") == "image_url":
+                    return True
+    return False
+
+
 # ── Message Sanitization ─────────────────────────────────────────────────────
 
 def sanitize_messages(messages: list[dict]) -> list[dict]:
@@ -360,6 +371,19 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
             attempt=i + 1,
             chain_len=chain_len,
         )
+
+        # Check vision support — fail gracefully so user knows why
+        if has_image_content(body.get("messages", [])):
+            model_limits = config.model_limits.get(model, {})
+            if not model_limits.get("supports_vision", False):
+                logger.warning(
+                    "vision_not_supported",
+                    profile=profile_name,
+                    provider=provider_name,
+                    model=model,
+                )
+                errors.append(f"{provider_name}/{model}: model does not support vision/image input")
+                continue
 
         # Check circuit breaker
         if not cb.is_available(provider_name, base_url, profile_name):

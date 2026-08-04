@@ -14,6 +14,7 @@ from src.api.request_pipeline import (
     strip_forbidden_tools,
     calculate_cost,
     normalize_messages_for_cache,
+    has_image_content,
 )
 from src.api.circuit_breaker import get_circuit_breaker
 from src.server import LCPHandler
@@ -197,6 +198,49 @@ class TestNormalizeMessagesForCache:
         # Tool
         assert result[3]["role"] == "tool"
         assert result[3]["tool_call_id"] == "call_1"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# has_image_content
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestHasImageContent:
+    def test_no_images(self):
+        assert not has_image_content([
+            {"role": "user", "content": "Hello"},
+        ])
+
+    def test_simple_text_content(self):
+        assert not has_image_content([
+            {"role": "user", "content": "What is in this picture?"},
+        ])
+
+    def test_has_image_url(self):
+        assert has_image_content([
+            {"role": "user", "content": [
+                {"type": "text", "text": "Describe this"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            ]},
+        ])
+
+    def test_image_only(self):
+        assert has_image_content([
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+            ]},
+        ])
+
+    def test_empty_messages(self):
+        assert not has_image_content([])
+
+    def test_multiple_messages_with_image(self):
+        assert has_image_content([
+            {"role": "user", "content": "Hello"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "And this?"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpg;base64,xyz"}},
+            ]},
+        ])
 
 
 # ═══════════════════════════════════════════════════════════════════════
