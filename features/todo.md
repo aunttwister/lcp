@@ -35,13 +35,13 @@
    The current summary view looks broken / chaotic. Needs a cleaner layout
    with meaningful grouped stats, not a raw data dump.
 
-6. **Extract errors/logs into a dedicated "Logs" navbar page**
+6. **~~Extract errors/logs into a dedicated "Logs" navbar page~~** ✅ DONE
 
-   - Remove errors section from the Summary page.
-   - Create a new "Logs" page accessible from the sidebar/navbar.
-   - Show a wider, filterable log view: each individual request with status,
-     provider, model, latency, tokens, cost, and any errors.
-   - Merge the existing "Recent Requests" into this Logs page — no need for two
-     separate views of the same data.
+   ~~- Remove errors section from the Summary page.~~
+   ~~- Create a new "Logs" page accessible from the sidebar/navbar.~~
+   ~~- Show a wider, filterable log view: each individual request with status,~~
+     ~~provider, model, latency, tokens, cost, cache savings, and any errors.~~
+   ~~- Merge the existing "Recent Requests" into this Logs page — no need for two~~
+     ~~separate views of the same data.~~
 
 7. **→ This file lives here. Keep it updated.**

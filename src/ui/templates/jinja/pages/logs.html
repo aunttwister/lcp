@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}LCP — Logs{% endblock %}
+{% set active_page = 'logs' %}
+
+{% block head_extra %}
+<style>
+.logs-toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }
+.logs-toolbar select, .logs-toolbar input { padding: 0.35rem 0.5rem; font-size: 0.8rem; background: hsl(var(--card)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); color: hsl(var(--foreground)); font-family: inherit; }
+.logs-toolbar .pill-btn { padding: 0.3rem 0.7rem; font-size: 0.75rem; background: hsl(var(--secondary)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); color: hsl(var(--muted-foreground)); cursor: pointer; }
+.logs-toolbar .pill-btn.active { background: hsl(var(--foreground)); color: hsl(var(--background)); border-color: hsl(var(--foreground)); }
+.logs-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.logs-table th { text-align: left; padding: 0.45rem 0.55rem; border-bottom: 2px solid hsl(var(--card-border)); color: hsl(var(--muted-foreground)); font-weight: 600; font-size: 0.68rem; text-transform: uppercase; white-space: nowrap; }
+.logs-table td { padding: 0.38rem 0.55rem; border-bottom: 1px solid hsl(var(--card-border) / 0.4); white-space: nowrap; }
+.logs-table tr:hover td { background: hsl(var(--card) / 0.5); }
+.logs-table .mono { font-family: 'SF Mono', Monaco, monospace; font-size: 0.72rem; }
+.logs-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.logs-table .badge-success { background: #166534; color: #86efac; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.65rem; font-weight: 600; }
+.logs-table .badge-error { background: #7f1d1d; color: #fca5a5; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.65rem; font-weight: 600; }
+.logs-table .saved-col { color: #4ade80; }
+.logs-pagination { display: flex; gap: 0.5rem; align-items: center; margin-top: 1rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
+.logs-pagination button { padding: 0.3rem 0.7rem; font-size: 0.75rem; background: hsl(var(--secondary)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); color: hsl(var(--foreground)); cursor: pointer; }
+.logs-pagination button:disabled { opacity: 0.4; cursor: default; }
+.logs-summary { font-size: 0.75rem; color: hsl(var(--muted-foreground)); margin-bottom: 0.75rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>Logs</h1>
+<p class="subtitle">Filterable request history — all fields, all requests</p>
+
+<div class="logs-toolbar" id="logToolbar">
+  <select id="logProfileFilter" onchange="fetchLogs()">
+    <option value="">All Profiles</option>
+  </select>
+  <select id="logProviderFilter" onchange="fetchLogs()">
+    <option value="">All Providers</option>
+  </select>
+  <button class="pill-btn active" data-status="all" onclick="setStatus('all')">All</button>
+  <button class="pill-btn" data-status="success" onclick="setStatus('success')">Success</button>
+  <button class="pill-btn" data-status="error" onclick="setStatus('error')">Errors</button>
+  <span style="flex:1"></span>
+  <span class="logs-summary" id="logSummary">Loading...</span>
+</div>
+
+<div class="table-wrap" style="overflow-x:auto">
+<table class="logs-table">
+<thead>
+<tr>
+  <th>#</th><th>Time</th><th>Profile</th><th>Model</th><th>Provider</th>
+  <th>Status</th><th class="num">Prompt</th><th class="num">Comp</th>
+  <th class="num">CacheHit</th><th class="num">CacheMiss</th>
+  <th class="num">Cost</th><th class="num saved-col">Saved</th>
+  <th class="num">Dur</th><th>Error</th>
+</tr>
+</thead>
+<tbody id="logBody">
+<tr><td colspan="14" class="empty">Loading...</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="logs-pagination" id="logPagination"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var currentStatus = 'all';
+var currentOffset = 0;
+var pageSize = 100;
+var metaProfiles = [];
+var metaProviders = [];
+
+function setStatus(s) {
+  currentStatus = s; currentOffset = 0;
+  document.querySelectorAll('#logToolbar .pill-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.status === s);
+  });
+  fetchLogs();
+}
+
+function fetchLogs() {
+  var profile = document.getElementById('logProfileFilter').value;
+  var provider = document.getElementById('logProviderFilter').value;
+  var params = new URLSearchParams({
+    profile: profile, provider: provider, status: currentStatus,
+    limit: String(pageSize), offset: String(currentOffset)
+  });
+
+  fetch('/api/logs?' + params.toString())
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.error) {
+        document.getElementById('logBody').innerHTML =
+          '<tr><td colspan="14" class="empty" style="color:#fca5a5">' + data.error + '</td></tr>';
+        return;
+      }
+
+      // Update filter dropdowns
+      if (data.profiles && metaProfiles.length === 0) {
+        metaProfiles = data.profiles;
+        var ps = document.getElementById('logProfileFilter');
+        data.profiles.forEach(function(p) {
+          var o = document.createElement('option');
+          o.value = p.name; o.textContent = p.name + ' (' + p.count + ')';
+          ps.appendChild(o);
+        });
+      }
+      if (data.providers && metaProviders.length === 0) {
+        metaProviders = data.providers;
+        var pv = document.getElementById('logProviderFilter');
+        data.providers.forEach(function(p) {
+          var o = document.createElement('option');
+          o.value = p.name; o.textContent = p.name + ' (' + p.count + ')';
+          pv.appendChild(o);
+        });
+      }
+
+      document.getElementById('logSummary').textContent =
+        data.total + ' requests · showing ' + (data.offset+1) + '–' + (data.offset + data.rows.length);
+
+      var html = '';
+      if (data.rows.length === 0) {
+        html = '<tr><td colspan="14" class="empty">No matching requests</td></tr>';
+      } else {
+        data.rows.forEach(function(r) {
+          var t = r.timestamp || '';
+          var time = t.length >= 19 ? t.slice(11,19) : t;
+          var statusHtml = r.success
+            ? '<span class="badge-success">ok</span>'
+            : '<span class="badge-error">' + (r.error_type || 'err') + '</span>';
+          html += '<tr>' +
+            '<td class="mono">' + r.id + '</td>' +
+            '<td class="mono">' + time + '</td>' +
+            '<td>' + r.profile + '</td>' +
+            '<td class="mono" title="' + r.model + '">' + r.model.replace('deepseek-v4-','') + '</td>' +
+            '<td>' + r.provider + '</td>' +
+            '<td>' + statusHtml + '</td>' +
+            '<td class="num mono">' + fmtNum(r.prompt_tokens || 0) + '</td>' +
+            '<td class="num mono">' + fmtNum(r.completion_tokens || 0) + '</td>' +
+            '<td class="num mono">' + fmtNum(r.cache_hit_tokens || 0) + '</td>' +
+            '<td class="num mono">' + fmtNum(r.cache_miss_tokens || 0) + '</td>' +
+            '<td class="num mono">$' + (r.cost || 0).toFixed(6) + '</td>' +
+            '<td class="num mono saved-col">$' + (r.saved || 0).toFixed(6) + '</td>' +
+            '<td class="num mono">' + (r.latency_ms / 1000).toFixed(1) + 's</td>' +
+            '<td>' + (r.error_type || '') + '</td>' +
+            '</tr>';
+        });
+      }
+      document.getElementById('logBody').innerHTML = html;
+
+      // Pagination
+      var totalPages = Math.ceil(data.total / pageSize);
+      var curPage = Math.floor(data.offset / pageSize) + 1;
+      var pgHtml = '<button onclick="goPage(0)" ' + (data.offset === 0 ? 'disabled' : '') + '>First</button>';
+      pgHtml += '<button onclick="goPage(' + Math.max(0, data.offset-pageSize) + ')" ' + (data.offset === 0 ? 'disabled' : '') + '>Prev</button>';
+      pgHtml += '<span>Page ' + curPage + ' of ' + totalPages + '</span>';
+      pgHtml += '<button onclick="goPage(' + (data.offset+pageSize) + ')" ' + (data.offset+pageSize >= data.total ? 'disabled' : '') + '>Next</button>';
+      pgHtml += '<button onclick="goPage(' + (totalPages-1)*pageSize + ')" ' + (data.offset+pageSize >= data.total ? 'disabled' : '') + '>Last</button>';
+      document.getElementById('logPagination').innerHTML = pgHtml;
+    });
+}
+
+function goPage(offset) { currentOffset = offset; fetchLogs(); }
+
+function fmtNum(n) {
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return String(n || 0);
+}
+
+fetchLogs();
+</script>
+{% endblock %}

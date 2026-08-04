@@ -27,3 +27,9 @@ def render_usage_page(config, engine=None) -> str:
     """Render the Usage & Spending page (Jinja2)."""
     from .render import render_page
     return render_page("pages/usage.html", config, engine, active_page="usage")
+
+
+def render_logs_page(config, engine=None) -> str:
+    """Render the Logs page (Jinja2)."""
+    from .render import render_page
+    return render_page("pages/logs.html", config, engine, active_page="logs")

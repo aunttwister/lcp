@@ -22,6 +22,22 @@ from ..ui.dashboard import render_dashboard
 logger = get_logger("lcp.server")
 
 
+def _savings_for_model(config, model: str, hit_tokens: int) -> float:
+    """Estimate dollars saved via provider prefix caching for a model."""
+    if hit_tokens <= 0:
+        return 0.0
+    for p_name, p_cfg in config.providers.items():
+        if model in p_cfg.get("models", []):
+            try:
+                pricing = config.get_pricing(p_name, model)
+                return (hit_tokens / 1_000_000) * (
+                    pricing["cache_miss"] - pricing["cache_hit"]
+                )
+            except Exception:
+                pass
+    return 0.0
+
+
 # ── Health / Monitoring Endpoints ────────────────────────────────────────────
 
 class HealthEndpoints:
@@ -896,6 +912,15 @@ class DashboardEndpoints:
         self.end_headers()
         self.wfile.write(html.encode("utf-8"))
 
+    def _serve_logs_page(self):
+        """Server-rendered Logs page."""
+        from ..ui.pages import render_logs_page
+        html = render_logs_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
     def _serve_daily_costs_api(self):
         """API endpoint: daily costs as JSON."""
         from sqlalchemy import func
@@ -919,7 +944,7 @@ class DashboardEndpoints:
             self._send_json({"error": str(e)}, 500)
 
     def _serve_recent_requests_api(self):
-        """API endpoint: last 100 requests as JSON."""
+        """API endpoint: last 100 requests as JSON (with tokens + cache savings)."""
         try:
             with get_session(self.engine) as session:
                 rows = (
@@ -934,7 +959,12 @@ class DashboardEndpoints:
                     "profile": r.profile,
                     "model": r.model,
                     "provider": r.provider,
+                    "prompt_tokens": r.prompt_tokens,
+                    "completion_tokens": r.completion_tokens,
+                    "cache_hit_tokens": r.cache_hit_tokens,
+                    "cache_miss_tokens": r.cache_miss_tokens,
                     "cost": r.cost,
+                    "saved": _savings_for_model(self.config, r.model, r.cache_hit_tokens),
                     "latency_ms": r.latency_ms,
                     "success": bool(r.success),
                     "error_type": r.error_type,
@@ -942,6 +972,83 @@ class DashboardEndpoints:
                 for r in rows
             ]
             self._send_json({"requests": data})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_logs_api(self):
+        """API endpoint: filterable, paginated request logs.
+
+        Query params: profile, provider, status (all/success/error),
+                      limit (default 100), offset (default 0), sort (asc/desc).
+        """
+        from sqlalchemy import func
+
+        qs = parse_qs(urlparse(self.path).query)
+        profile = qs.get("profile", [None])[0]
+        provider = qs.get("provider", [None])[0]
+        status = qs.get("status", ["all"])[0]
+        limit = min(int(qs.get("limit", ["100"])[0]), 1000)
+        offset = int(qs.get("offset", ["0"])[0])
+        sort_order = (qs.get("sort", ["desc"])[0] or "desc").lower()
+        order_col = RequestModel.id.desc() if sort_order == "desc" else RequestModel.id.asc()
+
+        try:
+            with get_session(self.engine) as session:
+                filters = []
+                if profile:
+                    filters.append(RequestModel.profile == profile)
+                if provider:
+                    filters.append(RequestModel.provider == provider)
+                if status == "success":
+                    filters.append(RequestModel.success == 1)
+                elif status == "error":
+                    filters.append(RequestModel.success == 0)
+
+                total_q = session.query(func.count(RequestModel.id))
+                rows_q = session.query(RequestModel)
+
+                for f in filters:
+                    total_q = total_q.filter(f)
+                    rows_q = rows_q.filter(f)
+
+                total = total_q.scalar() or 0
+                rows = rows_q.order_by(order_col).offset(offset).limit(limit).all()
+
+                # Distinct profiles and providers for filter dropdowns
+                profiles_q = session.query(
+                    RequestModel.profile, func.count(RequestModel.id).label("n")
+                ).group_by(RequestModel.profile).order_by(func.count(RequestModel.id).desc())
+                providers_q = session.query(
+                    RequestModel.provider, func.count(RequestModel.id).label("n")
+                ).group_by(RequestModel.provider).order_by(func.count(RequestModel.id).desc())
+
+                log_rows = []
+                for r in rows:
+                    log_rows.append({
+                        "id": r.id,
+                        "timestamp": r.timestamp,
+                        "profile": r.profile,
+                        "model": r.model,
+                        "provider": r.provider,
+                        "prompt_tokens": r.prompt_tokens,
+                        "completion_tokens": r.completion_tokens,
+                        "cache_hit_tokens": r.cache_hit_tokens,
+                        "cache_miss_tokens": r.cache_miss_tokens,
+                        "cost": r.cost,
+                        "saved": _savings_for_model(self.config, r.model, r.cache_hit_tokens),
+                        "latency_ms": r.latency_ms,
+                        "success": bool(r.success),
+                        "error_type": r.error_type,
+                    })
+
+            self._send_json({
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "rows": log_rows,
+                "profiles": [{"name": p.profile, "count": p.n} for p in profiles_q.all()],
+                "providers": [{"name": p.provider, "count": p.n} for p in providers_q.all()],
+            })
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 

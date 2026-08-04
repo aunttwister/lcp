@@ -548,8 +548,6 @@ class TestDashboardTemplate:
         # recent row + badge + duration
         assert "badge-success" in html
         assert "1.2s" in html
-        # error row
-        assert "timeout" in html
         # profile summary card
         assert "l2 · 10 reqs" in html
         # sidebar profile links + copy buttons + chain summary

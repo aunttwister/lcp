@@ -168,6 +168,8 @@ class LCPHandler(
             self._serve_daily_costs_api()
         elif self.path == "/api/recent-requests":
             self._serve_recent_requests_api()
+        elif self.path == "/api/logs" or self.path.startswith("/api/logs?"):
+            self._serve_logs_api()
         elif self.path == "/api/providers":
             self._serve_providers_list()
         elif self.path == "/api/providers/presets":
@@ -201,6 +203,8 @@ class LCPHandler(
             self._serve_static()
         elif self.path == "/usage":
             self._serve_usage_page()
+        elif self.path == "/logs":
+            self._serve_logs_page()
         else:
             self._send_json({"error": "not found"}, 404)
 

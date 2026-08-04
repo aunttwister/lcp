@@ -14,6 +14,7 @@
     <a href="/keys">API Keys</a>
     <a href="/providers">Providers</a>
     <a href="/usage">Usage</a>
+    <a href="/logs">Logs</a>
     <div class="sb-provider-rows" id="providerPluginRows"></div>
     <a href="/profiles">Profiles</a>
     <div class="nav-label">Profiles</div>
@@ -210,7 +211,7 @@
 </details>
 
 <details class="dashboard-section">
-<summary><span>Recent Requests</span><span class="chevron">▾</span></summary>
+<summary><span>Recent Requests — <a href="/logs" style="font-size:0.75rem;color:hsl(var(--muted-foreground))">full logs →</a></span><span class="chevron">▾</span></summary>
 <div class="section-content">
 <div class="table-wrap">
 <table>
@@ -222,26 +223,6 @@
 {% endfor %}
 {% else %}
 <tr><td colspan="8" class="empty">No requests yet</td></tr>
-{% endif %}
-</tbody>
-</table>
-</div>
-</div>
-</details>
-
-<details class="dashboard-section">
-<summary><span>Recent Errors</span><span class="chevron">▾</span></summary>
-<div class="section-content">
-<div class="table-wrap">
-<table>
-<thead><tr><th>Time</th><th>Profile</th><th>Provider</th><th class="cost">Error</th><th>Message</th></tr></thead>
-<tbody>
-{% if error_rows %}
-{% for e in error_rows %}
-<tr><td class="mono">{{ e.time }}</td><td>{{ e.profile }}</td><td>{{ e.provider }}</td><td class="cost">{{ e.error_type }}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title=""></td></tr>
-{% endfor %}
-{% else %}
-<tr><td colspan="5" class="empty">No errors</td></tr>
 {% endif %}
 </tbody>
 </table>
