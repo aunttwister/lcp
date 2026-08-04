@@ -5,8 +5,8 @@
     <a href="/keys"{% if active_page == 'keys' %} class="active"{% endif %}>API Keys</a>
     <a href="/providers"{% if active_page == 'providers' %} class="active"{% endif %}>Providers</a>
     <a href="/usage"{% if active_page == 'usage' %} class="active"{% endif %}>Usage</a>
-    <a href="/logs"{% if active_page == 'logs' %} class="active"{% endif %}>Logs</a>
     <div class="sb-provider-rows" id="providerPluginRows"></div>
+    <a href="/logs"{% if active_page == 'logs' %} class="active"{% endif %}>Logs</a>
     <a href="/profiles"{% if active_page == 'profiles' %} class="active"{% endif %}>Profiles</a>
     <div class="nav-label">Profiles</div>
     {% for p in profiles %}
