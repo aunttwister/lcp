@@ -175,7 +175,7 @@ function createKey() {
         'Name: <b>' + d.name + '</b> \u00b7 ID: ' + d.id + '<br>' +
         'Profiles: ' + (d.allowed_profiles || 'all') + ' \u00b7 Limit: $' + (d.spend_limit || 0);
       closeCreateKeyModal();
-      document.getElementById('showKeyModal').classList.add('open');
+      openDialog('showKeyModal');
     } else {
       alert('Error: ' + (d.error || 'unknown'));
     }
@@ -196,7 +196,7 @@ function rotateKey(id) {
       document.getElementById('shownKeyInfo').innerHTML =
         'Rotated from ID: ' + d.old_id + ' \u2192 <b>' + d.id + '</b><br>' +
         'Name: <b>' + d.name + '</b>';
-      document.getElementById('showKeyModal').classList.add('open');
+      openDialog('showKeyModal');
     } else {
       alert('Error: ' + (d.error || 'unknown'));
     }
