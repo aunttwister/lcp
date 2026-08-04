@@ -539,6 +539,17 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 /* ── Expandable Key Stacks ── */
 .lcp-stack {
   margin-bottom: 0.75rem !important;
+  table-layout: fixed;
+}
+.lcp-stack-header th {
+  padding: 0.375rem 0.75rem 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: hsl(var(--muted-foreground));
+  text-align: left;
+  border-bottom: 1px solid hsl(var(--card-border));
 }
 .lcp-stack-trigger {
   cursor: pointer;
@@ -546,18 +557,12 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   transition: background 0.15s;
 }
 .lcp-stack-trigger:hover { background: hsl(var(--secondary) / 0.3); }
-.lcp-stack-trigger th {
+.lcp-stack-trigger td {
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid hsl(var(--card-border));
   vertical-align: middle;
-  font-size: 0.8125rem;
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: 0;
-  color: hsl(var(--foreground));
-  text-align: left;
 }
-.lcp-stack.expanded .lcp-stack-trigger th {
+.lcp-stack.expanded .lcp-stack-trigger td {
   background: hsl(var(--secondary) / 0.2);
 }
 .lcp-stack-title {
@@ -585,10 +590,13 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 .lcp-stack-body td {
   padding: 0.375rem 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .lcp-stack-body tr:hover td {
   background: hsl(var(--secondary) / 0.3);
 }
+.lcp-stack .cost { text-align: right; }
 }
 
 @media (max-width: 768px) {

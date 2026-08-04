@@ -74,6 +74,9 @@
 {% block scripts %}
 <script>
 {% raw %}
+var COLS = '<colgroup><col style="width:9%"><col style="width:17%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:8%"><col style="width:10%"><col style="width:14%"></colgroup>';
+var HDR = '<tr class="lcp-stack-header"><th>Name</th><th>Prefix</th><th>Profiles</th><th>Spend</th><th>Limit</th><th>Status</th><th>Created</th><th>Actions</th></tr>';
+
 function loadKeys(){api('GET','/api/keys').then(function(d){
 var keys=d.keys||[],groups={};
 keys.forEach(function(k){var nm=k.name||'unnamed';if(!groups[nm])groups[nm]={active:null,revoked:[]};if(k.status==='active')groups[nm].active=k;else groups[nm].revoked.push(k)});
@@ -81,24 +84,24 @@ Object.values(groups).forEach(function(g){g.revoked.sort(function(a,b){return (b
 var html='';
 Object.keys(groups).sort().forEach(function(name){
 var g=groups[name],count=g.revoked.length,sid='sk-'+name.replace(/[^a-zA-Z0-9]/g,'_');
-html+='<table class="lcp-stack" id="'+sid+'" aria-expanded="false" data-search="'+esc(name)+'"><thead>';
+html+='<table class="lcp-stack" id="'+sid+'" aria-expanded="false" data-search="'+esc(name)+'">'+COLS+'<thead>'+HDR;
 html+='<tr class="lcp-stack-trigger" onclick="toggleStack(\''+sid+'\')">';
-html+='<th><span class="lcp-stack-title">'+esc(name)+' <span class="lcp-stack-chevron">▾</span></span></th>';
+html+='<td><b>'+esc(name)+'</b> <span class="lcp-stack-chevron">▾</span></td>';
 if(g.active){
-html+='<th class="mono" style="font-size:0.75rem;font-weight:400">'+esc(g.active.key_prefix)+'</th>';
-html+='<th style="font-size:0.75rem;font-weight:400">'+(g.active.allowed_profiles||'all')+'</th>';
-html+='<th class="cost mono" style="font-size:0.75rem;font-weight:400">$'+(g.active.total_spend||0).toFixed(4)+'</th>';
-html+='<th class="cost mono" style="font-size:0.75rem;font-weight:400">'+(g.active.spend_limit>0?'$'+g.active.spend_limit.toFixed(2):'∞')+'</th>';
-html+='<th><span class="badge badge-success">active</span></th>';
-html+='<th class="mono" style="font-weight:400">'+(g.active.created_at||'').slice(0,10)+'</th>';
-html+='<th style="white-space:nowrap">';
+html+='<td class="mono" style="font-size:0.75rem">'+esc(g.active.key_prefix)+'</td>';
+html+='<td style="font-size:0.75rem">'+(g.active.allowed_profiles||'all')+'</td>';
+html+='<td class="cost mono" style="font-size:0.75rem">$'+(g.active.total_spend||0).toFixed(4)+'</td>';
+html+='<td class="cost mono" style="font-size:0.75rem">'+(g.active.spend_limit>0?'$'+g.active.spend_limit.toFixed(2):'∞')+'</td>';
+html+='<td><span class="badge badge-success">active</span></td>';
+html+='<td class="mono" style="font-size:0.6875rem">'+(g.active.created_at||'').slice(0,10)+'</td>';
+html+='<td style="white-space:nowrap">';
 if(count>0)html+='<span class="lcp-stack-count">+'+count+'</span> ';
 html+='<button class="btn-sm" onclick="event.stopPropagation();rotateKey('+g.active.id+')" title="Rotate">↻</button>';
 html+='<button class="btn-sm btn-danger" style="margin-left:0.125rem" onclick="event.stopPropagation();revokeKey('+g.active.id+')" title="Revoke">✕</button>';
-html+='</th>';
+html+='</td>';
 }else{
-html+='<th colspan="5"></th><th><span class="badge badge-error">all revoked</span></th><th></th>';
-if(count>0)html+='<th><span class="lcp-stack-count">'+count+'</span></th>';
+html+='<td colspan="5"></td><td><span class="badge badge-error">all revoked</span></td><td></td>';
+if(count>0)html+='<td><span class="lcp-stack-count">'+count+'</span></td>';
 }
 html+='</tr></thead>';
 html+='<tbody class="lcp-stack-body">';
