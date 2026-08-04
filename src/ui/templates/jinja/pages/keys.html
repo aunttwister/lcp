@@ -74,8 +74,8 @@
 {% block scripts %}
 <script>
 {% raw %}
-var COLS = '<colgroup><col style="width:9%"><col style="width:17%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:8%"><col style="width:10%"><col style="width:14%"></colgroup>';
-var HDR = '<tr class="lcp-stack-header"><th>Name</th><th>Prefix</th><th>Profiles</th><th>Spend</th><th>Limit</th><th>Status</th><th>Created</th><th>Actions</th></tr>';
+var COLS = '<colgroup><col style="width:11%"><col style="width:19%"><col style="width:8%"><col style="width:11%"><col style="width:8%"><col style="width:9%"><col style="width:11%"><col style="width:23%"></colgroup>';
+var HDR = '<tr class="lcp-stack-header"><th>Name</th><th>Prefix</th><th>Profiles</th><th>Spend</th><th>Limit</th><th>Status</th><th>Date</th><th>Actions</th></tr>';
 
 function loadKeys(){api('GET','/api/keys').then(function(d){
 var keys=d.keys||[],groups={};
