@@ -183,8 +183,13 @@ function createKey() {
 }
 
 function copyShownKey() {
+  var btn = event.target;
   navigator.clipboard.writeText(document.getElementById('shownKey').textContent).then(function() {
-    alert('Key copied to clipboard');
+    var origText = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(function() {
+      btn.textContent = origText;
+    }, 1500);
   });
 }
 

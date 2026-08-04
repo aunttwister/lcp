@@ -163,18 +163,21 @@ details.dashboard-section .section-content { padding: 1rem 1.25rem; }
 }
 /* ── Provider Health Detail Modal ── */
 .ph-modal-overlay {
-  display: none; position: fixed; inset: 0; z-index: 300;
+  position: fixed; inset: 0; z-index: 300;
+  display: flex; opacity: 0; pointer-events: none;
   background: rgba(0,0,0,0.8);
   align-items: center; justify-content: center;
+  transition: opacity 0.15s ease;
 }
 .ph-modal-overlay.open {
-  display: flex;
-  animation: overlayIn 0.15s ease;
+  opacity: 1; pointer-events: auto;
 }
 .ph-modal {
   background: hsl(var(--card)); border: 1px solid hsl(var(--border));
   border-radius: var(--radius); width: min(420px, 90vw);
   box-shadow: 0 10px 40px -10px rgba(0,0,0,0.6);
+}
+.ph-modal-overlay.open .ph-modal {
   animation: dialogIn 0.15s ease;
 }
 .ph-modal-header {
@@ -357,22 +360,29 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 body.lcp-dialog-open { overflow: hidden; }
 
 .dialog-overlay, .modal-overlay {
-  display: none; position: fixed; inset: 0; z-index: 200;
+  position: fixed; inset: 0; z-index: 200;
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
   background: rgba(0,0,0,0.8);
   align-items: center; justify-content: center;
+  transition: opacity 0.15s ease;
 }
 .dialog-overlay.open, .modal-overlay.open {
-  display: flex;
-  animation: overlayIn 0.15s ease;
+  opacity: 1;
+  pointer-events: auto;
 }
-@keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
 
 .dialog-content, .modal {
   background: hsl(var(--card)); border: 1px solid hsl(var(--border));
   border-radius: var(--radius); width: min(900px, 95vw); max-height: 85vh;
   display: flex; flex-direction: column;
   box-shadow: 0 10px 40px -10px rgba(0,0,0,0.6), 0 2px 8px -2px rgba(0,0,0,0.4);
+}
+.dialog-overlay.open .dialog-content,
+.modal-overlay.open .modal {
   animation: dialogIn 0.2s cubic-bezier(0.16,1,0.3,1);
+}
 }
 @keyframes dialogIn {
   from { opacity: 0; transform: translateY(8px) scale(0.98); }
