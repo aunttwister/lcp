@@ -239,11 +239,29 @@ class LCPHandler(
             self._send_json({"error": "not found"}, 404)
             return
 
+        # Read body early — needed for model→profile fallback and validation
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+
         profile = self._resolve_profile()
         if profile is None:
-            logger.warning("unknown_profile", path=self.path,
-                           client_ip=self.client_address[0])
-            self._send_json({"error": f"unknown profile in path: {self.path}"}, 400)
+            # Fallback: resolve profile from "model" field in request body
+            model_name = (body.get("model") or "").strip()
+            if model_name in self.config.profiles:
+                profile = model_name
+                logger.info("profile_from_model", model=model_name, path=self.path)
+            else:
+                logger.warning("unknown_profile", path=self.path,
+                               client_ip=self.client_address[0], model=model_name)
+                self._send_json({"error": f"unknown profile in path: {self.path}. Use /PROFILE/chat/completions or set model to a profile name."}, 400)
+                return
+
+        profile_cfg = self.config.get_profile(profile)
+        if profile_cfg is None:
+            self._send_json({"error": f"profile not found: {profile}"}, 400)
             return
 
         profile_cfg = self.config.get_profile(profile)
@@ -291,9 +309,7 @@ class LCPHandler(
                 self._current_key_id = key_info.get("id")
 
         try:
-            body = self._read_body()
-
-            # Validate body has messages
+            # Validate body has messages (after auth so we return 401 first if unauthenticated)
             if not isinstance(body.get("messages"), list) or len(body.get("messages", [])) == 0:
                 self._send_json({"error": "missing required field: messages"}, 400)
                 return

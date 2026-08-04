@@ -92,6 +92,8 @@ class HealthEndpoints:
             }
             if context_len:
                 entry["context_window"] = context_len
+                entry["max_model_len"] = context_len
+                entry["context_length"] = context_len
             if limits.get("max_output_tokens"):
                 entry["max_output_tokens"] = limits["max_output_tokens"]
             if limits.get("description"):
@@ -140,6 +142,8 @@ class HealthEndpoints:
                 "owned_by": "lcp",
                 "kind": "profile",
                 "context_window": max_context,
+                "max_model_len": max_context,
+                "context_length": max_context,
                 "description": profile_description or f"Profile with {len(chain)} provider(s) in chain",
                 "providers": profile_providers,
             })
