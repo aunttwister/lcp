@@ -97,6 +97,7 @@ function renderDiscoverResults(){
     inner += '<span style="display:flex;gap:0.25rem">';
     inner += '<button class="btn-sm" '+(start===0?'disabled':'')+' onclick="changePage(-1)" style="font-size:0.625rem;padding:0.125rem 0.375rem">‹ Prev</button>';
     inner += '<span style="font-size:0.625rem;color:hsl(var(--muted-foreground));padding:0.125rem 0.25rem">page ' + (_discoverPage+1) + ' of ' + pages + '</span>';
+    inner += '<select onchange="changePageSize(this.value)" style="font-size:0.625rem;padding:0.125rem 0.25rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:3px;color:hsl(var(--foreground))">' + [10,20,50,100,999].map(function(n){ return '<option value="'+n+'"'+(n===_PAGE?' selected':'')+'>'+ (n===999?'All':n) +'</option>' }).join('') + '</select>';
     inner += '<button class="btn-sm" '+(start+_PAGE>=total?'disabled':'')+' onclick="changePage(1)" style="font-size:0.625rem;padding:0.125rem 0.375rem">Next ›</button>';
     inner += '</span>';
   }
@@ -115,6 +116,7 @@ function renderDiscoverResults(){
 }
 
 function changePage(delta){ _discoverPage += delta; renderDiscoverResults() }
+function changePageSize(n){ _PAGE = parseInt(n); _discoverPage = 0; renderDiscoverResults() }
 
 function filterDiscovered(){ _discFilter = (document.getElementById('modelSearch')||{}).value||''; _discoverPage = 0; renderDiscoverResults() }
 
