@@ -17,13 +17,6 @@
     <div class="sb-provider-rows" id="providerPluginRows"></div>
     <a href="/logs">Logs</a>
     <a href="/profiles">Profiles</a>
-    <div class="nav-label">Profiles</div>
-    {% for p in sidebar_profiles %}
-    <a href="/{{ p.name }}/dashboard" class="{% if profile_filter == p.name %}active {% endif %}sb-profile-link" title="{{ p.providers_str }}">
-      <span>{{ p.name.upper() }}</span>
-      <button class="sb-copy-btn" onclick="event.preventDefault();event.stopPropagation();copyUrl('{{ host_url }}/{{ p.name }}/chat/completions')" title="Copy gateway URL">/{{ p.name }}/chat/completions</button>
-    </a>
-    {% endfor %}
   </nav>
 </aside>
 {% endblock %}
@@ -38,6 +31,14 @@
     <span class="header-plugin-dot" id="pluginHeaderDot"></span>
     <span class="header-plugin-text" id="pluginHeaderText">Plugins…</span>
   </div>
+</div>
+
+<!-- ── Profile Filter Pills ── -->
+<div style="display:flex;align-items:center;gap:0.375rem;margin-bottom:1.5rem;flex-wrap:wrap">
+  <a href="/dashboard"{% if not profile_filter %} class="view-toggle active"{% else %} class="view-toggle"{% endif %} style="text-decoration:none">All</a>
+  {% for p in sidebar_profiles %}
+  <a href="/{{ p.name }}/dashboard"{% if profile_filter == p.name %} class="view-toggle active"{% else %} class="view-toggle"{% endif %} style="text-decoration:none">{{ p.name.upper() }}</a>
+  {% endfor %}
 </div>
 
 <!-- ── Provider Edit Modal (opened from sidebar) ── -->

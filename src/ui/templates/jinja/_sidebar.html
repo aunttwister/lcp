@@ -8,9 +8,5 @@
     <div class="sb-provider-rows" id="providerPluginRows"></div>
     <a href="/logs"{% if active_page == 'logs' %} class="active"{% endif %}>Logs</a>
     <a href="/profiles"{% if active_page == 'profiles' %} class="active"{% endif %}>Profiles</a>
-    <div class="nav-label">Profiles</div>
-    {% for p in profiles %}
-    <a href="/{{ p }}/dashboard">{{ p.upper() }}</a>
-    {% endfor %}
   </nav>
 </aside>

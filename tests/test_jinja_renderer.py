@@ -109,9 +109,11 @@ class TestRenderPage:
     def test_injects_profiles_into_sidebar(self, mock_config):
         from src.ui.render import render_page
         html = render_page("pages/profiles.html", mock_config)
-        # _sidebar.html renders profile links
-        assert 'href="/l2/dashboard"' in html
-        assert "L2" in html
+        # Profiles moved from sidebar to dashboard filter pills
+        # Sidebar should NOT contain profile dashboard links anymore
+        assert 'href="/l2/dashboard"' not in html
+        # But profiles are still injected via the 'profiles' context var
+        # (used by other templates like dashboard filter pills)
 
     def test_active_page_injected(self, mock_config):
         from src.ui.render import render_page
@@ -424,26 +426,27 @@ class TestSidebarPartial:
         # Others should not
         assert 'href="/providers" class="active"' not in html
 
-    def test_profile_links_rendered(self, render_env):
+    def test_profile_links_not_in_sidebar(self, render_env):
+        """Profile links moved from sidebar to dashboard filter pills."""
         tmpl = render_env.get_template("_sidebar.html")
         html = tmpl.render(
             config=MagicMock(profiles={"l2": {}, "l1": {}, "coder": {}}),
             active_page="",
             profiles=["l2", "l1", "coder"],
         )
-        assert 'href="/l2/dashboard"' in html
-        assert "L2" in html
-        assert 'href="/coder/dashboard"' in html
-        assert "CODER" in html
+        # No profile links in sidebar anymore
+        assert 'href="/l2/dashboard"' not in html
+        assert "L2" not in html
 
-    def test_uppercase_profile_names(self, render_env):
+    def test_uppercase_profile_names_not_in_sidebar(self, render_env):
+        """Profile names no longer rendered in sidebar."""
         tmpl = render_env.get_template("_sidebar.html")
         html = tmpl.render(
             config=MagicMock(profiles={"myProfile": {}}),
             active_page="",
             profiles=["myProfile"],
         )
-        assert "MYPROFILE" in html
+        assert "MYPROFILE" not in html
 
 
 # ---------------------------------------------------------------------------
@@ -550,13 +553,16 @@ class TestDashboardTemplate:
         assert "1.2s" in html
         # profile summary card
         assert "l2 · 10 reqs" in html
-        # sidebar profile links + copy buttons + chain summary
-        assert "/l2/chat/completions" in html
-        assert "opencode, deepseek" in html
+        # profile filter pills in content area
+        assert 'href="/l2/dashboard"' in html
+        assert 'href="/l1/dashboard"' in html
+        assert "view-toggle" in html
 
     def test_dashboard_profile_filter_active(self, mock_config):
         html = self._render(mock_config, profile_filter="l2", filter_title=" — L2")
         assert "LCP Dashboard — L2" in html
-        assert 'class="active sb-profile-link"' in html
+        # L2 pill active in content filter bar, not sidebar
+        assert "L2" in html
+        assert 'class="view-toggle active"' in html
         # host URL injected into the page JS
         assert "http://localhost:8734" in html
