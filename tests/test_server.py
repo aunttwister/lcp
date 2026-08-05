@@ -362,6 +362,21 @@ class TestProviderEndpoints:
         assert result["ok"] is False
         assert "error" in result
 
+    def test_discover_delegates_to_plugin(self, temp_db):
+        """When a plugin has discover_models, endpoint returns response (may fail if unreachable)."""
+        body = json.dumps({"api_base": "http://llama.cpp/v1", "provider": "llamacpp"})
+        h = TestHandler(path="/api/providers/discover", method="POST", engine=temp_db, body=body)
+        h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert "ok" in result  # True if reaches server, False with error otherwise
+
+    def test_discover_missing_api_base(self, temp_db):
+        body = json.dumps({"provider": "deepseek"})
+        h = TestHandler(path="/api/providers/discover", method="POST", engine=temp_db, body=body)
+        h.do_POST()
+        assert _status(h) == 400
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Profile endpoint tests

@@ -7,7 +7,7 @@ persisted to a JSON file. All costs are $0.
 import json
 import os
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 from src.api.cost_plugins.llamacpp import LlamaCppCostPlugin
@@ -113,6 +113,96 @@ class TestLlamaCppPersistence:
         persist = tmp_path / "nonexistent" / "usage.json"
         plugin = LlamaCppCostPlugin(persist_path=str(persist))
         assert plugin._daily == {}
+
+
+class TestLlamaCppDiscoverModels:
+    """discover_models queries llama.cpp /v1/models and extracts metadata."""
+
+    @patch("urllib.request.urlopen")
+    def test_extracts_id_and_meta_fields(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "data": [{
+                "id": "qwen-27b.gguf",
+                "created": 1700000000,
+                "owned_by": "llamacpp",
+                "object": "model",
+                "meta": {
+                    "n_ctx": 200192,
+                    "n_ctx_train": 262144,
+                    "n_params": 27320697856,
+                    "ftype": "Q4_K - Medium",
+                    "size": 17095778304,
+                }
+            }]
+        }).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        plugin = LlamaCppCostPlugin()
+        result = plugin.discover_models("http://localhost:8082/v1")
+        assert result is not None
+        assert len(result) == 1
+        m = result[0]
+        assert m["id"] == "qwen-27b.gguf"
+        assert m["context_length"] == 200192
+        assert m["context_train"] == 262144
+        assert m["parameters"] == "27.3B"
+        assert m["quantization"] == "Q4_K - Medium"
+        assert m["size_bytes"] == 17095778304
+
+    @patch("urllib.request.urlopen")
+    def test_handles_models_format(self, mock_urlopen):
+        """llama.cpp sometimes returns {"models": [...]} instead of {"data": [...]}."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "models": [{"name": "llama3.gguf", "meta": {"n_ctx": 8192}}]
+        }).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        plugin = LlamaCppCostPlugin()
+        result = plugin.discover_models("http://test.local/")
+        assert result is not None
+        assert result[0]["id"] == "llama3.gguf"
+        assert result[0]["context_length"] == 8192
+
+    @patch("urllib.request.urlopen")
+    def test_falls_back_to_v1_models(self, mock_urlopen):
+        """When base has no /v1, tries /models then /v1/models."""
+        mock_urlopen.side_effect = Exception("fail")
+
+        plugin = LlamaCppCostPlugin()
+        result = plugin.discover_models("http://test.local/")
+        assert result is None
+        assert mock_urlopen.call_count == 2
+
+    @patch("urllib.request.urlopen")
+    def test_skips_v1_fallback_when_already_in_url(self, mock_urlopen):
+        """Base already contains /v1 — only try /models on that base."""
+        mock_urlopen.side_effect = Exception("fail")
+
+        plugin = LlamaCppCostPlugin()
+        plugin.discover_models("http://test.local/v1")
+        assert mock_urlopen.call_count == 1
+
+    @patch("urllib.request.urlopen")
+    def test_handles_non_dict_entries(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "data": [{"id": "valid.gguf", "meta": {"n_ctx": 4096}}, "bare-string"]
+        }).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        plugin = LlamaCppCostPlugin()
+        result = plugin.discover_models("http://test.local/v1")
+        assert len(result) == 2
+        assert result[0]["id"] == "valid.gguf"
+        assert result[1]["id"] == "bare-string"
 
 
 class TestLlamaCppFetchUsage:

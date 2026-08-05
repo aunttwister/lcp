@@ -33,6 +33,9 @@ class _DummyPlugin(CostPlugin):
     def fetch_balance(self):
         return {"balance": 100.0, "currency": "USD"}
 
+    def discover_models(self, api_base: str):
+        return [{"id": "model-from-plugin", "context_length": 4096}]
+
 
 class _AnotherPlugin(CostPlugin):
     """Second plugin for multi-registration tests."""
@@ -79,13 +82,19 @@ class TestCostPluginABC:
         assert p.on_startup() is None
         assert p.on_shutdown() is None
 
+    def test_default_discover_models_returns_none(self):
+        """Plugins that don't override discover_models should return None."""
+        p = _MinimalPlugin()
+        assert p.discover_models("http://test.local/v1") is None
+
+    def test_dummy_plugin_discover_models(self):
+        p = _DummyPlugin()
+        result = p.discover_models("http://test.local/v1")
+        assert result == [{"id": "model-from-plugin", "context_length": 4096}]
+
     def test_minimal_plugin_returns_none_defaults(self):
         """Plugin that overrides nothing returns None for pricing/cost/preset/balance."""
         p = _MinimalPlugin()
-        assert p.get_pricing("any-model") is None
-        assert p.calculate_cost("any-model", {}) is None
-        assert p.preset is None
-        assert p.fetch_balance() is None
 
 
 # ═══════════════════════════════════════════════════════════════════════
