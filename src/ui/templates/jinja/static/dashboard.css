@@ -539,6 +539,8 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .lcp-stack {
   margin-bottom: 0.75rem !important;
   table-layout: fixed;
+  min-width: 620px;
+  width: 100%;
 }
 .lcp-stack-header th {
   padding: 0.375rem 0.75rem 0.5rem;
@@ -589,13 +591,14 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 .lcp-stack-body td {
   padding: 0.375rem 0.75rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  vertical-align: middle;
 }
 .lcp-stack-body tr:hover td {
   background: hsl(var(--secondary) / 0.3);
 }
 .lcp-stack .cost { text-align: right; }
+.lcp-stack td.lcp-col-center,
+.lcp-stack th.lcp-col-center { text-align: center !important; }
 }
 
 @media (max-width: 768px) {

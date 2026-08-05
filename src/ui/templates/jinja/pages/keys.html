@@ -12,7 +12,7 @@
     style="padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem;width:200px">
 </div>
 
-<div id="keyStacks"><div class="empty">Loading...</div></div>
+<div class="table-wrap" id="keyStacks"><div class="empty">Loading...</div></div>
 
 <div class="modal-overlay dialog-overlay" id="createKeyModal">
 <div class="modal dialog-content" style="width:min(500px,95vw)">
@@ -75,7 +75,7 @@
 <script>
 {% raw %}
 var COLS = '<colgroup><col style="width:11%"><col style="width:19%"><col style="width:8%"><col style="width:11%"><col style="width:8%"><col style="width:9%"><col style="width:11%"><col style="width:23%"></colgroup>';
-var HDR = '<tr class="lcp-stack-header"><th>Name</th><th>Prefix</th><th>Profiles</th><th>Spend</th><th>Limit</th><th>Status</th><th>Date</th><th>Actions</th></tr>';
+var HDR = '<tr class="lcp-stack-header"><th>Name</th><th>Prefix</th><th>Profiles</th><th class="lcp-col-center">Budget</th><th>Limit</th><th>Status</th><th>Date</th><th>Actions</th></tr>';
 
 function loadKeys(){api('GET','/api/keys').then(function(d){
 var keys=d.keys||[],groups={};
@@ -90,7 +90,7 @@ html+='<td><b>'+esc(name)+'</b> <span class="lcp-stack-chevron">▾</span></td>'
 if(g.active){
 html+='<td class="mono" style="font-size:0.75rem">'+esc(g.active.key_prefix)+'</td>';
 html+='<td style="font-size:0.75rem">'+(g.active.allowed_profiles||'all')+'</td>';
-html+='<td class="cost mono" style="font-size:0.75rem">$'+(g.active.total_spend||0).toFixed(4)+'</td>';
+html+='<td class="cost mono lcp-col-center" style="font-size:0.75rem">$'+(g.active.total_spend||0).toFixed(4)+'</td>';
 html+='<td class="cost mono" style="font-size:0.75rem">'+(g.active.spend_limit>0?'$'+g.active.spend_limit.toFixed(2):'∞')+'</td>';
 html+='<td><span class="badge badge-success">active</span></td>';
 html+='<td class="mono" style="font-size:0.6875rem">'+(g.active.created_at||'').slice(0,10)+'</td>';
@@ -111,7 +111,7 @@ html+='<tr>';
 html+='<td></td>';
 html+='<td class="mono" style="font-size:0.75rem">'+esc(rk.key_prefix)+'</td>';
 html+='<td style="font-size:0.75rem">'+(rk.allowed_profiles||'all')+'</td>';
-html+='<td class="cost mono">$'+(rk.total_spend||0).toFixed(4)+'</td>';
+html+='<td class="cost mono lcp-col-center">$'+(rk.total_spend||0).toFixed(4)+'</td>';
 html+='<td class="cost mono">'+(rk.spend_limit>0?'$'+rk.spend_limit.toFixed(2):'∞')+'</td>';
 html+='<td><span class="badge badge-error">revoked</span></td>';
 html+='<td class="mono" style="font-size:0.6875rem">'+(rk.revoked_at||'').slice(0,10)+'</td>';
