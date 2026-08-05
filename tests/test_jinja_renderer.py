@@ -545,24 +545,19 @@ class TestDashboardTemplate:
 
     def test_dashboard_table_rows_render(self, mock_config):
         html = self._render(mock_config)
-        # daily row
-        assert "deepseek-chat" in html
-        assert "$0.001234" in html
-        # recent row + badge + duration
-        assert "badge-success" in html
-        assert "1.2s" in html
         # profile summary card
         assert "l2 · 10 reqs" in html
-        # profile filter pills in content area
-        assert 'href="/l2/dashboard"' in html
-        assert 'href="/l1/dashboard"' in html
-        assert "view-toggle" in html
+        # profile filter dropdown
+        assert "lcp-filter-dropdown" in html
+        assert "lcp-filter-menu" in html
+        # Chart canvas still rendered
+        assert 'id="costChart"' in html
 
     def test_dashboard_profile_filter_active(self, mock_config):
         html = self._render(mock_config, profile_filter="l2", filter_title=" — L2")
         assert "LCP Dashboard — L2" in html
-        # L2 pill active in content filter bar, not sidebar
-        assert "L2" in html
-        assert 'class="view-toggle active"' in html
+        # Filter dropdown shows active profile
+        assert "L2 ▾" in html
+        assert "lcp-filter-item active" in html
         # host URL injected into the page JS
         assert "http://localhost:8734" in html

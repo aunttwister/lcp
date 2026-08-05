@@ -33,12 +33,15 @@
   </div>
 </div>
 
-<!-- ── Profile Filter Pills ── -->
-<div style="display:flex;align-items:center;gap:0.375rem;margin-bottom:1.5rem;flex-wrap:wrap">
-  <a href="/dashboard"{% if not profile_filter %} class="view-toggle active"{% else %} class="view-toggle"{% endif %} style="text-decoration:none">All</a>
-  {% for p in sidebar_profiles %}
-  <a href="/{{ p.name }}/dashboard"{% if profile_filter == p.name %} class="view-toggle active"{% else %} class="view-toggle"{% endif %} style="text-decoration:none">{{ p.name.upper() }}</a>
-  {% endfor %}
+<!-- ── Profile Filter Dropdown (shadcn-style) ── -->
+<div class="lcp-filter-dropdown" style="margin-bottom:1.5rem;display:flex;justify-content:flex-end">
+  <button class="lcp-filter-btn" onclick="toggleFilterDropdown(event)">{% if profile_filter %}{{ profile_filter.upper() }}{% else %}All{% endif %} ▾</button>
+  <div class="lcp-filter-menu" id="filterMenu" style="display:none">
+    <a href="/dashboard" class="lcp-filter-item{% if not profile_filter %} active{% endif %}">All</a>
+    {% for p in sidebar_profiles %}
+    <a href="/{{ p.name }}/dashboard" class="lcp-filter-item{% if profile_filter == p.name %} active{% endif %}">{{ p.name.upper() }}</a>
+    {% endfor %}
+  </div>
 </div>
 
 <!-- ── Provider Edit Modal (opened from sidebar) ── -->
@@ -191,45 +194,7 @@
 </div>
 </details>
 
-<details class="dashboard-section">
-<summary><span>Daily Costs</span><span class="chevron">▾</span></summary>
-<div class="section-content">
-<div class="table-wrap">
-<table>
-<thead><tr><th>Date</th><th>Profile</th><th>Model</th><th>Provider</th><th class="cost">Reqs</th><th class="cost">Fb</th><th class="cost">Cache Hit</th><th class="cost">Cache Miss</th><th class="cost">Output</th><th class="cost">Cost</th></tr></thead>
-<tbody>
-{% if daily_rows %}
-{% for d in daily_rows %}
-<tr><td class="mono">{{ d.date }}</td><td>{{ d.profile }}</td><td class="mono">{{ d.model }}</td><td>{{ d.provider }}</td><td class="cost">{{ d.reqs }}</td><td class="cost">{{ d.fb_count }}</td><td class="cost">{{ d.cache_hit }}</td><td class="cost">{{ d.cache_miss }}</td><td class="cost">{{ d.output }}</td><td class="cost mono">${{ "%.6f"|format(d.cost) }}</td><td class="cost mono saved">${{ "%.6f"|format(d.saved) }}</td></tr>
-{% endfor %}
-{% else %}
-<tr><td colspan="10" class="empty">No data yet</td></tr>
-{% endif %}
-</tbody>
-</table>
-</div>
-</div>
-</details>
 
-<details class="dashboard-section">
-<summary><span>Recent Requests — <a href="/logs" style="font-size:0.75rem;color:hsl(var(--muted-foreground))">full logs →</a></span><span class="chevron">▾</span></summary>
-<div class="section-content">
-<div class="table-wrap">
-<table>
-<thead><tr><th>Time</th><th>Profile</th><th>Model</th><th>Provider</th><th class="cost">Status</th><th class="cost">Dur</th><th class="cost">Cost</th><th class="cost">Saved</th></tr></thead>
-<tbody>
-{% if recent_rows %}
-{% for r in recent_rows %}
-<tr><td class="mono">{{ r.time }}</td><td>{{ r.profile }}</td><td class="mono">{{ r.model }}</td><td>{{ r.provider }}</td><td class="cost">{{ r.badges | safe }}</td><td class="cost">{{ "%.1f"|format(r.latency_s) }}s</td><td class="cost mono">${{ "%.6f"|format(r.cost) }}</td><td class="cost mono saved">${{ "%.6f"|format(r.saved) }}</td></tr>
-{% endfor %}
-{% else %}
-<tr><td colspan="8" class="empty">No requests yet</td></tr>
-{% endif %}
-</tbody>
-</table>
-</div>
-</div>
-</details>
 
 <p class="endpoints">
   <a href="/health" style="color:inherit">/health</a> ·
@@ -254,6 +219,17 @@ var pmData = {{ pm_data_json | safe }};
 window._hostUrl = {{ host_url | tojson }};
 
 {% raw %}
+/* ── Profile filter dropdown ── */
+function toggleFilterDropdown(e) {
+  e.stopPropagation();
+  var m = document.getElementById('filterMenu');
+  m.style.display = m.style.display === 'block' ? 'none' : 'block';
+}
+document.addEventListener('click', function() {
+  var m = document.getElementById('filterMenu');
+  if (m) m.style.display = 'none';
+});
+
 /* ── Swipe-to-reveal for profile rows (mobile) ── */
 var _swipedRow = null;
 var _swipeStartX = 0;
