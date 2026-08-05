@@ -419,36 +419,43 @@ class ProviderEndpoints:
         if workspace:
             headers["X-Workspace-Id"] = workspace
 
-        if not api_base or not headers:
-            self._send_json({"error": "missing 'api_base' or authentication"}, 400)
+        if not api_base:
+            self._send_json({"error": "missing 'api_base'"}, 400)
             return
-        url = f"{api_base}/models"
-        req = urllib.request.Request(url, headers=headers)
-        try:
-            ctx = ssl.create_default_context()
-            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                raw = json.loads(resp.read().decode())
-                # Normalize: expect {"data": [{"id": "...", ...}, ...]} or {"object": "list", ...}
-                models_raw = raw.get("data", raw if isinstance(raw, list) else [])
-                models = []
-                for m in models_raw:
-                    entry = {"id": m.get("id", m) if isinstance(m, dict) else str(m)}
-                    # Include metadata if present
-                    for field in ("created", "owned_by", "object", "context_length", "max_model_len"):
-                        if field in m:
-                            entry[field] = m[field]
-                    # Flatten pricing info if present
-                    if "pricing" in m and isinstance(m["pricing"], dict):
-                        entry["pricing"] = m["pricing"]
-                    models.append(entry)
-                # Determine if any model has metadata beyond just "id"
-                has_metadata = any(len(m) > 1 for m in models)
-                self._send_json({"ok": True, "models": models, "has_metadata": has_metadata, "count": len(models)})
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode()[:300] if e.fp else ""
-            self._send_json({"ok": False, "status": e.code, "error": err_body})
-        except Exception as e:
-            self._send_json({"ok": False, "error": str(e)})
+        # Try /models first, fall back to /v1/models (llama.cpp convention)
+        urls_to_try = [f"{api_base}/models"]
+        if "/v1" not in api_base:
+            urls_to_try.append(f"{api_base}/v1/models")
+        result = None
+        last_error = None
+        for url in urls_to_try:
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                ctx = ssl.create_default_context()
+                with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                    raw = json.loads(resp.read().decode())
+                    result = raw
+                    break
+            except urllib.error.HTTPError as e:
+                last_error = f"HTTP {e.code}"
+            except Exception as e:
+                last_error = str(e)
+        if result is None:
+            self._send_json({"ok": False, "error": last_error or "no models endpoint found"})
+            return
+        # Normalize: expect {"data": [{"id": "...", ...}, ...]} or {"object": "list", ...}
+        models_raw = result.get("data", result if isinstance(result, list) else [])
+        models = []
+        for m in models_raw:
+            entry = {"id": m.get("id", m) if isinstance(m, dict) else str(m)}
+            for field in ("created", "owned_by", "object", "context_length", "max_model_len"):
+                if field in m:
+                    entry[field] = m[field]
+            if "pricing" in m and isinstance(m["pricing"], dict):
+                entry["pricing"] = m["pricing"]
+            models.append(entry)
+        has_metadata = any(len(m) > 1 for m in models)
+        self._send_json({"ok": True, "models": models, "has_metadata": has_metadata, "count": len(models)})
 
     def _serve_chain_reorder(self, profile: str):
         try:

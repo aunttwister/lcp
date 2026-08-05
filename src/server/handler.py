@@ -59,13 +59,16 @@ class LCPHandler(
         pass
 
     def _send_json(self, data: dict, status: int = 200):
-        """Send a JSON response."""
+        """Send a JSON response. Silently drops write errors on broken pipes."""
         body = json.dumps(data).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def _resolve_profile(self) -> str | None:
         """Extract profile name from URL path. Returns None for non-profile routes."""
@@ -113,12 +116,15 @@ class LCPHandler(
             return
 
         data = file_path.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-cache, max-age=0")
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache, max-age=0")
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     # ── Routes ────────────────────────────────────────────────────────────
 
@@ -342,12 +348,15 @@ class LCPHandler(
             cached = cache.get(profile, primary_model, body) if not body.get("stream", False) else None
             if cached is not None:
                 latency_ms = 1  # near-instant
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("X-LCP-Cache", "HIT")
-                self.send_header("X-Estimated-Cost", str(estimation["estimated_total_cost"]))
-                self.end_headers()
-                self.wfile.write(json.dumps(cached).encode("utf-8"))
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("X-LCP-Cache", "HIT")
+                    self.send_header("X-Estimated-Cost", str(estimation["estimated_total_cost"]))
+                    self.end_headers()
+                    self.wfile.write(json.dumps(cached).encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    pass
                 logger.info("cache_hit_served", profile=profile, model=primary_model)
                 return
 
@@ -379,10 +388,13 @@ class LCPHandler(
                 self.end_headers()
 
                 sse_parts = []
-                for chunk in response_body:
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
-                    sse_parts.append(chunk)
+                try:
+                    for chunk in response_body:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                        sse_parts.append(chunk)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    pass  # client disconnected mid-stream
 
                 full_sse = b"".join(sse_parts)
                 last_chunk = extract_last_sse_chunk(full_sse)
@@ -464,13 +476,16 @@ class LCPHandler(
 
             # Send response with custom headers
             body_bytes = json.dumps(response_body).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body_bytes)))
-            for hdr_name, hdr_val in self._pending_headers.items():
-                self.send_header(hdr_name, hdr_val)
-            self.end_headers()
-            self.wfile.write(body_bytes)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                for hdr_name, hdr_val in self._pending_headers.items():
+                    self.send_header(hdr_name, hdr_val)
+                self.end_headers()
+                self.wfile.write(body_bytes)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
 
             logger.info(
                 "request_complete",
@@ -493,15 +508,18 @@ class LCPHandler(
             record_cost(self.engine, profile, "unknown", "unknown", cost_info, False,
                        "all_providers_failed", [], error_detail=str(e))
             body_bytes = json.dumps({"error": str(e)}).encode("utf-8")
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body_bytes)))
-            if hasattr(self, '_pending_headers') and self._pending_headers:
-                estimation_cost = self._pending_headers.get("X-Estimated-Cost", "0")
-                self.send_header("X-Estimated-Cost", estimation_cost)
-                self.send_header("X-LCP-Cache", "MISS")
-            self.end_headers()
-            self.wfile.write(body_bytes)
+            try:
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                if hasattr(self, '_pending_headers') and self._pending_headers:
+                    estimation_cost = self._pending_headers.get("X-Estimated-Cost", "0")
+                    self.send_header("X-Estimated-Cost", estimation_cost)
+                    self.send_header("X-LCP-Cache", "MISS")
+                self.end_headers()
+                self.wfile.write(body_bytes)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
         except Exception as e:
             logger.error("unhandled_error", error=str(e), traceback=traceback.format_exc()[-500:])
             self._send_json({"error": "internal error"}, 500)
