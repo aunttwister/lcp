@@ -30,6 +30,19 @@ class CostPlugin(ABC):
         """
         return []
 
+    def discover_models(self, api_base: str) -> list[dict] | None:
+        """Query the provider's /models endpoint and return normalized model metadata.
+
+        Args:
+            api_base: The provider's API base URL (e.g. https://api.openai.com/v1).
+
+        Returns:
+            List of model dicts each with at minimum ``id``, plus optional
+            metadata like ``context_length``, ``parameters``, ``quantization``.
+            Return ``None`` to use the default generic HTTP-based discovery.
+        """
+        return None
+
     # ── Pricing ────────────────────────────────────────────────────────────
 
     def get_pricing(self, model: str) -> Optional[dict]:

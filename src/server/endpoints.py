@@ -23,6 +23,15 @@ from ..ui.dashboard import render_dashboard
 logger = get_logger("lcp.server")
 
 
+def _fmt_params(n: int) -> str:
+    """Format parameter count: 27320697856 → '27.3B'"""
+    if n >= 1_000_000_000:
+        return f"{n/1_000_000_000:.1f}B"
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    return str(n)
+
+
 def _savings_for_model(config, model: str, hit_tokens: int) -> float:
     """Estimate dollars saved via provider prefix caching for a model."""
     if hit_tokens <= 0:
@@ -383,10 +392,8 @@ class ProviderEndpoints:
             self._send_json({"ok": False, "error": str(e)})
 
     def _serve_provider_discover(self):
-        """Proxy a /models call to the provider's API and return the model list with metadata."""
-        import urllib.request
-        import urllib.error
-        import ssl
+        """Proxy a /models call via the provider's plugin, or generic HTTP fallback."""
+        import urllib.request, urllib.error, ssl
 
         try:
             body = self._read_body()
@@ -394,10 +401,24 @@ class ProviderEndpoints:
             self._send_json({"error": "invalid JSON body"}, 400)
             return
         api_base = body.get("api_base", "").rstrip("/")
-        api_key = body.get("api_key", "")
         provider = body.get("provider", "")
+        if not api_base:
+            self._send_json({"error": "missing 'api_base'"}, 400)
+            return
 
-        # Build headers from provider env vars
+        # Try plugin first for provider-specific parser
+        registry = get_registry()
+        if provider:
+            plugin = registry.for_provider(provider)
+            if plugin and hasattr(plugin, 'discover_models'):
+                models = plugin.discover_models(api_base)
+                if models is not None:
+                    has_meta = any(len(m) > 1 for m in models)
+                    self._send_json({"ok": True, "models": models, "has_metadata": has_meta, "count": len(models)})
+                    return
+
+        # Generic HTTP fallback
+        api_key = body.get("api_key", "")
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
             "Accept": "application/json",
@@ -408,33 +429,25 @@ class ProviderEndpoints:
                 api_key = api_key or os.environ.get(env_var, "")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-
-        # Provider-specific auth: OpenCode uses cookies + browser headers for CF
         cookie = os.environ.get("OPENCODE_COOKIE", "")
-        workspace = os.environ.get("OPENCODE_WORKSPACE_ID", "")
         if cookie:
             headers["Cookie"] = cookie
             headers["Origin"] = "https://opencode.ai"
             headers["Referer"] = "https://opencode.ai/"
-        if workspace:
-            headers["X-Workspace-Id"] = workspace
+        ws = os.environ.get("OPENCODE_WORKSPACE_ID", "")
+        if ws:
+            headers["X-Workspace-Id"] = ws
 
-        if not api_base:
-            self._send_json({"error": "missing 'api_base'"}, 400)
-            return
-        # Try /models first, fall back to /v1/models (llama.cpp convention)
         urls_to_try = [f"{api_base}/models"]
-        if "/v1" not in api_base:
+        if "/v1" not in api_base.lower():
             urls_to_try.append(f"{api_base}/v1/models")
-        result = None
-        last_error = None
+        result, last_error = None, None
         for url in urls_to_try:
             try:
                 req = urllib.request.Request(url, headers=headers)
                 ctx = ssl.create_default_context()
                 with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                    raw = json.loads(resp.read().decode())
-                    result = raw
+                    result = json.loads(resp.read().decode())
                     break
             except urllib.error.HTTPError as e:
                 last_error = f"HTTP {e.code}"
@@ -443,19 +456,48 @@ class ProviderEndpoints:
         if result is None:
             self._send_json({"ok": False, "error": last_error or "no models endpoint found"})
             return
-        # Normalize: expect {"data": [{"id": "...", ...}, ...]} or {"object": "list", ...}
-        models_raw = result.get("data", result if isinstance(result, list) else [])
+
+        models_raw = result.get("data") or result.get("models")
+        if models_raw is None:
+            models_raw = result if isinstance(result, list) else []
+        elif not isinstance(models_raw, list):
+            models_raw = []
+
         models = []
         for m in models_raw:
-            entry = {"id": m.get("id", m) if isinstance(m, dict) else str(m)}
-            for field in ("created", "owned_by", "object", "context_length", "max_model_len"):
-                if field in m:
+            if not isinstance(m, dict):
+                models.append({"id": str(m)})
+                continue
+            entry = {"id": m.get("id") or m.get("name") or str(m)}
+            for field in ("created", "owned_by", "object"):
+                if m.get(field) is not None:
                     entry[field] = m[field]
+            for field in ("context_length", "max_model_len"):
+                if m.get(field):
+                    entry[field] = m[field]
+            meta = m.get("meta", {})
+            if isinstance(meta, dict):
+                if meta.get("n_ctx"):
+                    entry["context_length"] = meta["n_ctx"]
+                if meta.get("n_ctx_train"):
+                    entry["context_train"] = meta["n_ctx_train"]
+                if meta.get("n_params"):
+                    entry["parameters"] = _fmt_params(meta["n_params"])
+                if meta.get("ftype"):
+                    entry["quantization"] = meta["ftype"]
+                if meta.get("size"):
+                    entry["size_bytes"] = meta["size"]
+            details = m.get("details", {})
+            if isinstance(details, dict):
+                if details.get("parameter_size"):
+                    entry["parameters"] = details["parameter_size"]
+                if details.get("quantization_level"):
+                    entry["quantization"] = details["quantization_level"]
             if "pricing" in m and isinstance(m["pricing"], dict):
                 entry["pricing"] = m["pricing"]
             models.append(entry)
-        has_metadata = any(len(m) > 1 for m in models)
-        self._send_json({"ok": True, "models": models, "has_metadata": has_metadata, "count": len(models)})
+        has_meta = any(len(m) > 1 for m in models)
+        self._send_json({"ok": True, "models": models, "has_metadata": has_meta, "count": len(models)})
 
     def _serve_chain_reorder(self, profile: str):
         try:

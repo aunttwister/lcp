@@ -32,6 +32,14 @@ def _default_persist_path() -> str:
     return os.path.join(data_home, "lcp", "llamacpp-usage.json")
 
 
+def _fmt_params(n: int) -> str:
+    if n >= 1_000_000_000:
+        return f"{n/1_000_000_000:.1f}B"
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    return str(n)
+
+
 class LlamaCppCostPlugin(CostPlugin):
     """Local token tracker for llama.cpp.
 
@@ -70,6 +78,47 @@ class LlamaCppCostPlugin(CostPlugin):
 
     def calculate_cost(self, model: str, usage: dict) -> Optional[float]:
         return 0.0
+
+    def discover_models(self, api_base: str) -> list[dict] | None:
+        """Query llama.cpp's /v1/models and extract metadata from 'meta' sub-object."""
+        import json, urllib.request, ssl
+        base = api_base.rstrip("/")
+        urls = [f"{base}/models"]
+        if "/v1" not in base.lower():
+            urls.append(f"{base}/v1/models")
+        for url in urls:
+            try:
+                req = urllib.request.Request(url)
+                ctx = ssl.create_default_context()
+                with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                    raw = json.loads(resp.read().decode())
+                    models_raw = raw.get("data") or raw.get("models") or []
+                    models = []
+                    for m in models_raw:
+                        if not isinstance(m, dict):
+                            models.append({"id": str(m)})
+                            continue
+                        entry = {"id": m.get("id") or m.get("name") or str(m)}
+                        for f in ("created", "owned_by", "object"):
+                            if m.get(f):
+                                entry[f] = m[f]
+                        meta = m.get("meta", {})
+                        if isinstance(meta, dict):
+                            if meta.get("n_ctx"):
+                                entry["context_length"] = meta["n_ctx"]
+                            if meta.get("n_ctx_train"):
+                                entry["context_train"] = meta["n_ctx_train"]
+                            if meta.get("n_params"):
+                                entry["parameters"] = _fmt_params(meta["n_params"])
+                            if meta.get("ftype"):
+                                entry["quantization"] = meta["ftype"]
+                            if meta.get("size"):
+                                entry["size_bytes"] = meta["size"]
+                        models.append(entry)
+                    return models
+            except Exception:
+                continue
+        return None
 
     # ── Token recording ───────────────────────────────────────────────────
 
