@@ -390,16 +390,29 @@ class ProviderEndpoints:
         api_base = body.get("api_base", "").rstrip("/")
         api_key = body.get("api_key", "")
         provider = body.get("provider", "")
-        # Resolve API key from env var if provider name is given
-        if not api_key and provider and provider in self.config.providers:
+
+        # Build headers from provider env vars
+        headers = {}
+        if provider and provider in self.config.providers:
             env_var = self.config.providers[provider].get("api_key_env", "")
             if env_var:
-                api_key = os.environ.get(env_var, "")
-        if not api_base or not api_key:
-            self._send_json({"error": "missing 'api_base' or 'api_key'"}, 400)
+                api_key = api_key or os.environ.get(env_var, "")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        # Provider-specific auth: OpenCode uses cookies
+        cookie = os.environ.get("OPENCODE_COOKIE", "")
+        workspace = os.environ.get("OPENCODE_WORKSPACE_ID", "")
+        if cookie:
+            headers["Cookie"] = cookie
+        if workspace:
+            headers["X-Workspace-Id"] = workspace
+
+        if not api_base or not headers:
+            self._send_json({"error": "missing 'api_base' or authentication"}, 400)
             return
         url = f"{api_base}/models"
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
+        req = urllib.request.Request(url, headers=headers)
         try:
             ctx = ssl.create_default_context()
             with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
@@ -1015,7 +1028,7 @@ class DashboardEndpoints:
                     "cache_hit_tokens": r.cache_hit_tokens,
                     "cache_miss_tokens": r.cache_miss_tokens,
                     "cost": r.cost,
-                    "saved": _savings_for_model(self.config, r.model, r.cache_hit_tokens),
+                    "saved": _savings_for_model(self.config, str(r.model), int(r.cache_hit_tokens)),
                     "latency_ms": r.latency_ms,
                     "success": bool(r.success),
                     "error_type": r.error_type,
