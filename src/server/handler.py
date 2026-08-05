@@ -223,6 +223,9 @@ class LCPHandler(
         elif self.path == "/api/providers/test":
             self._serve_provider_test()
             return
+        elif self.path == "/api/providers/discover":
+            self._serve_provider_discover()
+            return
         elif self.path == "/api/profiles":
             self._serve_profile_create()
             return

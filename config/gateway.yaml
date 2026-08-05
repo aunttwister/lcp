@@ -79,10 +79,6 @@ providers:
     models:
     - deepseek-v4-pro
     - deepseek-v4-flash
-    cache:
-      strategy: prefix
-      savings: cost
-      hit_field: prompt_cache_hit_tokens
   deepseek:
     api_key_env: DEEPSEEK_API_KEY
     api_base: https://api.deepseek.com/v1
@@ -124,12 +120,14 @@ model_limits:
     context_window: 1000000
     max_output_tokens: 384000
     supports_vision: false
-    description: "DeepSeek V4 Pro — flagship MoE for coding, reasoning, and agentic work"
+    description: DeepSeek V4 Pro — flagship MoE for coding, reasoning, and agentic
+      work
   deepseek-v4-flash:
     context_window: 1000000
     max_output_tokens: 384000
     supports_vision: false
-    description: "DeepSeek V4 Flash — fast lane for economical reasoning and long-context work"
+    description: DeepSeek V4 Flash — fast lane for economical reasoning and long-context
+      work
 database:
   path: /app/data/costs.db
   wal_mode: true

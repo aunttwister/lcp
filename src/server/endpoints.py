@@ -375,6 +375,50 @@ class ProviderEndpoints:
         except Exception as e:
             self._send_json({"ok": False, "error": str(e)})
 
+    def _serve_provider_discover(self):
+        """Proxy a /models call to the provider's API and return the model list with metadata."""
+        import urllib.request
+        import urllib.error
+        import ssl
+
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        api_base = body.get("api_base", "").rstrip("/")
+        api_key = body.get("api_key", "")
+        if not api_base or not api_key:
+            self._send_json({"error": "missing 'api_base' or 'api_key'"}, 400)
+            return
+        url = f"{api_base}/models"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
+        try:
+            ctx = ssl.create_default_context()
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                raw = json.loads(resp.read().decode())
+                # Normalize: expect {"data": [{"id": "...", ...}, ...]} or {"object": "list", ...}
+                models_raw = raw.get("data", raw if isinstance(raw, list) else [])
+                models = []
+                for m in models_raw:
+                    entry = {"id": m.get("id", m) if isinstance(m, dict) else str(m)}
+                    # Include metadata if present
+                    for field in ("created", "owned_by", "object", "context_length", "max_model_len"):
+                        if field in m:
+                            entry[field] = m[field]
+                    # Flatten pricing info if present
+                    if "pricing" in m and isinstance(m["pricing"], dict):
+                        entry["pricing"] = m["pricing"]
+                    models.append(entry)
+                # Determine if any model has metadata beyond just "id"
+                has_metadata = any(len(m) > 1 for m in models)
+                self._send_json({"ok": True, "models": models, "has_metadata": has_metadata, "count": len(models)})
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode()[:300] if e.fp else ""
+            self._send_json({"ok": False, "status": e.code, "error": err_body})
+        except Exception as e:
+            self._send_json({"ok": False, "error": str(e)})
+
     def _serve_chain_reorder(self, profile: str):
         try:
             body = self._read_body()

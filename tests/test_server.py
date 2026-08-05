@@ -302,6 +302,66 @@ class TestProviderEndpoints:
         h.do_DELETE()
         assert _status(h) == 200
 
+    @patch("urllib.request.urlopen")
+    def test_discover_models_with_metadata(self, mock_urlopen, temp_db):
+        """Discover endpoint returns models with metadata when available."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "data": [
+                {"id": "m1", "owned_by": "org1", "context_length": 128000, "created": 1700000000},
+                {"id": "m2", "owned_by": "org2", "context_length": 64000},
+            ]
+        }).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        body = json.dumps({"api_base": "https://test.api/v1", "api_key": "sk-test"})
+        h = TestHandler(path="/api/providers/discover", method="POST", engine=temp_db, body=body)
+        h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is True
+        assert result["has_metadata"] is True
+        assert result["count"] == 2
+        assert len(result["models"]) == 2
+        assert result["models"][0]["id"] == "m1"
+        assert result["models"][0]["owned_by"] == "org1"
+        assert result["models"][0]["context_length"] == 128000
+
+    @patch("urllib.request.urlopen")
+    def test_discover_models_without_metadata(self, mock_urlopen, temp_db):
+        """Discover returns has_metadata=False when only IDs present."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "data": [{"id": "m1"}, {"id": "m2"}, {"id": "m3"}]
+        }).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        body = json.dumps({"api_base": "https://test.api/v1", "api_key": "sk-test"})
+        h = TestHandler(path="/api/providers/discover", method="POST", engine=temp_db, body=body)
+        h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is True
+        assert result["has_metadata"] is False
+        assert result["count"] == 3
+
+    @patch("urllib.request.urlopen")
+    def test_discover_models_http_error(self, mock_urlopen, temp_db):
+        """Discover handles HTTP errors gracefully."""
+        mock_urlopen.side_effect = Exception("Connection refused")
+
+        body = json.dumps({"api_base": "https://dead.api/v1", "api_key": "sk-test"})
+        h = TestHandler(path="/api/providers/discover", method="POST", engine=temp_db, body=body)
+        h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is False
+        assert "error" in result
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Profile endpoint tests
