@@ -392,7 +392,10 @@ class ProviderEndpoints:
         provider = body.get("provider", "")
 
         # Build headers from provider env vars
-        headers = {}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
         if provider and provider in self.config.providers:
             env_var = self.config.providers[provider].get("api_key_env", "")
             if env_var:
@@ -400,11 +403,13 @@ class ProviderEndpoints:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        # Provider-specific auth: OpenCode uses cookies
+        # Provider-specific auth: OpenCode uses cookies + browser headers for CF
         cookie = os.environ.get("OPENCODE_COOKIE", "")
         workspace = os.environ.get("OPENCODE_WORKSPACE_ID", "")
         if cookie:
             headers["Cookie"] = cookie
+            headers["Origin"] = "https://opencode.ai"
+            headers["Referer"] = "https://opencode.ai/"
         if workspace:
             headers["X-Workspace-Id"] = workspace
 
