@@ -33,15 +33,53 @@
   </div>
 </div>
 
-<!-- ── Profile Filter Dropdown (shadcn-style) ── -->
+<!-- ── Profile Filter Dropdown ── -->
 <div class="lcp-filter-dropdown" style="margin-bottom:1.5rem;display:flex;justify-content:flex-end">
-  <button class="lcp-filter-btn" onclick="toggleFilterDropdown(event)">{% if profile_filter %}{{ profile_filter.upper() }}{% else %}All{% endif %} ▾</button>
-  <div class="lcp-filter-menu" id="filterMenu" style="display:none">
+  <button class="lcp-filter-trigger" id="filterTrigger" onclick="toggleFilterDropdown(event)">
+    {% if profile_filter %}{{ profile_filter.upper() }}{% else %}All{% endif %}
+    <span class="caret">▾</span>
+  </button>
+  <div class="lcp-filter-menu" id="filterMenu">
     <a href="/dashboard" class="lcp-filter-item{% if not profile_filter %} active{% endif %}">All</a>
     {% for p in sidebar_profiles %}
     <a href="/{{ p.name }}/dashboard" class="lcp-filter-item{% if profile_filter == p.name %} active{% endif %}">{{ p.name.upper() }}</a>
     {% endfor %}
   </div>
+</div>
+
+<!-- ── Key Metrics ── -->
+<div class="metrics-row">
+  <div class="metric-card">
+    <div class="metric-label">Total Cost</div>
+    <div class="metric-value">{{ total_cost_fmt }}</div>
+    <div class="metric-sub">{{ active_days }} active days</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Requests</div>
+    <div class="metric-value">{{ summary_total_requests_fmt }}</div>
+    <div class="metric-sub">{{ fallback_count_fmt }} fallbacks ({{ fb_pct_fmt }})</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Cache Ratio</div>
+    <div class="metric-value green">{{ cache_hit_rate_fmt }}</div>
+    <div class="metric-sub">saved {{ cache_savings_fmt }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Tokens</div>
+    <div class="metric-value">{{ output_tokens_fmt }}</div>
+    <div class="metric-sub">prompt {{ prompt_tokens_fmt }}</div>
+  </div>
+</div>
+
+<!-- ── Profile Mini Cards ── -->
+<div class="profile-minis">
+  {% for pc in profile_cards %}
+  <a href="/{{ pc.profile }}/dashboard" class="profile-mini" style="text-decoration:none">
+    <div class="pm-name">{{ pc.profile.upper() }}</div>
+    <div class="pm-cost">${{ "%.4f"|format(pc.total_cost) }}</div>
+    <div class="pm-reqs">{{ pc.count }} reqs</div>
+  </a>
+  {% endfor %}
 </div>
 
 <!-- ── Provider Edit Modal (opened from sidebar) ── -->
@@ -133,48 +171,6 @@
 </div>
 
 <details class="dashboard-section" open>
-<summary><span>Summary</span><span class="chevron">▾</span></summary>
-<div class="section-content cards">
-  <div class="card">
-    <div class="label">Total Cost</div>
-    <div class="value">{{ total_cost_fmt }}</div>
-    <div class="sub">{{ active_days }} active days</div>
-  </div>
-  <div class="card">
-    <div class="label">Total Requests</div>
-    <div class="value">{{ summary_total_requests_fmt }}</div>
-    <div class="sub">{{ fallback_count_fmt }} fallbacks ({{ fb_pct_fmt }})</div>
-  </div>
-  <div class="card">
-    <div class="label">Cache Hit Ratio</div>
-    <div class="value good">{{ cache_hit_rate_fmt }}</div>
-    <div class="sub">{{ cache_hit_tokens_fmt }} hit / {{ cache_miss_tokens_fmt }} miss</div>
-  </div>
-  <div class="card">
-    <div class="label">Cache Savings (est.)</div>
-    <div class="value good">{{ cache_savings_fmt }}</div>
-    <div class="sub" title="Estimated: cache-hit tokens × (miss price − hit price). Not actual account credit.">est. from prompt cache discount</div>
-  </div>
-  <div class="card">
-    <div class="label">Output Tokens</div>
-    <div class="value">{{ output_tokens_fmt }}</div>
-    <div class="sub">prompt: {{ prompt_tokens_fmt }}</div>
-  </div>
-  {% for pc in profile_cards %}
-  <div class="card"><div class="label">{{ pc.profile }} · {{ pc.count }} reqs</div><div class="value">${{ "%.4f"|format(pc.total_cost) }}</div></div>
-  {% endfor %}
-  <div class="card"><div class="label">Token Mismatches</div><div class="value">{{ token_mismatches }}</div><div class="sub">Token verification diffs</div></div>
-  <div class="card"><div class="label">Routing Threshold</div><div class="value">{{ routing_threshold }}</div><div class="sub">Tokens → flash model</div></div>
-  <div class="card"><div class="label">Cache Entries</div><div class="value">{{ cache_entries }}</div><div class="sub">Max: {{ cache_max_entries }}</div></div>
-  <div class="card" id="opencodeSubCard" style="display:none">
-    <div class="label">OpenCode Subscription</div>
-    <div class="value" id="opencodeSubValue">--</div>
-    <div class="sub" id="opencodeSubDetail"></div>
-  </div>
-</div>
-</details>
-
-<details class="dashboard-section" open>
 <summary>
   <span>Daily Cost Trend (14-day)</span>
   <span style="display:flex;gap:0.25rem;align-items:center">
@@ -223,11 +219,14 @@ window._hostUrl = {{ host_url | tojson }};
 function toggleFilterDropdown(e) {
   e.stopPropagation();
   var m = document.getElementById('filterMenu');
-  m.style.display = m.style.display === 'block' ? 'none' : 'block';
+  var t = document.getElementById('filterTrigger');
+  m.classList.toggle('open');
+  t.classList.toggle('open');
 }
 document.addEventListener('click', function() {
   var m = document.getElementById('filterMenu');
-  if (m) m.style.display = 'none';
+  var t = document.getElementById('filterTrigger');
+  if (m) { m.classList.remove('open'); t.classList.remove('open'); }
 });
 
 /* ── Swipe-to-reveal for profile rows (mobile) ── */

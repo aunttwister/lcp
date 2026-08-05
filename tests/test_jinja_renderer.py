@@ -545,19 +545,23 @@ class TestDashboardTemplate:
 
     def test_dashboard_table_rows_render(self, mock_config):
         html = self._render(mock_config)
-        # profile summary card
-        assert "l2 · 10 reqs" in html
+        # profile summary cards
+        assert "L2" in html
+        assert "$0.5000" in html         # l2 cost in profile mini card
+        assert "10 reqs" in html
         # profile filter dropdown
         assert "lcp-filter-dropdown" in html
         assert "lcp-filter-menu" in html
         # Chart canvas still rendered
         assert 'id="costChart"' in html
+        # metrics row
+        assert "metric-card" in html
 
     def test_dashboard_profile_filter_active(self, mock_config):
         html = self._render(mock_config, profile_filter="l2", filter_title=" — L2")
         assert "LCP Dashboard — L2" in html
         # Filter dropdown shows active profile
-        assert "L2 ▾" in html
+        assert "L2" in html
         assert "lcp-filter-item active" in html
         # host URL injected into the page JS
         assert "http://localhost:8734" in html

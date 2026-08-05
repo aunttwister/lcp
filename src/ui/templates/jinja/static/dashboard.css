@@ -598,33 +598,96 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .lcp-stack .cost { text-align: right; }
 .lcp-stack td.lcp-col-center,
 .lcp-stack th.lcp-col-center { text-align: center !important; }
-}
 
 /* ── Profile Filter Dropdown ── */
-.lcp-filter-dropdown { position: relative; }
-.lcp-filter-btn {
-  padding: 0.3rem 0.75rem; font-size: 0.75rem; font-weight: 600;
-  background: hsl(var(--secondary)); color: hsl(var(--foreground));
-  border: 1px solid hsl(var(--card-border)); border-radius: var(--radius);
-  cursor: pointer; transition: all 0.1s;
+.lcp-filter-dropdown { position: relative; display: inline-block; }
+.lcp-filter-trigger {
+  display: inline-flex; align-items: center; gap: 0.375rem;
+  padding: 0.375rem 0.75rem; font-size: 0.75rem; font-weight: 500;
+  background: hsl(var(--card)); color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border)); border-radius: var(--radius);
+  cursor: pointer; transition: all 0.15s; white-space: nowrap;
 }
-.lcp-filter-btn:hover { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.lcp-filter-trigger:hover { border-color: hsl(var(--primary) / 0.3); background: hsl(var(--secondary) / 0.4); }
+.lcp-filter-trigger .caret { font-size: 0.5625rem; color: hsl(var(--muted-foreground)); transition: transform 0.15s; }
+.lcp-filter-trigger.open .caret { transform: rotate(180deg); }
 .lcp-filter-menu {
   position: absolute; right: 0; top: calc(100% + 4px); z-index: 50;
-  min-width: 140px;
+  min-width: 160px; display: none;
   background: hsl(var(--card)); border: 1px solid hsl(var(--border));
   border-radius: var(--radius); overflow: hidden;
-  box-shadow: 0 6px 20px -6px rgba(0,0,0,0.5);
-  animation: dropdownIn 0.15s ease;
+  box-shadow: 0 8px 24px -8px rgba(0,0,0,0.6);
 }
+.lcp-filter-menu.open { display: block; animation: dropdownIn 0.12s ease; }
 @keyframes dropdownIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 .lcp-filter-item {
-  display: block; padding: 0.375rem 0.75rem; font-size: 0.75rem; font-weight: 500;
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.375rem 0.75rem; font-size: 0.75rem; font-weight: 500;
   color: hsl(var(--muted-foreground)); text-decoration: none;
-  transition: all 0.1s;
+  transition: all 0.1s; cursor: pointer;
 }
 .lcp-filter-item:hover { background: hsl(var(--secondary)); color: hsl(var(--foreground)); }
-.lcp-filter-item.active { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.lcp-filter-item.active { background: hsl(var(--secondary)); color: hsl(var(--foreground)); }
+.lcp-filter-item.active::before { content: '✓'; font-size: 0.625rem; color: hsl(var(--green-fg)); font-weight: 700; }
+
+/* ── Key Metrics Row ── */
+.metrics-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+.metric-card {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  padding: 0.875rem 1rem;
+}
+.metric-card .metric-label {
+  font-size: 0.625rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: hsl(var(--muted-foreground));
+  margin-bottom: 0.25rem;
+}
+.metric-card .metric-value {
+  font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums; line-height: 1.2;
+}
+.metric-card .metric-sub {
+  font-size: 0.625rem; color: hsl(var(--muted-foreground)); margin-top: 0.125rem;
+}
+.metric-card .metric-value.green { color: hsl(var(--green-fg)); }
+
+/* ── Profile Mini Cards ── */
+.profile-minis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.625rem;
+  margin-bottom: 1.5rem;
+}
+.profile-mini {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem; text-decoration: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  cursor: pointer;
+}
+.profile-mini:hover {
+  border-color: hsl(var(--primary) / 0.3);
+  box-shadow: 0 2px 8px -2px rgba(0,0,0,0.2);
+}
+.profile-mini .pm-name {
+  font-size: 0.6875rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: hsl(var(--muted-foreground));
+  margin-bottom: 0.25rem;
+}
+.profile-mini .pm-cost {
+  font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em;
+  color: hsl(var(--foreground));
+}
+.profile-mini .pm-reqs {
+  font-size: 0.625rem; color: hsl(var(--muted-foreground)); margin-top: 0.125rem;
+}
 
 @media (max-width: 768px) {
   .header-row { flex-direction: column; gap: 0.5rem; }
