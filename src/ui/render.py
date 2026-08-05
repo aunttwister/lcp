@@ -6,6 +6,7 @@ and shared partials for sidebar/JS without any build step.
 """
 
 import json
+import os
 from datetime import date as _date
 from pathlib import Path
 
@@ -14,6 +15,10 @@ from sqlalchemy import func
 
 _templates_dir = Path(__file__).parent / "templates" / "jinja"
 _env = Environment(loader=FileSystemLoader(str(_templates_dir)), autoescape=True, extensions=["jinja2.ext.do"])
+
+# Cache-buster: mtime of dashboard.css so Safari re-fetches after deploy
+_css_path = _templates_dir / "static" / "dashboard.css"
+_cache_buster = str(int(os.path.getmtime(_css_path))) if _css_path.is_file() else "0"
 
 
 def _fmt_num(n) -> str:
@@ -105,6 +110,7 @@ def render_page(template_name: str, config, engine=None, **kwargs) -> str:
         "providers": config.providers if config is not None and hasattr(config, 'providers') else {},
         "profiles": profiles_list,
         "profiles_dict": config.profiles if config is not None and hasattr(config, 'profiles') else {},
+        "cache_buster": _cache_buster,
     }
     # Let caller-supplied kwargs override defaults (e.g. profile-filtered monthly)
     ctx.update(kwargs)
