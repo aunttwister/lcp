@@ -422,12 +422,14 @@ class LCPHandler(
                     }
                 record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools)
 
+                total_wall_ms = int((time.time() - t0) * 1000)
                 logger.info(
                     "request_complete",
                     profile=profile,
                     provider=provider,
                     model=model,
                     latency_ms=latency_ms,
+                    total_wall_ms=total_wall_ms,
                     tools_blocked=len(blocked_tools),
                     cache="MISS",
                     stream=True,
@@ -487,6 +489,7 @@ class LCPHandler(
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 logger.debug("client_disconnected", path=self.path, stream=False)
 
+            total_wall_ms = int((time.time() - t0) * 1000)
             logger.info(
                 "request_complete",
                 profile=profile,
@@ -494,6 +497,7 @@ class LCPHandler(
                 model=model,
                 cost=round(cost_info["cost"], 6),
                 latency_ms=latency_ms,
+                total_wall_ms=total_wall_ms,
                 tools_blocked=len(blocked_tools),
                 cache="MISS",
             )
