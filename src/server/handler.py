@@ -89,7 +89,7 @@ class LCPHandler(
         """Serve static files (JS, CSS, etc.) from the Jinja2 templates/static dir."""
         from pathlib import Path
 
-        relative = self.path[len("/static/"):]
+        relative = self.path[len("/static/"):].split("?")[0]
         if ".." in relative or relative.startswith("/"):
             self._send_json({"error": "forbidden"}, 403)
             return
