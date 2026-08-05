@@ -21,7 +21,7 @@ from ..api.cost_estimator import estimate_from_request
 from ..api.prompt_cache import get_prompt_cache
 from ..api.token_verifier import get_token_verifier
 from ..api.key_manager import get_key_manager
-from ..api.exceptions import ToolBlockedError, AllProvidersFailedError
+from ..api.exceptions import ToolBlockedError, AllProvidersFailedError, ProviderBadRequestError
 from .sse_helpers import extract_last_sse_chunk, estimate_cost_from_tokens
 from .endpoints import (
     HealthEndpoints,
@@ -59,7 +59,7 @@ class LCPHandler(
         pass
 
     def _send_json(self, data: dict, status: int = 200):
-        """Send a JSON response. Silently drops write errors on broken pipes."""
+        """Send a JSON response. Logs but does not crash on client disconnect."""
         body = json.dumps(data).encode("utf-8")
         try:
             self.send_response(status)
@@ -68,7 +68,7 @@ class LCPHandler(
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            pass
+            logger.debug("client_disconnected", path=self.path, status=status)
 
     def _resolve_profile(self) -> str | None:
         """Extract profile name from URL path. Returns None for non-profile routes."""
@@ -124,7 +124,7 @@ class LCPHandler(
             self.end_headers()
             self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            pass
+            logger.debug("client_disconnected", path=self.path, static_file=relative)
 
     # ── Routes ────────────────────────────────────────────────────────────
 
@@ -356,7 +356,7 @@ class LCPHandler(
                     self.end_headers()
                     self.wfile.write(json.dumps(cached).encode("utf-8"))
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                    pass
+                    logger.debug("client_disconnected", path=self.path, cache="HIT")
                 logger.info("cache_hit_served", profile=profile, model=primary_model)
                 return
 
@@ -394,7 +394,7 @@ class LCPHandler(
                         self.wfile.flush()
                         sse_parts.append(chunk)
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                    pass  # client disconnected mid-stream
+                    logger.debug("client_disconnected", path=self.path, stream="SSE")
 
                 full_sse = b"".join(sse_parts)
                 last_chunk = extract_last_sse_chunk(full_sse)
@@ -485,7 +485,7 @@ class LCPHandler(
                 self.end_headers()
                 self.wfile.write(body_bytes)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                pass
+                logger.debug("client_disconnected", path=self.path, stream=False)
 
             logger.info(
                 "request_complete",
@@ -501,28 +501,25 @@ class LCPHandler(
         except ToolBlockedError as e:
             logger.warning("tool_blocked", profile=profile, error=str(e))
             self._send_json({"error": str(e)}, 403)
+        except ProviderBadRequestError as e:
+            # The provider rejected the request body as invalid (HTTP 400).
+            # Report the exact error to the client so they can fix their request.
+            logger.error("provider_bad_request", profile=profile, error=str(e))
+            cost_info = {"prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0,
+                         "cache_miss_tokens": 0, "cost": 0, "latency_ms": 0}
+            record_cost(self.engine, profile, "unknown", "unknown", cost_info, False,
+                       "provider_bad_request", [], error_detail=str(e))
+            self._send_json({"error": str(e)}, 400)
         except AllProvidersFailedError as e:
             logger.error("all_providers_failed", profile=profile, error=str(e))
             cost_info = {"prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0,
                          "cache_miss_tokens": 0, "cost": 0, "latency_ms": 0}
             record_cost(self.engine, profile, "unknown", "unknown", cost_info, False,
                        "all_providers_failed", [], error_detail=str(e))
-            body_bytes = json.dumps({"error": str(e)}).encode("utf-8")
-            try:
-                self.send_response(502)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body_bytes)))
-                if hasattr(self, '_pending_headers') and self._pending_headers:
-                    estimation_cost = self._pending_headers.get("X-Estimated-Cost", "0")
-                    self.send_header("X-Estimated-Cost", estimation_cost)
-                    self.send_header("X-LCP-Cache", "MISS")
-                self.end_headers()
-                self.wfile.write(body_bytes)
-            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                pass
+            self._send_json({"error": str(e)}, 502)
         except Exception as e:
             logger.error("unhandled_error", error=str(e), traceback=traceback.format_exc()[-500:])
-            self._send_json({"error": "internal error"}, 500)
+            self._send_json({"error": "internal error: {}".format(str(e))}, 500)
 
     def do_PUT(self):
         self.config.check_reload()

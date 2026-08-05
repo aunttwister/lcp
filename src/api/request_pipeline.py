@@ -18,6 +18,7 @@ from .cost_plugins import get_registry, init_plugins
 from .exceptions import (
     AllProvidersFailedError,
     ProviderAuthError,
+    ProviderBadRequestError,
     ProviderRateLimitError,
     ProviderTimeoutError,
     ToolBlockedError,
@@ -348,6 +349,12 @@ def forward_request(provider_cfg: dict, body: dict, config):
             raise ProviderAuthError(f"Provider {provider_cfg['provider']} rejected auth: {status}")
         elif status == 429:
             raise ProviderRateLimitError(f"Provider {provider_cfg['provider']} rate limited")
+        elif 400 <= status < 500:
+            # 4xx (non-auth, non-rate-limit) — bad request, the body is the problem.
+            # Do NOT fall back to another provider; the same body will fail again.
+            raise ProviderBadRequestError(
+                f"Provider {provider_cfg['provider']} HTTP {status}: {error_body}"
+            )
         raise ProviderAuthError(f"Provider {provider_cfg['provider']} HTTP {status}: {error_body}")
     except urllib.error.URLError as e:
         raise ProviderTimeoutError(f"Provider {provider_cfg['provider']} unreachable: {e.reason}")
@@ -433,11 +440,43 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
                 latency_ms=hop_ms,
             )
             return resp, status, provider_name, model
+        except ProviderBadRequestError as e:
+            # Bad request — the problem is in the body, not the provider.
+            # Falling back to another provider just wastes attempts.
+            # Re-raise immediately so the client sees the real error.
+            cb.record_failure(provider_name, base_url, profile_name)
+            logger.error(
+                "chain_bad_request",
+                profile=profile_name,
+                provider=provider_name,
+                model=model,
+                attempt=i + 1,
+                chain_len=chain_len,
+                error=str(e),
+            )
+            raise AllProvidersFailedError(
+                f"Provider {provider_name} rejected the request as invalid: {e}"
+            ) from e
         except (ProviderTimeoutError, ProviderAuthError, ProviderRateLimitError) as e:
             cb.record_failure(provider_name, base_url, profile_name)
             errors.append(f"{provider_name}: {e}")
             logger.warning(
                 "chain_fallback",
+                profile=profile_name,
+                provider=provider_name,
+                model=model,
+                attempt=i + 1,
+                chain_len=chain_len,
+                error=str(e),
+                next=profile_cfg["chain"][i + 1]["provider"] if i + 1 < chain_len else "none",
+            )
+        except Exception as e:
+            # Catch-all for config errors, network issues, etc.
+            # Report them but still try the next provider in the chain.
+            cb.record_failure(provider_name, base_url, profile_name)
+            errors.append(f"{provider_name}: {e}")
+            logger.error(
+                "chain_unexpected_error",
                 profile=profile_name,
                 provider=provider_name,
                 model=model,
