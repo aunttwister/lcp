@@ -95,9 +95,9 @@ function renderDiscoverResults(){
   var inner = '<div style="font-size:0.6875rem;color:hsl(var(--muted-foreground));margin-bottom:0.375rem;display:flex;justify-content:space-between;align-items:center"><span>'+total+' model'+(total!==1?'s':'')+'</span>';
   if (pages > 1) {
     inner += '<span style="display:flex;align-items:center;gap:0.375rem">';
-    inner += '<button class="btn-sm" '+(start===0?'disabled':'')+' onclick="changePage(-1)" style="font-size:0.625rem;padding:0.125rem 0.375rem;line-height:1.4">‹ Prev</button>';
+    inner += '<button '+(start===0?'disabled':'')+' onclick="changePage(-1)" style="font-size:0.625rem;padding:0.0625rem 0.375rem;line-height:1.5;background:hsl(var(--secondary));border:1px solid hsl(var(--card-border));border-radius:2px;color:hsl(var(--foreground));cursor:pointer">‹ Prev</button>';
     inner += '<span style="font-size:0.625rem;color:hsl(var(--muted-foreground));white-space:nowrap">' + (_discoverPage+1) + '/' + pages + '</span>';
-    inner += '<button class="btn-sm" '+(start+_PAGE>=total?'disabled':'')+' onclick="changePage(1)" style="font-size:0.625rem;padding:0.125rem 0.375rem;line-height:1.4">Next ›</button>';
+    inner += '<button '+(start+_PAGE>=total?'disabled':'')+' onclick="changePage(1)" style="font-size:0.625rem;padding:0.0625rem 0.375rem;line-height:1.5;background:hsl(var(--secondary));border:1px solid hsl(var(--card-border));border-radius:2px;color:hsl(var(--foreground));cursor:pointer">Next ›</button>';
     inner += '<span style="font-size:0.625rem;color:hsl(var(--muted-foreground));margin:0 0.125rem">·</span>';
     inner += '<select onchange="changePageSize(this.value)" style="font-size:0.625rem;padding:0.125rem 0.25rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:3px;color:hsl(var(--foreground));line-height:1.4;height:auto">' + [10,20,50,100,999].map(function(n){ return '<option value="'+n+'"'+(n===_PAGE?' selected':'')+'>'+ (n===999?'All':n) +'</option>' }).join('') + '</select>';
     inner += '</span>';
