@@ -15,28 +15,11 @@
 
 <div class="prov-form" id="provForm" style="display:none">
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
-    <div>
-      <label>Provider Name</label>
-      <input id="provName" placeholder="e.g. openai">
-    </div>
-    <div>
-      <label>API Base URL</label>
-      <input id="provUrl" placeholder="https://api.openai.com/v1">
-    </div>
-    <div>
-      <label>API Key Env Var</label>
-      <input id="provKeyEnv" placeholder="OPENAI_API_KEY">
-    </div>
-    <div>
-      <label>API Key (for discovery)</label>
-      <input id="provApiKey" type="password" placeholder="Enter key to discover models" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem;font-family:inherit">
-    </div>
+    <div><label>Provider Name</label><input id="provName" placeholder="e.g. openai"></div>
+    <div><label>API Base URL</label><input id="provUrl" placeholder="https://api.openai.com/v1"></div>
+    <div><label>API Key Env Var</label><input id="provKeyEnv" placeholder="OPENAI_API_KEY"></div>
   </div>
-  <!-- Selected models chips -->
-  <div style="margin-top:0.75rem">
-    <label>Selected Models</label>
-    <div id="selectedModels" style="display:flex;flex-wrap:wrap;gap:0.25rem;min-height:1.5rem;padding:0.375rem 0"></div>
-  </div>
+  <div style="margin-top:0.75rem"><label>Selected Models</label><div id="selectedModels" style="display:flex;flex-wrap:wrap;gap:0.25rem;min-height:1.5rem;padding:0.375rem 0"></div></div>
   <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
     <button class="btn-sm btn-success" id="provTestBtn" onclick="testProvider()">Test Connection</button>
     <button class="btn-sm" onclick="discoverModels()" id="discoverBtn">Discover Models</button>
@@ -44,102 +27,53 @@
     <button class="btn-sm" onclick="hideAddProvForm()">Cancel</button>
   </div>
   <div id="testResult" class="test-result" style="display:none"></div>
-  <!-- Model discovery results -->
   <div id="discoveryResult" style="display:none;margin-top:0.5rem"></div>
 </div>
 
-<div class="table-wrap" style="margin-top:0.75rem">
-<table>
-<thead><tr>
+<div class="table-wrap" style="margin-top:0.75rem"><table><thead><tr>
   <th>Name</th><th>Base URL</th><th>Key Env</th><th>Models</th><th>Actions</th>
-</tr></thead>
-<tbody id="providersBody">
-{% if providers %}
-{% for name, pdata in providers.items() %}
-<tr>
-  <td><b>{{ name }}</b></td>
-  <td class="mono" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pdata.get('api_base', '—') }}</td>
-  <td>{{ pdata.get('api_key_env', '—') }}</td>
-  <td>{{ pdata.get('models', []) | join(', ') or '—' }}</td>
-  <td><button class="btn-sm" onclick="editProvider('{{ name }}')">Edit</button>
-      <button class="btn-sm btn-danger" onclick="deleteProvider('{{ name }}')">Del</button></td>
-</tr>
-{% endfor %}
-{% else %}
-<tr><td colspan="5" class="empty">No providers configured.</td></tr>
-{% endif %}
-</tbody>
-</table>
-</div>
+</tr></thead><tbody id="providersBody">
+{% if providers %}{% for name, pdata in providers.items() %}
+<tr><td><b>{{ name }}</b></td><td class="mono" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pdata.get('api_base', '—') }}</td><td>{{ pdata.get('api_key_env', '—') }}</td><td>{{ pdata.get('models', []) | join(', ') or '—' }}</td>
+<td><button class="btn-sm" onclick="editProvider('{{ name }}')">Edit</button><button class="btn-sm btn-danger" onclick="deleteProvider('{{ name }}')">Del</button></td></tr>
+{% endfor %}{% else %}<tr><td colspan="5" class="empty">No providers configured.</td></tr>{% endif %}
+</tbody></table></div>
 {% endblock %}
-
-{% block scripts %}
-<script>
-{% raw %}
-var _selectedModels = [];
-
+{% block scripts %}<script>{% raw %}
+var _selectedModels=[];
 function loadPresets(){api('GET','/api/providers/presets').then(function(d){var s=document.getElementById('provPreset');Object.keys(d.presets||{}).forEach(function(k){s.innerHTML+='<option value="'+k+'">'+k+'</option>'})})}
-
-function loadPreset(){var k=document.getElementById('provPreset').value;if(!k)return;showAddProvForm();api('GET','/api/providers/presets').then(function(d){var p=(d.presets||{})[k];if(!p)return;document.getElementById('provName').value=k;document.getElementById('provUrl').value=p.api_base||'';document.getElementById('provApiKey').value='';_selectedModels=(p.models||[]).slice();renderSelected();document.getElementById('provSaveBtn').disabled=false})}
-
-function showAddProvForm(){document.getElementById('provForm').style.display='block';document.getElementById('provName').value='';document.getElementById('provUrl').value='';document.getElementById('provKeyEnv').value='';document.getElementById('provApiKey').value='';_selectedModels=[];renderSelected();document.getElementById('testResult').style.display='none';document.getElementById('discoveryResult').style.display='none';document.getElementById('provSaveBtn').disabled=true}
+function loadPreset(){var k=document.getElementById('provPreset').value;if(!k)return;showAddProvForm();api('GET','/api/providers/presets').then(function(d){var p=(d.presets||{})[k];if(!p)return;document.getElementById('provName').value=k;document.getElementById('provUrl').value=p.api_base||'';_selectedModels=(p.models||[]).slice();renderSelected();document.getElementById('provSaveBtn').disabled=false})}
+function showAddProvForm(){document.getElementById('provForm').style.display='block';document.getElementById('provName').value='';document.getElementById('provUrl').value='';document.getElementById('provKeyEnv').value='';_selectedModels=[];renderSelected();document.getElementById('testResult').style.display='none';document.getElementById('discoveryResult').style.display='none';document.getElementById('provSaveBtn').disabled=true}
 function hideAddProvForm(){document.getElementById('provForm').style.display='none'}
-
 function renderSelected(){var c=document.getElementById('selectedModels');if(_selectedModels.length===0){c.innerHTML='<span style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">none selected — use Discover Models</span>';return}var h='';_selectedModels.forEach(function(m,i){h+='<span style="display:inline-flex;align-items:center;gap:0.1875rem;padding:0.125rem 0.5rem;background:hsl(var(--primary));color:hsl(var(--primary-foreground));border-radius:9999px;font-size:0.6875rem;font-weight:600">'+m+'<button onclick="removeModel('+i+')" style="background:none;border:none;color:inherit;cursor:pointer;font-size:0.75rem;padding:0;line-height:1">✕</button></span>'});c.innerHTML=h}
-
 function removeModel(i){_selectedModels.splice(i,1);renderSelected();renderDiscovery()}
 function toggleModel(id){var i=_selectedModels.indexOf(id);if(i>=0)_selectedModels.splice(i,1);else _selectedModels.push(id);renderSelected();renderDiscovery()}
-
 function discoverModels(){
   var base=document.getElementById('provUrl').value.trim();
-  var key=document.getElementById('provApiKey').value.trim();
+  var name=document.getElementById('provName').value.trim();
   if(!base){alert('Enter API Base URL first');return}
-  if(!key){key=prompt('Enter API key to discover models:')}
-  if(!key)return;
   var el=document.getElementById('discoveryResult');
   el.style.display='block';el.innerHTML='<div style="font-size:0.75rem;color:hsl(var(--amber-fg))">Discovering models...</div>';
-  api('POST','/api/providers/discover',{api_base:base,api_key:key}).then(function(d){
+  api('POST','/api/providers/discover',{api_base:base,provider:name}).then(function(d){
     if(!d.ok){el.innerHTML='<div style="font-size:0.75rem;color:hsl(var(--red-fg))">Failed: '+(d.error||'HTTP '+d.status)+'</div>';return}
-    el.innerHTML='';
-    var models=d.models||[],hasMeta=d.has_metadata;
+    el.innerHTML='';var models=d.models||[],hasMeta=d.has_metadata;
     if(hasMeta){
-      // Tabular view with metadata
       el.innerHTML='<div style="font-size:0.6875rem;color:hsl(var(--muted-foreground));margin-bottom:0.375rem">'+d.count+' models found</div>';
-      var t='<div class="lcp-stack expanded" style="margin-bottom:0"><div class="lcp-stack-body" style="max-height:300px;overflow-y:auto;display:block"><table><thead><tr><th></th><th>Model ID</th><th>Owned By</th><th>Context</th></tr></thead><tbody>';
-      models.forEach(function(m){
-        var sel=_selectedModels.indexOf(m.id)>=0;
-        t+='<tr style="cursor:pointer'+(sel?';background:hsl(var(--secondary)/0.4)':'')+'" onclick="toggleModel(\''+m.id.replace(/'/g,"\\'")+'\')">';
-        t+='<td><input type="checkbox" '+(sel?'checked':'')+' onclick="event.stopPropagation();toggleModel(\''+m.id.replace(/'/g,"\\'")+'\')" style="pointer-events:none"></td>';
-        t+='<td class="mono" style="font-size:0.75rem">'+esc(m.id)+'</td>';
-        t+='<td style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">'+(m.owned_by||'—')+'</td>';
-        t+='<td class="mono" style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">'+(m.context_length||m.max_model_len||'—')+'</td>';
-        t+='</tr>';
-      });
-      t+='</tbody></table></div></div>';
-      el.innerHTML+=t;
+      var t='<div class="lcp-stack expanded"><div class="lcp-stack-body" style="max-height:300px;overflow-y:auto;display:block"><table><thead><tr><th></th><th>Model ID</th><th>Owned By</th><th>Context</th></tr></thead><tbody>';
+      models.forEach(function(m){var sel=_selectedModels.indexOf(m.id)>=0;t+='<tr style="cursor:pointer'+(sel?';background:hsl(var(--secondary)/0.4)':'')+'" onclick="toggleModel(\''+m.id.replace(/'/g,"\\'")+'\')"><td><input type="checkbox" '+(sel?'checked':'')+' onclick="event.stopPropagation();toggleModel(\''+m.id.replace(/'/g,"\\'")+'\')" style="pointer-events:none"></td><td class="mono" style="font-size:0.75rem">'+esc(m.id)+'</td><td style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">'+(m.owned_by||'—')+'</td><td class="mono" style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">'+(m.context_length||m.max_model_len||'—')+'</td></tr>'});
+      t+='</tbody></table></div></div>';el.innerHTML+=t;
     }else{
-      // Simple dropdown-style list
-      el.innerHTML='<div style="font-size:0.6875rem;color:hsl(var(--muted-foreground));margin-bottom:0.375rem">'+d.count+' models found (no metadata)</div>';
-      el.innerHTML+='<div style="display:flex;flex-wrap:wrap;gap:0.25rem">';
-      models.forEach(function(m){
-        var sel=_selectedModels.indexOf(m.id)>=0;
-        el.innerHTML+='<span style="padding:0.25rem 0.5rem;border-radius:9999px;font-size:0.6875rem;font-weight:600;cursor:pointer;border:1px solid '+(sel?'hsl(var(--primary))':'hsl(var(--card-border))')+';background:'+(sel?'hsl(var(--primary))':'hsl(var(--secondary)/0.3)')+';color:'+(sel?'hsl(var(--primary-foreground))':'hsl(var(--muted-foreground))')+';transition:all 0.15s;user-select:none" onclick="toggleModel(\''+m.id.replace(/'/g,"\\'")+'\')">'+esc(m.id)+'</span>';
-      });
+      el.innerHTML='<div style="font-size:0.6875rem;color:hsl(var(--muted-foreground));margin-bottom:0.375rem">'+d.count+' models found (no metadata)</div><div style="display:flex;flex-wrap:wrap;gap:0.25rem">';
+      models.forEach(function(m){var sel=_selectedModels.indexOf(m.id)>=0;el.innerHTML+='<span style="padding:0.25rem 0.5rem;border-radius:9999px;font-size:0.6875rem;font-weight:600;cursor:pointer;border:1px solid '+(sel?'hsl(var(--primary))':'hsl(var(--card-border))')+';background:'+(sel?'hsl(var(--primary))':'hsl(var(--secondary)/0.3)')+';color:'+(sel?'hsl(var(--primary-foreground))':'hsl(var(--muted-foreground))')+';transition:all 0.15s;user-select:none" onclick="toggleModel(\''+m.id.replace(/'/g,"\\'")+'\')">'+esc(m.id)+'</span>'});
       el.innerHTML+='</div>';
     }
   })}
-
+var _discResult=null;
+function renderDiscovery(){if(!_discResult)return;/* re-render selection state without re-fetching */}
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-
-function testProvider(){var r=document.getElementById('testResult');r.style.display='block';r.textContent='Testing...';r.style.color='hsl(var(--amber-fg))';var key=document.getElementById('provApiKey').value.trim();if(!key){key=prompt('Enter API key for test:')}if(!key){r.textContent='Test cancelled';return}api('POST','/api/providers/test',{api_base:document.getElementById('provUrl').value,api_key:key,model:(_selectedModels[0]||'default')}).then(function(d){if(d.ok){r.textContent='Connected — model: '+d.model;r.style.color='hsl(var(--green-fg))';document.getElementById('provSaveBtn').disabled=false}else{r.textContent='Failed: '+(d.error||'unknown');r.style.color='hsl(var(--red-fg))'}})}
-
-function editProvider(name){api('GET','/api/providers').then(function(d){var p=(d.providers||{})[name];if(!p)return;showAddProvForm();document.getElementById('provName').value=name;document.getElementById('provUrl').value=p.api_base||'';document.getElementById('provKeyEnv').value=p.api_key_env||'';document.getElementById('provApiKey').value='';_selectedModels=(p.models||[]).slice();renderSelected();document.getElementById('provSaveBtn').disabled=false})}
-
+function testProvider(){var r=document.getElementById('testResult');r.style.display='block';r.textContent='Testing...';r.style.color='hsl(var(--amber-fg))';var key=prompt('Enter API key for test:');if(!key){r.textContent='Test cancelled';return}api('POST','/api/providers/test',{api_base:document.getElementById('provUrl').value,api_key:key,model:(_selectedModels[0]||'default')}).then(function(d){if(d.ok){r.textContent='Connected — model: '+d.model;r.style.color='hsl(var(--green-fg))';document.getElementById('provSaveBtn').disabled=false}else{r.textContent='Failed: '+(d.error||'unknown');r.style.color='hsl(var(--red-fg))'}})}
+function editProvider(name){api('GET','/api/providers').then(function(d){var p=(d.providers||{})[name];if(!p)return;showAddProvForm();document.getElementById('provName').value=name;document.getElementById('provUrl').value=p.api_base||'';document.getElementById('provKeyEnv').value=p.api_key_env||'';_selectedModels=(p.models||[]).slice();renderSelected();document.getElementById('provSaveBtn').disabled=false})}
 function saveProvider(){var name=document.getElementById('provName').value.trim();if(!name){alert('Provider name is required');return}api('POST','/api/providers',{name:name,api_base:document.getElementById('provUrl').value.trim(),api_key_env:document.getElementById('provKeyEnv').value.trim(),models:_selectedModels}).then(function(d){if(d.ok){location.reload()}else{alert('Error: '+(d.error||'unknown'))}})}
-
 function deleteProvider(name){if(!confirm('Delete provider "'+name+'"? This removes it from all profile chains.'))return;api('DELETE','/api/providers/'+name).then(function(d){if(d.ok)location.reload();else alert('Error: '+(d.error||'unknown'))})}
-
 loadPresets();
-{% endraw %}
-</script>
-{% endblock %}
+{% endraw %}</script>{% endblock %}
