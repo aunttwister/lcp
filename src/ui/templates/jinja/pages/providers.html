@@ -20,10 +20,12 @@
     <div><label>API Key Env Var</label><input id="provKeyEnv" placeholder="OPENAI_API_KEY"></div>
   </div>
   <div style="margin-top:0.75rem"><label>Selected Models</label><div id="selectedModels" style="display:flex;flex-wrap:wrap;gap:0.25rem;min-height:1.5rem;padding:0.375rem 0"></div></div>
-  <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
-    <button class="btn-sm btn-success" id="provTestBtn" onclick="testProvider()">Test Connection</button>
-    <button class="btn-sm" onclick="discoverModels()" id="discoverBtn">Discover Models</button>
+  <div style="display:flex;justify-content:space-between;margin-top:0.5rem">
     <button class="btn-sm btn-primary" id="provSaveBtn" onclick="saveProvider()" disabled>Save Provider</button>
+    <div style="display:flex;gap:0.5rem">
+      <button class="btn-sm btn-success" id="provTestBtn" onclick="testProvider()">Test Connection</button>
+      <button class="btn-sm" onclick="discoverModels()" id="discoverBtn">Discover Models</button>
+    </div>
     <button class="btn-sm" onclick="hideAddProvForm()">Cancel</button>
   </div>
   <div id="testResult" class="test-result" style="display:none"></div>
@@ -123,7 +125,7 @@ function filterDiscovered(){ _discFilter = (document.getElementById('modelSearch
 
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
-function testProvider(){var r=document.getElementById('testResult');r.style.display='block';r.textContent='Testing...';r.style.color='hsl(var(--amber-fg))';var key=prompt('Enter API key for test:');if(!key){r.textContent='Test cancelled';return}api('POST','/api/providers/test',{api_base:document.getElementById('provUrl').value,api_key:key,model:(_selectedModels[0]||'default')}).then(function(d){if(d.ok){r.textContent='Connected — model: '+d.model;r.style.color='hsl(var(--green-fg))';document.getElementById('provSaveBtn').disabled=false}else{r.textContent='Failed: '+(d.error||'unknown');r.style.color='hsl(var(--red-fg))'}})}
+function testProvider(){var r=document.getElementById('testResult');r.style.display='block';r.textContent='Testing...';r.style.color='hsl(var(--amber-fg))';var name=document.getElementById('provName').value.trim();api('POST','/api/providers/test',{api_base:document.getElementById('provUrl').value,provider:name,model:(_selectedModels[0]||'default')}).then(function(d){if(d.ok){r.textContent='Connected — model: '+d.model;r.style.color='hsl(var(--green-fg))';document.getElementById('provSaveBtn').disabled=false}else{r.textContent='Failed: '+(d.error||'unknown');r.style.color='hsl(var(--red-fg))'}})}
 
 function editProvider(name){api('GET','/api/providers').then(function(d){var p=(d.providers||{})[name];if(!p)return;showAddProvForm();document.getElementById('provName').value=name;document.getElementById('provUrl').value=p.api_base||'';document.getElementById('provKeyEnv').value=p.api_key_env||'';_selectedModels=(p.models||[]).slice();_allDiscovered=[];_discFilter='';_discoverPage=0;renderSelected();document.getElementById('provSaveBtn').disabled=false})}
 

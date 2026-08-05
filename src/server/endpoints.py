@@ -351,6 +351,12 @@ class ProviderEndpoints:
         api_base = body.get("api_base", "").rstrip("/")
         api_key = body.get("api_key", "")
         model = body.get("model", "")
+        provider = body.get("provider", "")
+        # Resolve API key from env if not provided
+        if not api_key and provider and provider in self.config.providers:
+            env_var = self.config.providers[provider].get("api_key_env", "")
+            if env_var:
+                api_key = os.environ.get(env_var, "")
         if not api_base or not api_key:
             self._send_json({"error": "missing 'api_base' or 'api_key'"}, 400)
             return
