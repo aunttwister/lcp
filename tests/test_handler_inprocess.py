@@ -668,3 +668,62 @@ class TestNonStreamingChat:
         written = _get_written_bytes(h)
         assert b"reply" in written
         mock_record.assert_called_once()
+
+    def test_suspicious_token_sets_warning_header(self, temp_db):
+        body = {"messages": [{"role": "user", "content": "hi"}], "stream": False}
+        h = self._handler(temp_db, body)
+        resp = {"choices": [{"message": {"content": "reply"}}], "usage": {
+            "prompt_tokens": 10, "completion_tokens": 5,
+            "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 10,
+        }}
+        with patch("src.server.handler.get_prompt_cache") as mock_cache:
+            mock_cache.return_value.get.return_value = None
+            with patch("src.server.handler.try_chain",
+                       return_value=(resp, 200, "test", "test-model")):
+                with patch("src.server.handler.get_token_verifier") as mock_tv:
+                    mock_tv.return_value.verify.return_value = {
+                        "suspicious": True,
+                        "provider_prompt_tokens": 100,
+                        "estimated_prompt_tokens": 50,
+                        "prompt_discrepancy_pct": 100.0,
+                    }
+                    with patch("src.server.handler.record_cost"):
+                        with patch("src.server.handler.get_alert_manager"):
+                            h.do_POST()
+        assert h.send_response.call_args[0][0] == 200
+        # X-LCP-Token-Warning header was set
+        header_vals = [c[0][1] for c in h.send_header.call_args_list if c[0][0] == "X-LCP-Token-Warning"]
+        assert len(header_vals) == 1
+        assert "suspicious" in header_vals[0]
+
+    def test_budget_block_before_llm_returns_429(self, temp_db):
+        """A blocking profile budget exceeded returns 429 LCP-4290 before the LLM call."""
+        from src.api.models import Budget, get_session
+        with get_session(temp_db) as session:
+            session.add(Budget(
+                name="L2 Hard Cap", key_id=None, profile="l2",
+                amount=10.0, current_spend=12.0, period="monthly",
+                threshold_pct="80", action="block", status="exceeded",
+            ))
+            session.commit()
+        body = {"messages": [{"role": "user", "content": "hi"}], "stream": False}
+        h = self._handler(temp_db, body)
+        with patch("src.server.handler.get_prompt_cache") as mock_cache:
+            with patch("src.server.handler.try_chain") as mock_try:
+                h.do_POST()
+        assert h.send_response.call_args[0][0] == 429
+        err = _json_body(h)["error"]
+        assert err["code"] == "LCP-4290"
+        mock_try.assert_not_called()
+
+    def test_all_providers_failed_returns_502(self, temp_db):
+        from src.api.exceptions import AllProvidersFailedError
+        body = {"messages": [{"role": "user", "content": "hi"}], "stream": False}
+        h = self._handler(temp_db, body)
+        with patch("src.server.handler.get_prompt_cache") as mock_cache:
+            mock_cache.return_value.get.return_value = None
+            with patch("src.server.handler.try_chain",
+                       side_effect=AllProvidersFailedError("all down")):
+                with patch("src.server.handler.record_cost"):
+                    h.do_POST()
+        assert h.send_response.call_args[0][0] == 502

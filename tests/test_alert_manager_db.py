@@ -201,3 +201,46 @@ class TestGracefulDegradation:
             rule="budget_breach", severity="warning",
             title="Fail", message="m", dedup_key="fail:1",
         )
+
+    def test_list_db_failure_returns_empty(self, db_am):
+        with patch("src.api.alert_manager.get_session", side_effect=RuntimeError("db down")):
+            assert db_am.list_alerts() == []
+
+    def test_acknowledge_db_failure_returns_false(self, db_am):
+        db_am.fire(
+            rule="budget_breach", severity="warning",
+            title="Ack", message="m", dedup_key="ack:1",
+        )
+        with patch("src.api.alert_manager.get_session", side_effect=RuntimeError("db down")):
+            # In-memory ack still works, but DB write fails -> returns False
+            assert db_am.acknowledge("ack:1") is False
+
+    def test_resolve_db_failure_returns_false(self, db_am):
+        db_am.fire(
+            rule="budget_breach", severity="warning",
+            title="Res", message="m", dedup_key="res:1",
+        )
+        with patch("src.api.alert_manager.get_session", side_effect=RuntimeError("db down")):
+            assert db_am.resolve("res:1") is False
+
+
+# ── get_alert_manager singleton branches ──────────────────────────────────
+
+class TestGetAlertManagerBranches:
+    def test_first_call_creates_with_engine(self):
+        import src.api.alert_manager as am_mod
+        am_mod._alert_manager = None
+        try:
+            result = am_mod.get_alert_manager(engine="fake-engine")
+            assert result._engine == "fake-engine"
+        finally:
+            am_mod._alert_manager = None
+
+    def test_existing_without_engine_gets_engine(self):
+        import src.api.alert_manager as am_mod
+        am_mod._alert_manager = AlertManager()  # engine None
+        try:
+            result = am_mod.get_alert_manager(engine="eng-2")
+            assert result._engine == "eng-2"
+        finally:
+            am_mod._alert_manager = None

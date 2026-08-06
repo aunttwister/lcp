@@ -95,6 +95,13 @@ class TestCostPluginABC:
     def test_minimal_plugin_returns_none_defaults(self):
         """Plugin that overrides nothing returns None for pricing/cost/preset/balance."""
         p = _MinimalPlugin()
+        assert p.get_pricing("any") is None
+        assert p.calculate_cost("any", {}) is None
+        assert p.preset is None
+        assert p.fetch_balance() is None
+        assert p.fetch_summary() is None
+        assert p.fetch_subscription() is None
+        assert p.discover_models("http://x/v1") is None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -201,6 +208,18 @@ class TestPluginRegistry:
         assert result["dummy"] == {"daily": {"tokens": 1000}}
         assert result["another"] == {"balance": {"available": 50.0}}
 
+    def test_fetch_all_subscriptions(self):
+        """fetch_all_subscriptions collects snapshot dicts (or None) per plugin."""
+        reg = PluginRegistry()
+        d = _DummyPlugin()
+        d.fetch_subscription = lambda: {"rolling_pct": 25.0}
+        a = _AnotherPlugin()  # inherits base fetch_subscription -> None
+        reg.register(d)
+        reg.register(a)
+        result = reg.fetch_all_subscriptions()
+        assert result["dummy"] == {"rolling_pct": 25.0}
+        assert result["another"] is None
+
     def test_shutdown_all(self):
         reg = PluginRegistry()
         m = MagicMock(spec=CostPlugin)
@@ -260,3 +279,16 @@ class TestSingleton:
         assert "deepseek" in reg.providers
         assert "opencode" in reg.providers
         assert "llamacpp" in reg.providers
+
+    def test_init_plugins_injects_engine_into_registered(self):
+        """When a registry already has providers, init_plugins(engine=...) calls set_engine."""
+        import src.api.cost_plugins.base as base_mod
+        from unittest.mock import MagicMock
+        reg = PluginRegistry()
+        plugin = _MinimalPlugin()
+        plugin.set_engine = MagicMock()
+        reg.register(plugin)
+        base_mod._registry = reg
+        result = init_plugins(engine="fake-engine")
+        assert result is reg
+        plugin.set_engine.assert_called_once_with("fake-engine")
