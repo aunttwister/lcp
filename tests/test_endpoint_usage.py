@@ -1,0 +1,440 @@
+"""Tests for usage/stats/logs/plugin/provider-test endpoints.
+
+Covers the big uncovered blocks in src/server/endpoints.py:
+  - _serve_usage_stats_api (daily/by_model/by_profile/date-range)
+  - _serve_usage_totals_api
+  - _serve_daily_costs_api / _serve_recent_requests_api
+  - _serve_logs_api (filters, pagination, sort)
+  - _serve_usage_page / _serve_logs_page / _serve_alerts_page
+  - _serve_provider_test (mocked urllib)
+  - _serve_plugin_usage / balances / summary / subscriptions
+"""
+
+import json
+import os
+import tempfile
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from src.server import LCPHandler
+from src.api.models import get_engine, Base, Request as RequestModel, get_session
+
+
+class TestHandler(LCPHandler):
+    """Subclass that skips BaseHTTPRequestHandler.__init__ for direct testing."""
+
+    def __init__(self, path="/", method="GET", engine=None, headers=None, body=None):
+        self.path = path
+        self.command = method
+        self.headers = headers or {}
+        self.request_version = "HTTP/1.1"
+        self.requestline = f"{method} {path} HTTP/1.1"
+        self.raw_requestline = f"{method} {path} HTTP/1.1".encode()
+        self.client_address = ("127.0.0.1", 0)
+        self.send_response = MagicMock()
+        self.send_header = MagicMock()
+        self.end_headers = MagicMock()
+        self.wfile = MagicMock()
+        self.wfile.write = MagicMock()
+        self.rfile = MagicMock()
+        if isinstance(body, dict):
+            body = json.dumps(body)
+        body_bytes = (body or b"{}") if isinstance(body or b"{}", bytes) else (body or "{}").encode()
+        self.rfile.read = MagicMock(return_value=body_bytes)
+        if body:
+            self.headers["Content-Length"] = str(len(body_bytes))
+        self._write_chunk = MagicMock()
+        self.engine = engine
+        self.log_error = MagicMock()
+
+
+def _status(handler):
+    return handler.send_response.call_args[0][0] if handler.send_response.call_args else None
+
+
+def _json_body(handler):
+    for call in handler.wfile.write.call_args_list:
+        try:
+            return json.loads(call[0][0])
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+    return {}
+
+
+@pytest.fixture(autouse=True)
+def _setup_handler_config(temp_db):
+    """Ensure LCPHandler.config is set for all tests (mirrors test_server.py)."""
+    from unittest.mock import MagicMock
+    from src.api.key_manager import init_key_manager
+
+    init_key_manager(temp_db, "data")
+
+    cfg = MagicMock()
+    cfg.server = {"port": 8734, "default_profile": "l2"}
+    cfg.profiles = {
+        "l2": {"forbidden_tools": [], "chain": [{"provider": "opencode", "model": "deepseek-v4-pro", "base_url": "https://t/v1"}]},
+        "l1": {"forbidden_tools": [], "chain": [{"provider": "deepseek", "model": "deepseek-v4-flash", "base_url": "https://t/v1"}]},
+    }
+    cfg.providers = {
+        "opencode": {"api_key_env": "OK", "api_base": "https://t/v1", "models": ["deepseek-v4-pro"]},
+        "deepseek": {"api_key_env": "DK", "api_base": "https://t/v1", "models": ["deepseek-v4-flash"]},
+    }
+    cfg.pricing = [
+        {"provider": "opencode", "model": "deepseek-v4-pro", "cache_hit": 0.01, "cache_miss": 0.5, "output": 1.0},
+    ]
+    cfg.circuit_breaker = {"failures_dead": 5, "dead_cooldown_seconds": 300, "failures_degraded": 3, "degraded_cooldown_seconds": 60}
+    cfg.database = {"path": "/tmp/test.db", "wal_mode": True}
+    cfg.model_limits = {}
+    cfg.get_profile = lambda name: cfg.profiles.get(name)
+    cfg.get_pricing = lambda provider, model: next((p for p in cfg.pricing if p["provider"] == provider), cfg.pricing[0])
+    cfg.get_provider_key = lambda name: "test-key"
+    cfg.check_reload = MagicMock()
+    cfg.raw = {}
+    cfg.save = MagicMock()
+    LCPHandler.config = cfg
+
+
+@pytest.fixture
+def temp_db():
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    engine = get_engine(db_path)
+    Base.metadata.create_all(engine)
+    yield engine
+    engine.dispose()
+    for ext in ["", "-wal", "-shm"]:
+        try:
+            os.unlink(db_path + ext)
+        except FileNotFoundError:
+            pass
+
+
+def _seed(engine):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_session(engine) as s:
+        s.add_all([
+            RequestModel(
+                timestamp=now, profile="l2", model="deepseek-v4-pro", provider="opencode",
+                prompt_tokens=1000, completion_tokens=500, cache_hit_tokens=400,
+                cache_miss_tokens=600, cost=0.5, latency_ms=100, success=1,
+            ),
+            RequestModel(
+                timestamp=now, profile="l1", model="deepseek-v4-flash", provider="deepseek",
+                prompt_tokens=200, completion_tokens=50, cache_hit_tokens=0,
+                cache_miss_tokens=200, cost=0.02, latency_ms=50, success=1,
+            ),
+            RequestModel(
+                timestamp=now, profile="l2", model="deepseek-v4-pro", provider="opencode",
+                prompt_tokens=100, completion_tokens=50, cache_hit_tokens=0,
+                cache_miss_tokens=100, cost=0.01, latency_ms=10, success=0, error_type="timeout",
+            ),
+        ])
+        s.commit()
+
+
+# ── Usage stats API ───────────────────────────────────────────────────────
+
+class TestUsageStatsApi:
+    def test_empty(self, temp_db):
+        h = TestHandler(path="/api/usage/stats", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert body["totals"] == {"cost": 0, "requests": 0}
+        # The date-range fill generates 30 zero-days even when empty
+        assert len(body["daily"]) == 30
+        assert all(d["cost"] == 0 for d in body["daily"])
+
+    def test_with_seeded_data(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/usage/stats", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["totals"]["requests"] == 2  # success only
+        assert body["totals"]["cost"] > 0
+        assert "deepseek-v4-pro" in body["by_model"]  # keyed by model name
+        assert "l2" in body["by_profile"]
+        assert body["cache"]["miss_tokens"] > 0
+
+    def test_provider_filter(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/usage/stats?provider=opencode", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["provider"] == "opencode"
+        assert body["totals"]["requests"] == 1
+
+    def test_date_range(self, temp_db):
+        _seed(temp_db)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        h = TestHandler(path=f"/api/usage/stats?start={today}&end={today}", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["totals"]["requests"] == 2
+        assert len(body["daily"]) >= 1
+
+    def test_days_limit(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/usage/stats?days=7", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["totals"]["requests"] == 2
+
+    def test_error_returns_500(self, temp_db):
+        h = TestHandler(path="/api/usage/stats", engine=temp_db)
+        with patch("src.server.endpoints.get_session", side_effect=RuntimeError("db down")):
+            h.do_GET()
+        assert _status(h) == 500
+
+
+# ── Usage totals API ──────────────────────────────────────────────────────
+
+class TestUsageTotalsApi:
+    def test_empty(self, temp_db):
+        h = TestHandler(path="/api/usage/totals", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["requests"] == 0
+        assert body["tokens"] == 0
+
+    def test_with_seeded_data(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/usage/totals", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["requests"] == 2
+        assert body["tokens"] > 0
+
+    def test_date_range_filter(self, temp_db):
+        _seed(temp_db)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        h = TestHandler(path=f"/api/usage/totals?start={today}&end={today}", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["start"] == today
+        assert body["requests"] == 2
+
+
+# ── Daily costs API ───────────────────────────────────────────────────────
+
+class TestDailyCostsApi:
+    def test_with_seeded_data(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/daily-costs", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert len(body["daily_costs"]) >= 1
+        assert body["daily_costs"][0]["cost"] > 0
+
+    def test_error_returns_500(self, temp_db):
+        h = TestHandler(path="/api/daily-costs", engine=temp_db)
+        with patch("src.server.endpoints.get_session", side_effect=RuntimeError("db down")):
+            h.do_GET()
+        assert _status(h) == 500
+
+
+# ── Recent requests API ───────────────────────────────────────────────────
+
+class TestRecentRequestsApi:
+    def test_with_seeded_data(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/recent-requests", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert len(body["requests"]) == 3
+        r = body["requests"][0]
+        assert r["success"] in (True, False)
+        assert "saved" in r
+        assert r["latency_ms"] >= 0
+
+    def test_error_returns_500(self, temp_db):
+        h = TestHandler(path="/api/recent-requests", engine=temp_db)
+        with patch("src.server.endpoints.get_session", side_effect=RuntimeError("db down")):
+            h.do_GET()
+        assert _status(h) == 500
+
+
+# ── Logs API ──────────────────────────────────────────────────────────────
+
+class TestLogsApi:
+    def test_all_rows(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/logs", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["total"] == 3
+        assert len(body["rows"]) == 3
+        assert len(body["profiles"]) == 2
+        assert len(body["providers"]) == 2
+
+    def test_filter_by_profile(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/logs?profile=l2", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["total"] == 2
+        assert all(r["profile"] == "l2" for r in body["rows"])
+
+    def test_filter_by_status_error(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/logs?status=error", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["total"] == 1
+        assert body["rows"][0]["success"] is False
+
+    def test_filter_by_status_success(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/logs?status=success", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["total"] == 2
+
+    def test_pagination_and_sort(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/logs?limit=1&offset=0&sort=asc", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["total"] == 3
+        assert len(body["rows"]) == 1
+
+    def test_provider_filter(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/api/logs?provider=deepseek", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["total"] == 1
+        assert body["rows"][0]["provider"] == "deepseek"
+
+    def test_error_returns_500(self, temp_db):
+        h = TestHandler(path="/api/logs", engine=temp_db)
+        with patch("src.server.endpoints.get_session", side_effect=RuntimeError("db down")):
+            h.do_GET()
+        assert _status(h) == 500
+
+
+# ── Page routes ───────────────────────────────────────────────────────────
+
+class TestPageRoutes:
+    def test_usage_page(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/usage", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
+
+    def test_logs_page(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/logs", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
+
+    def test_alerts_page(self, temp_db):
+        h = TestHandler(path="/alerts", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
+
+
+# ── Provider test endpoint ─────────────────────────────────────────────────
+
+class TestProviderTest:
+    def _body_handler(self, temp_db, body):
+        return TestHandler(path="/api/providers/test", method="POST", engine=temp_db,
+                           body=body)
+
+    def test_success(self, temp_db):
+        import urllib.request
+        body = {"api_base": "https://api.example.com/v1", "api_key": "sk-test", "model": "gpt-3.5-turbo"}
+        h = self._body_handler(temp_db, body)
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"model": "gpt-3.5-turbo", "id": "chatcmpl-1"}'
+        mock_resp.__enter__.return_value = mock_resp
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is True
+        assert result["model"] == "gpt-3.5-turbo"
+
+    def test_http_error(self, temp_db):
+        import urllib.error
+        body = {"api_base": "https://api.example.com/v1", "api_key": "sk-test", "model": "gpt-3.5-turbo"}
+        h = self._body_handler(temp_db, body)
+        err = urllib.error.HTTPError("url", 401, "Unauthorized", {}, None)
+        err.read = MagicMock(return_value=b'{"error":"bad key"}')
+        with patch("urllib.request.urlopen", side_effect=err):
+            h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is False
+        assert result["status"] == 401
+
+    def test_generic_error(self, temp_db):
+        body = {"api_base": "https://api.example.com/v1", "api_key": "sk-test", "model": "gpt-3.5-turbo"}
+        h = self._body_handler(temp_db, body)
+        with patch("urllib.request.urlopen", side_effect=RuntimeError("boom")):
+            h.do_POST()
+        assert _status(h) == 200
+        assert _json_body(h)["ok"] is False
+
+    def test_missing_api_base_or_key(self, temp_db):
+        h = self._body_handler(temp_db, {"api_base": "", "api_key": ""})
+        h.do_POST()
+        assert _status(h) == 400
+
+    def test_resolves_key_from_env(self, temp_db):
+        body = {"api_base": "https://api.example.com/v1", "api_key": "", "provider": "opencode", "model": "m"}
+        h = self._body_handler(temp_db, body)
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"model": "m"}'
+        mock_resp.__enter__.return_value = mock_resp
+        with patch.dict(os.environ, {"OK": "env-key"}):
+            with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+                h.do_POST()
+        req = mock_open.call_args[0][0]
+        assert req.headers["Authorization"] == "Bearer env-key"
+
+
+# ── Plugin endpoints ──────────────────────────────────────────────────────
+
+class TestPluginEndpoints:
+    def test_plugin_usage(self, temp_db):
+        # Note: route matches exact path only; start/end parsed from query on the
+        # matched path. Call the endpoint method directly to cover the query handling.
+        h = TestHandler(path="/api/cost-plugins/usage?start=2026-01-01&end=2026-01-31", engine=temp_db)
+        with patch("src.server.endpoints.get_registry") as mock_reg:
+            mock_reg.return_value.fetch_all_usage.return_value = {"opencode": []}
+            h._serve_plugin_usage()
+        assert _status(h) == 200
+        assert _json_body(h) == {"plugin_usage": {"opencode": []}}
+        # The query params should be forwarded to the plugin
+        _, kwargs = mock_reg.return_value.fetch_all_usage.call_args
+        assert kwargs["start_date"] == "2026-01-01"
+        assert kwargs["end_date"] == "2026-01-31"
+
+    def test_plugin_balances(self, temp_db):
+        h = TestHandler(path="/api/cost-plugins/balances", engine=temp_db)
+        with patch("src.server.endpoints.get_registry") as mock_reg:
+            mock_reg.return_value.fetch_all_balances.return_value = {}
+            h.do_GET()
+        assert _status(h) == 200
+        assert _json_body(h) == {"plugin_balances": {}}
+
+    def test_plugin_summary(self, temp_db):
+        h = TestHandler(path="/api/cost-plugins/summary", engine=temp_db)
+        with patch("src.server.endpoints.get_registry") as mock_reg:
+            mock_reg.return_value.fetch_all_summaries.return_value = {}
+            h.do_GET()
+        assert _status(h) == 200
+        assert _json_body(h) == {"plugin_summaries": {}}
+
+    def test_plugin_subscriptions(self, temp_db):
+        h = TestHandler(path="/api/cost-plugins/subscriptions", engine=temp_db)
+        with patch("src.server.endpoints.get_registry") as mock_reg:
+            mock_reg.return_value.fetch_all_subscriptions.return_value = {}
+            h.do_GET()
+        assert _status(h) == 200
+        assert _json_body(h) == {"plugin_subscriptions": {}}
