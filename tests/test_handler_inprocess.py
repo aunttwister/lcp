@@ -398,3 +398,273 @@ class TestProfileBudgetRouting:
         h = _TestHandler("/api/profiles/l2/budgets", method="PUT", engine=temp_db)
         h.do_PUT()
         assert h.send_response.call_args[0][0] == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Streaming chat (SSE) path tests
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestStreamingChat:
+    """Covers the SSE streaming block in do_POST (lines ~461-573)."""
+
+    def _streaming_handler(self, temp_db):
+        """Set up a handler ready to process a streaming chat request."""
+        body = {"messages": [{"role": "user", "content": "hi"}], "stream": True}
+        body_bytes = json.dumps(body).encode()
+        h = _TestHandler("/l2/chat/completions", method="POST", engine=temp_db)
+        h.rfile.read = MagicMock(return_value=body_bytes)
+        h.headers = {"Content-Length": str(len(body_bytes))}
+
+        LCPHandler.config = MagicMock()
+        LCPHandler.config.profiles = {"l2": {"chain": [], "forbidden_tools": []}}
+        LCPHandler.config.get_profile = MagicMock(return_value={
+            "chain": [{"provider": "test", "model": "test-model", "base_url": "http://t"}],
+            "forbidden_tools": [],
+            "auth_required": False,
+        })
+        LCPHandler.config.get_pricing = MagicMock(return_value={
+            "cache_hit": 0.01, "cache_miss": 0.5, "output": 1.0,
+        })
+        LCPHandler.config.providers = {"test": {"base_url": "http://t"}}
+        return h
+
+    def _sse_chunks_with_usage(self):
+        return [
+            b'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
+            b'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":10}}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+
+    def test_streaming_writes_sse_and_records_cost(self, temp_db):
+        h = self._streaming_handler(temp_db)
+        chunks = self._sse_chunks_with_usage()
+        with patch("src.server.handler.try_chain",
+                   return_value=(iter(chunks), 200, "test", "test-model")):
+            with patch("src.server.handler.get_prompt_cache") as mock_cache:
+                mock_cache.return_value.get.return_value = None
+                with patch("src.server.handler.record_cost") as mock_record:
+                    with patch("src.server.handler.get_alert_manager"):
+                        h.do_POST()
+
+        assert h.send_response.call_args[0][0] == 200
+        # SSE content type header
+        content_types = [c[0][1] for c in h.send_header.call_args_list if c[0][0] == "Content-Type"]
+        assert "text/event-stream" in content_types
+
+        # All SSE chunks written to the client
+        written = _get_written_bytes(h)
+        assert b'data: {"choices":[{"delta":{"content":"Hel"}}]}' in written
+        assert b'data: [DONE]' in written
+
+        # Cost recorded for the streaming request
+        mock_record.assert_called_once()
+        args, kwargs = mock_record.call_args
+        assert args[1] == "l2"
+        assert args[3] == "test"  # provider
+        assert args[4]["prompt_tokens"] == 10
+        assert args[4]["completion_tokens"] == 5
+
+    def test_streaming_without_usage_falls_back_to_estimation(self, temp_db):
+        # Chunks with no usage block -> falls back to pre-flight estimation
+        chunks = [
+            b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        h = self._streaming_handler(temp_db)
+        with patch("src.server.handler.try_chain",
+                   return_value=(iter(chunks), 200, "test", "test-model")):
+            with patch("src.server.handler.get_prompt_cache") as mock_cache:
+                mock_cache.return_value.get.return_value = None
+                with patch("src.server.handler.record_cost") as mock_record:
+                    with patch("src.server.handler.get_alert_manager"):
+                        h.do_POST()
+        assert h.send_response.call_args[0][0] == 200
+        mock_record.assert_called_once()
+        args, kwargs = mock_record.call_args
+        # Falls back to estimation-derived cost info
+        assert args[4]["completion_tokens"] == 0
+
+    def test_streaming_client_disconnect_swallowed(self, temp_db):
+        h = self._streaming_handler(temp_db)
+        chunks = self._sse_chunks_with_usage()
+        h.wfile.write = MagicMock(side_effect=BrokenPipeError("client gone"))
+        with patch("src.server.handler.try_chain",
+                   return_value=(iter(chunks), 200, "test", "test-model")):
+            with patch("src.server.handler.get_prompt_cache") as mock_cache:
+                mock_cache.return_value.get.return_value = None
+                with patch("src.server.handler.record_cost"):
+                    with patch("src.server.handler.get_alert_manager"):
+                        h.do_POST()  # should not raise
+
+        assert h.send_response.call_args[0][0] == 200
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Static file serving
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestStaticServing:
+    def test_serves_css_file(self, temp_db):
+        h = _TestHandler("/static/dashboard.css", engine=temp_db)
+        h.do_GET()
+        assert h.send_response.call_args[0][0] == 200
+        cts = [c[0][1] for c in h.send_header.call_args_list if c[0][0] == "Content-Type"]
+        assert "text/css" in cts
+
+    def test_path_traversal_forbidden(self, temp_db):
+        h = _TestHandler("/static/../../etc/passwd", engine=temp_db)
+        h.do_GET()
+        assert h.send_response.call_args[0][0] == 403
+        assert _json_body(h)["error"] == "forbidden"
+
+    def test_missing_file_404(self, temp_db):
+        h = _TestHandler("/static/nonexistent-xyz.js", engine=temp_db)
+        h.do_GET()
+        assert h.send_response.call_args[0][0] == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Auth failure paths in the chat POST flow
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestAuthFailures:
+    def _auth_handler(self, temp_db, headers=None):
+        body = {"messages": [{"role": "user", "content": "hi"}]}
+        body_bytes = json.dumps(body).encode()
+        h = _TestHandler("/l2/chat/completions", method="POST", engine=temp_db)
+        h.rfile.read = MagicMock(return_value=body_bytes)
+        h.headers = {"Content-Length": str(len(body_bytes))}
+        if headers:
+            h.headers.update(headers)
+        LCPHandler.config = MagicMock()
+        LCPHandler.config.profiles = {"l2": {"chain": [], "forbidden_tools": []}}
+        LCPHandler.config.get_profile = MagicMock(return_value={
+            "chain": [{"provider": "test", "model": "test-model", "base_url": "http://t"}],
+            "forbidden_tools": [],
+            "auth_required": True,
+        })
+        LCPHandler.config.get_pricing = MagicMock(return_value={
+            "cache_hit": 0.01, "cache_miss": 0.5, "output": 1.0,
+        })
+        LCPHandler.config.providers = {"test": {"base_url": "http://t"}}
+        return h
+
+    def test_missing_bearer_401(self, temp_db):
+        h = self._auth_handler(temp_db, headers={"Authorization": ""})
+        with patch("src.server.handler.get_key_manager"):
+            h.do_POST()
+        assert h.send_response.call_args[0][0] == 401
+        assert _json_body(h)["error"]["code"] == "LCP-1001"
+
+    def test_invalid_key_401(self, temp_db):
+        h = self._auth_handler(temp_db, headers={"Authorization": "Bearer badkey"})
+        km = MagicMock()
+        km.validate_key.return_value = None
+        with patch("src.server.handler.get_key_manager", return_value=km):
+            h.do_POST()
+        assert h.send_response.call_args[0][0] == 401
+        assert _json_body(h)["error"]["code"] == "LCP-1001"
+
+    def test_profile_access_denied_403(self, temp_db):
+        h = self._auth_handler(temp_db, headers={"Authorization": "Bearer goodkey"})
+        km = MagicMock()
+        km.validate_key.return_value = {"id": 1, "allowed_profiles": "l1"}
+        with patch("src.server.handler.get_key_manager", return_value=km):
+            h.do_POST()
+        assert h.send_response.call_args[0][0] == 403
+        assert _json_body(h)["error"]["code"] == "LCP-1003"
+
+    def test_budget_exceeded_during_auth_429(self, temp_db):
+        from src.api.models import Budget, get_session
+        with get_session(temp_db) as session:
+            session.add(Budget(
+                name="Key Cap", key_id=1, profile=None,
+                amount=10.0, current_spend=12.0, period="total",
+                threshold_pct="80", action="block", status="exceeded",
+            ))
+            session.commit()
+        h = self._auth_handler(temp_db, headers={"Authorization": "Bearer goodkey"})
+        km = MagicMock()
+        km.validate_key.return_value = {"id": 1, "allowed_profiles": None}
+        with patch("src.server.handler.get_key_manager", return_value=km):
+            h.do_POST()
+        assert h.send_response.call_args[0][0] == 429
+        assert _json_body(h)["error"]["code"] == "LCP-1002"
+
+    def test_valid_key_passes_auth_and_stores_key_id(self, temp_db):
+        h = self._auth_handler(temp_db, headers={"Authorization": "Bearer goodkey"})
+        km = MagicMock()
+        km.validate_key.return_value = {"id": 1, "allowed_profiles": None}
+        resp = {"choices": [{"message": {"content": "ok"}}], "usage": {
+            "prompt_tokens": 10, "completion_tokens": 5,
+            "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 10,
+        }}
+        with patch("src.server.handler.get_key_manager", return_value=km):
+            with patch("src.server.handler.get_prompt_cache") as mock_cache:
+                mock_cache.return_value.get.return_value = None
+                with patch("src.server.handler.try_chain",
+                           return_value=(resp, 200, "test", "test-model")):
+                    with patch("src.server.handler.get_token_verifier") as mock_tv:
+                        mock_tv.return_value.verify.return_value = {"suspicious": False}
+                        with patch("src.server.handler.record_cost"):
+                            with patch("src.server.handler.get_alert_manager"):
+                                h.do_POST()
+        assert h.send_response.call_args[0][0] == 200
+        assert h._current_key_id == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Non-streaming chat completion path
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestNonStreamingChat:
+    def _handler(self, temp_db, body):
+        body_bytes = json.dumps(body).encode()
+        h = _TestHandler("/l2/chat/completions", method="POST", engine=temp_db)
+        h.rfile.read = MagicMock(return_value=body_bytes)
+        h.headers = {"Content-Length": str(len(body_bytes))}
+        LCPHandler.config = MagicMock()
+        LCPHandler.config.profiles = {"l2": {"chain": [], "forbidden_tools": []}}
+        LCPHandler.config.get_profile = MagicMock(return_value={
+            "chain": [{"provider": "test", "model": "test-model", "base_url": "http://t"}],
+            "forbidden_tools": [],
+            "auth_required": False,
+        })
+        LCPHandler.config.get_pricing = MagicMock(return_value={
+            "cache_hit": 0.01, "cache_miss": 0.5, "output": 1.0,
+        })
+        LCPHandler.config.providers = {"test": {"base_url": "http://t"}}
+        return h
+
+    def test_non_streaming_cache_hit_served(self, temp_db):
+        body = {"messages": [{"role": "user", "content": "hi"}], "stream": False}
+        h = self._handler(temp_db, body)
+        cached = {"choices": [{"message": {"content": "cached reply"}}]}
+        with patch("src.server.handler.get_prompt_cache") as mock_cache:
+            mock_cache.return_value.get.return_value = cached
+            h.do_POST()
+        assert h.send_response.call_args[0][0] == 200
+        written = _get_written_bytes(h)
+        assert b"cached reply" in written
+
+    def test_non_streaming_full_flow(self, temp_db):
+        body = {"messages": [{"role": "user", "content": "hi"}], "stream": False}
+        h = self._handler(temp_db, body)
+        resp = {"choices": [{"message": {"content": "reply"}}], "usage": {
+            "prompt_tokens": 10, "completion_tokens": 5,
+            "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 10,
+        }}
+        with patch("src.server.handler.get_prompt_cache") as mock_cache:
+            mock_cache.return_value.get.return_value = None
+            with patch("src.server.handler.try_chain",
+                       return_value=(resp, 200, "test", "test-model")):
+                with patch("src.server.handler.get_token_verifier") as mock_tv:
+                    mock_tv.return_value.verify.return_value = {"suspicious": False}
+                    with patch("src.server.handler.record_cost") as mock_record:
+                        with patch("src.server.handler.get_alert_manager"):
+                            h.do_POST()
+        assert h.send_response.call_args[0][0] == 200
+        written = _get_written_bytes(h)
+        assert b"reply" in written
+        mock_record.assert_called_once()
