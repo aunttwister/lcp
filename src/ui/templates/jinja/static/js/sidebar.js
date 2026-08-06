@@ -22,3 +22,24 @@ function closeSidebar() {
     document.getElementById('sidebar').classList.add('collapsed');
   }
 })();
+
+// Alert badge polling — updates active alert count on all pages.
+(function() {
+  function pollAlertBadge() {
+    var badge = document.getElementById('sidebarAlertBadge');
+    if (!badge) return;
+    try {
+      fetch('/api/alerts/active').then(function(r) { return r.json(); }).then(function(d) {
+        var count = (d.alerts || []).length;
+        if (count > 0) {
+          badge.textContent = count;
+          badge.style.display = 'inline-block';
+        } else {
+          badge.style.display = 'none';
+        }
+      });
+    } catch(e) {}
+  }
+  pollAlertBadge();
+  setInterval(pollAlertBadge, 15000);
+})();

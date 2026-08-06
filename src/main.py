@@ -8,6 +8,7 @@ from .api.logging_config import setup_logging, get_logger
 from .api.models import get_engine, Base
 from .api.circuit_breaker import get_circuit_breaker
 from .api.key_manager import get_key_manager
+from .api.alert_manager import init_alert_manager
 from .server import create_server
 
 logger = get_logger("lcp.main")
@@ -39,6 +40,10 @@ def main():
     from .api.cost_plugins import init_plugins
     init_plugins(engine=engine)
     logger.info("cost_plugins_initialized")
+
+    # Initialize alert manager with DB engine for persistence
+    init_alert_manager(engine)
+    logger.info("alert_manager_initialized")
 
     data_dir = os.path.dirname(db_path) if os.path.dirname(db_path) else "data"
 

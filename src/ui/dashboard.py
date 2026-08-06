@@ -514,6 +514,31 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     output_tokens_fmt = _fmt_num(summary_output_tokens)
     prompt_tokens_fmt = _fmt_num(summary_prompt_tokens)
 
+    # ── Budget status cards ──
+    budget_cards = []
+    try:
+        from ..api.models import Budget, get_session as _get_sess
+        with _get_sess(engine) as b_sess:
+            active_budgets = b_sess.query(Budget).filter(
+                Budget.status.in_(["active", "exceeded"]),
+            ).order_by(Budget.name).all()
+            for b in active_budgets:
+                pct = (b.current_spend / b.amount * 100) if b.amount > 0 else 0
+                budget_cards.append({
+                    "id": b.id,
+                    "name": b.name,
+                    "profile": b.profile or "global",
+                    "amount": b.amount,
+                    "current_spend": b.current_spend,
+                    "spend_pct": round(pct, 1),
+                    "period": b.period,
+                    "action": b.action,
+                    "status": b.status,
+                    "exceeded": b.status == "exceeded" or (b.amount > 0 and b.current_spend >= b.amount),
+                })
+    except Exception:
+        pass
+
     return render_page(
         "pages/dashboard.html", config, engine,
         profile_filter=profile_filter,
@@ -537,6 +562,8 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         recent_rows=recent_rows_data,
         error_rows=error_rows_data,
         sidebar_profiles=sidebar_profiles,
+        budget_cards=budget_cards,
+        budget_cards_json=json.dumps(budget_cards),
         token_mismatches=token_mismatches,
         routing_threshold=routing_threshold,
         cache_entries=cache_entries,

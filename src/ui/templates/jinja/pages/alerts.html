@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}LCP — Alerts{% endblock %}
+{% set active_page = 'alerts' %}
+
+{% block head_extra %}
+<style>
+.alerts-toolbar { display: flex; gap: 0.625rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }
+.segmented { display: inline-flex; background: hsl(var(--secondary)); border-radius: var(--radius); padding: 2px; }
+.segmented button { padding: 0.3rem 0.75rem; font-size: 0.75rem; background: none; border: none; border-radius: calc(var(--radius) - 2px); color: hsl(var(--muted-foreground)); cursor: pointer; font-weight: 500; font-family: inherit; transition: all 0.15s; }
+.segmented button.active { background: hsl(var(--background)); color: hsl(var(--foreground)); box-shadow: 0 1px 3px rgb(0 0 0 / 0.08); }
+.alerts-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.alerts-table th { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 2px solid hsl(var(--card-border)); color: hsl(var(--muted-foreground)); font-weight: 600; font-size: 0.68rem; text-transform: uppercase; white-space: nowrap; }
+.alerts-table td { padding: 0.42rem 0.6rem; border-bottom: 1px solid hsl(var(--card-border) / 0.35); }
+.alerts-table tbody tr { transition: background 0.1s; cursor: pointer; }
+.alerts-table tbody tr:hover { background: hsl(var(--card) / 0.6); }
+.alerts-table .mono { font-family: 'SF Mono', Monaco, monospace; font-size: 0.72rem; }
+.badge-sev { display: inline-block; padding: 0.12rem 0.45rem; border-radius: 3px; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; }
+.badge-info { background: #1e3a5f; color: #93c5fd; }
+.badge-warning { background: #5c4a00; color: #fde047; }
+.badge-critical { background: #7f1d1d; color: #fca5a5; }
+.badge-firing { background: #7f1d1d; color: #fca5a5; }
+.badge-resolved { background: #14532d; color: #86efac; }
+.alert-detail { display: none; background: hsl(var(--card)); padding: 0.75rem 1rem; margin-top: 0.25rem; border-left: 3px solid hsl(var(--primary)); border-radius: 0 var(--radius) var(--radius) 0; font-size: 0.75rem; }
+.alert-detail.open { display: block; }
+.alert-detail pre { background: hsl(var(--background)); padding: 0.5rem 0.75rem; border-radius: var(--radius); overflow-x: auto; font-size: 0.7rem; white-space: pre-wrap; word-break: break-word; margin-top: 0.25rem; }
+.alert-detail .dl-row { display: flex; gap: 0.5rem; margin-bottom: 0.25rem; }
+.alert-detail .dl-key { color: hsl(var(--muted-foreground)); min-width: 80px; font-weight: 600; }
+.ack-btn { padding: 0.2rem 0.5rem; font-size: 0.65rem; background: hsl(var(--secondary)); border: 1px solid hsl(var(--card-border)); border-radius: var(--radius); color: hsl(var(--foreground)); cursor: pointer; font-family: inherit; }
+.ack-btn:hover { border-color: hsl(var(--ring)); }
+.ack-btn:disabled { opacity: 0.4; cursor: default; }
+.empty-state { text-align: center; padding: 3rem 1rem; color: hsl(var(--muted-foreground)); }
+.empty-state h3 { color: hsl(var(--foreground)); margin-bottom: 0.5rem; }
+.active-count { background: hsl(var(--red-fg) / 0.15); color: hsl(var(--red-fg)); padding: 0.12rem 0.5rem; border-radius: 9999px; font-size: 0.68rem; font-weight: 700; margin-left: 0.35rem; display: none; }
+.active-count.show { display: inline; }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>Alerts</h1>
+<p class="subtitle">Alert history — budget breaches, provider status, circuit breaker events</p>
+
+<div class="alerts-toolbar" id="alertToolbar">
+  <div class="segmented">
+    <button class="active" data-severity="all" onclick="setSeverity('all', this)">All</button>
+    <button data-severity="info" onclick="setSeverity('info', this)">Info</button>
+    <button data-severity="warning" onclick="setSeverity('warning', this)">Warning</button>
+    <button data-severity="critical" onclick="setSeverity('critical', this)">Critical</button>
+  </div>
+
+  <div class="segmented">
+    <button class="active" data-status="all" onclick="setStatus('all', this)">All</button>
+    <button data-status="firing" onclick="setStatus('firing', this)">Active <span class="active-count" id="activeBadge">0</span></button>
+    <button data-status="resolved" onclick="setStatus('resolved', this)">Resolved</button>
+  </div>
+
+  <div class="segmented">
+    <button class="active" data-rule="all" onclick="setRule('all', this)">All Rules</button>
+    <button data-rule="budget_breach" onclick="setRule('budget_breach', this)">Budget</button>
+    <button data-rule="provider_dead" onclick="setRule('provider_dead', this)">Provider</button>
+    <button data-rule="circuit_breaker_trip" onclick="setRule('circuit_breaker_trip', this)">Breaker</button>
+    <button data-rule="error_spike" onclick="setRule('error_spike', this)">Spike</button>
+  </div>
+
+  <span style="flex:1"></span>
+  <button class="btn-sm" onclick="loadAlerts()">🔄 Refresh</button>
+</div>
+
+<div class="table-wrap" style="overflow-x:auto">
+<table class="alerts-table">
+<thead>
+<tr>
+  <th>Time</th><th>Severity</th><th>Rule</th><th>Title</th>
+  <th>Status</th><th>Acknowledged</th><th></th>
+</tr>
+</thead>
+<tbody id="alertBody">
+<tr><td colspan="7" class="empty-state"><h3>Loading…</h3></td></tr>
+</tbody>
+</table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var currentSeverity = 'all';
+var currentStatus = 'all';
+var currentRule = 'all';
+var allAlerts = [];
+
+function setSeverity(v, el) {
+  currentSeverity = v;
+  document.querySelectorAll('[data-severity]').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  renderAlerts();
+}
+function setStatus(v, el) {
+  currentStatus = v;
+  document.querySelectorAll('[data-status]').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  renderAlerts();
+}
+function setRule(v, el) {
+  currentRule = v;
+  document.querySelectorAll('[data-rule]').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  renderAlerts();
+}
+
+function loadAlerts() {
+  api('GET', '/api/alerts?limit=200').then(function(d) {
+    allAlerts = d.alerts || [];
+    var active = allAlerts.filter(function(a) { return a.status === 'firing'; }).length;
+    var badge = document.getElementById('activeBadge');
+    badge.textContent = active;
+    badge.classList.toggle('show', active > 0);
+    renderAlerts();
+  });
+}
+
+function renderAlerts() {
+  var filtered = allAlerts;
+  if (currentSeverity !== 'all') filtered = filtered.filter(function(a) { return a.severity === currentSeverity; });
+  if (currentStatus !== 'all') filtered = filtered.filter(function(a) { return a.status === currentStatus; });
+  if (currentRule !== 'all') filtered = filtered.filter(function(a) { return a.rule === currentRule; });
+
+  var body = document.getElementById('alertBody');
+  if (filtered.length === 0) {
+    var span = allAlerts.length === 0 ? 7 : 7;
+    body.innerHTML = '<tr><td colspan="' + span + '" class="empty-state"><h3>No alerts found</h3><p>Alerts will appear here when triggered by config changes, provider failures, or budget thresholds.</p></td></tr>';
+    return;
+  }
+
+  body.innerHTML = filtered.map(function(a) {
+    var sevClass = 'badge-' + a.severity;
+    var statusClass = a.status === 'firing' ? 'badge-firing' : 'badge-resolved';
+    var ack = a.acknowledged ? '✓ ' + (a.acknowledged_at ? a.acknowledged_at.slice(0,16).replace('T',' ') : '') : '—';
+    var ackDisabled = a.acknowledged ? 'disabled' : '';
+    return '<tr onclick="toggleDetail(\'' + a.dedup_key + '\')">' +
+      '<td class="mono">' + (a.timestamp || '').slice(0,16).replace('T',' ') + '</td>' +
+      '<td><span class="badge-sev ' + sevClass + '">' + a.severity + '</span></td>' +
+      '<td>' + a.rule + '</td>' +
+      '<td>' + escapeHtml(a.title) + '</td>' +
+      '<td><span class="badge-sev ' + statusClass + '">' + a.status + '</span></td>' +
+      '<td>' + ack + '</td>' +
+      '<td><button class="ack-btn" ' + ackDisabled + ' onclick="event.stopPropagation();ackAlert(\'' + a.dedup_key + '\')">' + (a.acknowledged ? 'Ack\'d' : 'Ack') + '</button></td>' +
+      '</tr>' +
+      '<tr id="detail-' + a.dedup_key + '" class="alert-detail-row"><td colspan="7"><div class="alert-detail" id="detail-content-' + a.dedup_key + '">' +
+        '<div class="dl-row"><span class="dl-key">Message</span><span>' + escapeHtml(a.message) + '</span></div>' +
+        (a.metadata && Object.keys(a.metadata).length > 0 ? '<div class="dl-row"><span class="dl-key">Metadata</span><pre>' + JSON.stringify(a.metadata, null, 2) + '</pre></div>' : '') +
+        (a.resolved_at ? '<div class="dl-row"><span class="dl-key">Resolved</span><span>' + a.resolved_at.slice(0,16).replace('T',' ') + '</span></div>' : '') +
+      '</div></td></tr>';
+  }).join('');
+}
+
+function toggleDetail(key) {
+  var el = document.getElementById('detail-' + key);
+  if (!el) return;
+  el.classList.toggle('alert-detail-row-expanded');
+  var detail = document.getElementById('detail-content-' + key);
+  if (detail) detail.classList.toggle('open');
+}
+
+function ackAlert(dedupKey) {
+  api('POST', '/api/alerts/' + encodeURIComponent(dedupKey) + '/acknowledge').then(function(d) {
+    loadAlerts();
+  });
+}
+
+function escapeHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+loadAlerts();
+setInterval(loadAlerts, 30000); // auto-refresh every 30s
+</script>
+{% endblock %}

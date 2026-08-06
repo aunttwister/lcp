@@ -33,3 +33,9 @@ def render_logs_page(config, engine=None) -> str:
     """Render the Logs page (Jinja2)."""
     from .render import render_page
     return render_page("pages/logs.html", config, engine, active_page="logs")
+
+
+def render_alerts_page(config, engine=None) -> str:
+    """Render the Alerts page (Jinja2)."""
+    from .render import render_page
+    return render_page("pages/alerts.html", config, engine, active_page="alerts")

@@ -13,6 +13,7 @@ import ssl
 from datetime import datetime, timezone
 
 from .logging_config import get_logger
+from .models import Alert, get_session
 
 logger = get_logger("lcp.alerts")
 
@@ -20,7 +21,8 @@ logger = get_logger("lcp.alerts")
 class AlertManager:
     """Manages alert rules and webhook dispatch."""
 
-    def __init__(self):
+    def __init__(self, engine=None):
+        self._engine = engine
         self._config: dict = {
             "webhook_url": "",
             "webhook_secret": "",
@@ -34,7 +36,7 @@ class AlertManager:
                 "circuit_breaker_recovery": {"enabled": True, "min_severity": "info"},
             },
         }
-        self._alert_history: list[dict] = []
+        self._alert_history: list[dict] = []  # in-memory cache (bounded)
         self._active_alerts: dict[str, dict] = {}  # dedup_key -> alert
         self._last_fire: dict[str, float] = {}  # dedup_key -> timestamp for cooldown
         self._cooldown_seconds = 300  # 5 minutes
@@ -63,22 +65,46 @@ class AlertManager:
         return self._config
 
     def list_alerts(self, limit: int = 50, status: str | None = None) -> list[dict]:
-        """List alert history, newest first."""
-        alerts = self._alert_history
-        if status:
-            alerts = [a for a in alerts if a.get("status") == status]
-        return sorted(alerts, key=lambda a: a.get("timestamp", ""), reverse=True)[:limit]
+        """List alert history, newest first.
+
+        Reads from DB when an engine is bound; falls back to the in-memory
+        cache otherwise (backward compatible with engine-less usage).
+        """
+        if self._engine is None:
+            alerts = self._alert_history
+            if status:
+                alerts = [a for a in alerts if a.get("status") == status]
+            return sorted(alerts, key=lambda a: a.get("timestamp", ""), reverse=True)[:limit]
+        try:
+            with get_session(self._engine) as session:
+                query = session.query(Alert).order_by(Alert.timestamp.desc())
+                if status:
+                    query = query.filter(Alert.status == status)
+                rows = query.limit(limit).all()
+                return [_alert_to_dict(r) for r in rows]
+        except Exception as e:
+            logger.error("alert_list_failed", error=str(e))
+            return []
 
     def acknowledge(self, alert_id: str) -> bool:
         """Acknowledge an alert by its dedup key."""
-        for alert in self._alert_history:
-            if alert.get("dedup_key") == alert_id:
-                alert["acknowledged"] = True
-                alert["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         if alert_id in self._active_alerts:
             self._active_alerts[alert_id]["acknowledged"] = True
-            return True
-        return False
+            self._active_alerts[alert_id]["acknowledged_at"] = now
+        if self._engine is not None:
+            try:
+                with get_session(self._engine) as session:
+                    alert = session.query(Alert).filter(Alert.dedup_key == alert_id).first()
+                    if alert:
+                        alert.acknowledged = 1
+                        alert.acknowledged_at = now
+                        session.commit()
+                        return True
+            except Exception as e:
+                logger.error("alert_acknowledge_failed", error=str(e))
+                return False
+        return alert_id in self._active_alerts
 
     # ── Alert Firing ──────────────────────────────────────────────────────
 
@@ -130,7 +156,10 @@ class AlertManager:
         self._alert_history.append(alert)
         self._active_alerts[alert["dedup_key"]] = alert
 
-        # Keep history bounded
+        # Persist to DB
+        self._persist_alert(alert)
+
+        # Keep history bounded (in-memory cap only — DB handles its own)
         if len(self._alert_history) > 500:
             self._alert_history = self._alert_history[-500:]
 
@@ -140,19 +169,54 @@ class AlertManager:
 
     def resolve(self, dedup_key: str) -> bool:
         """Resolve an active alert."""
-        if dedup_key in self._active_alerts:
+        now = datetime.now(timezone.utc).isoformat()
+        found = dedup_key in self._active_alerts
+        if found:
             alert = self._active_alerts.pop(dedup_key)
             alert["status"] = "resolved"
-            alert["resolved_at"] = datetime.now(timezone.utc).isoformat()
-            # Update in history
-            for a in self._alert_history:
-                if a.get("dedup_key") == dedup_key:
-                    a["status"] = "resolved"
-                    a["resolved_at"] = alert["resolved_at"]
-            self._dispatch_webhook(alert)
-            logger.info("alert_resolved", dedup_key=dedup_key)
-            return True
-        return False
+            alert["resolved_at"] = now
+        # Update in DB
+        if self._engine is not None:
+            try:
+                with get_session(self._engine) as session:
+                    db_alert = session.query(Alert).filter(Alert.dedup_key == dedup_key).first()
+                    if db_alert:
+                        db_alert.status = "resolved"
+                        db_alert.resolved_at = now
+                        session.commit()
+                        logger.info("alert_resolved", dedup_key=dedup_key)
+                        self._dispatch_webhook(
+                            {k: v for k, v in db_alert.__dict__.items() if not k.startswith("_")}
+                        )
+                        return True
+                    # Not found in DB — fall back to in-memory result
+                    return found
+            except Exception as e:
+                logger.error("alert_resolve_failed", error=str(e))
+                return False
+        return found
+
+    def _persist_alert(self, alert: dict) -> None:
+        """Write alert to SQLite. Non-blocking — failures are logged not raised."""
+        if self._engine is None:
+            return
+        try:
+            with get_session(self._engine) as session:
+                db_alert = Alert(
+                    timestamp=alert["timestamp"],
+                    dedup_key=alert["dedup_key"],
+                    rule=alert["rule"],
+                    severity=alert["severity"],
+                    title=alert["title"],
+                    message=alert["message"],
+                    metadata_json=json.dumps(alert.get("metadata", {})),
+                    status=alert["status"],
+                    acknowledged=1 if alert.get("acknowledged") else 0,
+                )
+                session.add(db_alert)
+                session.commit()
+        except Exception as e:
+            logger.error("alert_persist_failed", error=str(e), dedup_key=alert.get("dedup_key"))
 
     def get_active_alerts(self) -> list[dict]:
         """Get currently active (firing) alerts."""
@@ -277,13 +341,42 @@ class AlertManager:
         return {"ok": True, "webhook_url": self._config.get("webhook_url", "")}
 
 
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+def _alert_to_dict(alert: "Alert") -> dict:
+    """Convert an Alert ORM object to a dict matching the legacy in-memory format."""
+    return {
+        "id": alert.id,
+        "dedup_key": alert.dedup_key,
+        "rule": alert.rule,
+        "severity": alert.severity,
+        "title": alert.title,
+        "message": alert.message,
+        "metadata": json.loads(alert.metadata_json) if alert.metadata_json else {},
+        "status": alert.status,
+        "acknowledged": bool(alert.acknowledged),
+        "acknowledged_at": alert.acknowledged_at,
+        "resolved_at": alert.resolved_at,
+        "timestamp": alert.timestamp,
+    }
+
+
 # ── Module-level singleton ────────────────────────────────────────────────
 _alert_manager: AlertManager | None = None
 
 
-def get_alert_manager() -> AlertManager:
+def get_alert_manager(engine=None) -> AlertManager:
     """Get or create the alert manager singleton."""
     global _alert_manager
     if _alert_manager is None:
-        _alert_manager = AlertManager()
+        _alert_manager = AlertManager(engine)
+    elif engine is not None and _alert_manager._engine is None:
+        _alert_manager._engine = engine
+    return _alert_manager
+
+
+def init_alert_manager(engine) -> AlertManager:
+    """Force-initialize the alert manager with an engine."""
+    global _alert_manager
+    _alert_manager = AlertManager(engine)
     return _alert_manager

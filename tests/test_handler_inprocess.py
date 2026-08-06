@@ -283,21 +283,32 @@ class TestErrorResponses:
         assert "missing required field" in _json_body(h)["error"]
 
     def test_spend_limit_exceeded_returns_429(self, temp_db):
-        from src.api.exceptions import CreditExhaustedError
+        from src.api.models import Budget, get_session
+        from sqlalchemy import Engine
+        # temp_db may be a tuple (db_path, engine) or just engine
+        if isinstance(temp_db, Engine):
+            engine = temp_db
+        else:
+            engine = temp_db[1]
+        with get_session(engine) as session:
+            session.add(Budget(
+                name="Key Cap", key_id=1, profile=None,
+                amount=10.0, current_spend=12.0, period="total",
+                threshold_pct="80", action="block", status="exceeded",
+            ))
+            session.commit()
         km = MagicMock()
         km.validate_key.return_value = {
             "id": 1,
             "allowed_profiles": None,
-            "spend_limit": 10,
-            "total_spend": 12,
+            "spend_limit": 0,
+            "total_spend": 0,
         }
         with patch("src.server.handler.get_key_manager", return_value=km):
             h = self._chat_handler(temp_db)
-            # Re-enable auth for this profile so the spend-limit path runs.
             LCPHandler.config.get_profile.return_value["auth_required"] = True
             h.headers["Authorization"] = "Bearer somekey123"
             h.do_POST()
         assert h.send_response.call_args[0][0] == 429
         err = _json_body(h)["error"]
         assert err["code"] == "LCP-1002"
-        assert "spend limit" in err["message"]

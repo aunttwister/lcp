@@ -147,12 +147,24 @@ alerts:
 
 ## Files Changed
 
-- `src/api/models.py` — add `Alert` table
-- `src/api/alert_manager.py` — DB-backed persistence, load config from DB
-- `src/server/endpoints.py` — budget CRUD, updated alert endpoints
-- `src/server/handler.py` — budget enforcement in pipeline
-- `src/ui/pages.py` — render alerts page
-- `src/ui/templates/jinja/pages/alerts.html` — **new**
-- `src/ui/templates/jinja/_sidebar.html` — alert badge
-- `config/gateway.yaml` — alerts section
-- `alembic/versions/004_add_alerts_table.py` — **new**
+- `src/api/models.py` — add `Alert` table ✅
+- `src/api/alert_manager.py` — DB-backed persistence, engine-bound singleton ✅
+- `src/server/endpoints.py` — budget CRUD ✅
+- `src/server/handler.py` — budget enforcement in pipeline (check_budget → 429, spend tracking → alerts) ✅
+- `src/ui/pages.py` — render alerts page (pending)
+- `src/ui/templates/jinja/pages/alerts.html` — **new** (pending)
+- `src/ui/templates/jinja/_sidebar.html` — alert badge (pending)
+- `config/gateway.yaml` — alerts section (pending)
+- `alembic/versions/004_add_alerts_table.py` — **new** ✅
+
+---
+
+## Phase 5: Extensive unit tests ✅ DONE
+
+| Step | File | What |
+|---|---|---|
+| 5.1 | `tests/test_budget_endpoints.py` | **NEW** — 30 tests: budget CRUD, budget status, `_check_budget_block` (exceeded/log/profile scoping/global/exceeded-status), `_increment_budget_spend` (increment/threshold crossing/multiple thresholds/exceeded/key budgets), `_track_budget_spend` (alert firing/critical) |
+| 5.2 | `tests/test_alert_manager_db.py` | **NEW** — 16 tests: DB persistence, metadata JSON, restart survival, status filtering, resolve/acknowledge updates, `_alert_to_dict`, singleton engine init, graceful degradation |
+| 5.3 | `tests/test_alert_manager.py` | Updated for engine-less fallback (in-memory `list_alerts`) |
+
+Full suite: **567 passed, 15 deselected** (integration tests deselected by default).

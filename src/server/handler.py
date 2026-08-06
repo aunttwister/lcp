@@ -22,6 +22,9 @@ from ..api.cost_estimator import estimate_from_request
 from ..api.prompt_cache import get_prompt_cache
 from ..api.token_verifier import get_token_verifier
 from ..api.key_manager import get_key_manager
+from ..api.alert_manager import get_alert_manager
+from ..api.models import Budget, ApiKey, get_session
+from sqlalchemy import or_
 from ..api.exceptions import (
     AllProvidersFailedError,
     AuthError,
@@ -39,6 +42,7 @@ from .endpoints import (
     ProfileEndpoints,
     KeyEndpoints,
     AlertEndpoints,
+    BudgetEndpoints,
     PluginEndpoints,
     UsageEndpoints,
     DashboardEndpoints,
@@ -71,6 +75,7 @@ class LCPHandler(
     ProfileEndpoints,
     KeyEndpoints,
     AlertEndpoints,
+    BudgetEndpoints,
     PluginEndpoints,
     UsageEndpoints,
     DashboardEndpoints,
@@ -244,6 +249,10 @@ class LCPHandler(
             self._serve_alerts_config()
         elif self.path == "/api/alerts/active":
             self._serve_alerts_active()
+        elif self.path == "/api/budgets":
+            self._serve_budgets_list()
+        elif self.path == "/api/budgets/status":
+            self._serve_budgets_status()
         elif self.path == "/api/cost-plugins/usage":
             self._serve_plugin_usage()
         elif self.path == "/api/cost-plugins/balances":
@@ -262,6 +271,8 @@ class LCPHandler(
             self._serve_usage_page()
         elif self.path == "/logs":
             self._serve_logs_page()
+        elif self.path == "/alerts":
+            self._serve_alerts_page()
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -299,6 +310,9 @@ class LCPHandler(
         elif self.path.startswith("/api/alerts/") and self.path.endswith("/acknowledge"):
             alert_id = self.path.split("/")[3]
             self._serve_alert_acknowledge(alert_id)
+            return
+        elif self.path == "/api/budgets":
+            self._serve_budget_create()
             return
 
         # Only handle chat completions
@@ -358,20 +372,32 @@ class LCPHandler(
                                            profile=profile, client_ip=self.client_address[0],
                                            key_id=key_info.get("id"))
                             raise ForbiddenError(f"key does not have access to profile '{profile}'")
-                    # Check spend limit
-                    limit = key_info.get("spend_limit", 0)
-                    spent = key_info.get("total_spend", 0)
-                    if limit > 0 and spent >= limit:
-                        logger.warning("auth_failed", reason="spend_limit_exceeded",
-                                       profile=profile, client_ip=self.client_address[0],
-                                       key_id=key_info.get("id"), spent=round(spent, 2),
-                                       limit=round(limit, 2))
-                        raise CreditExhaustedError(
-                            f"spend limit exceeded (${spent:.2f} / ${limit:.2f})"
-                        )
+                    # Check budget-enforced spend limit (budgets are single source of truth)
+                    if key_info.get("id"):
+                        blocked = self._check_budget_block(profile, key_info.get("id"))
+                        if blocked:
+                            logger.warning("auth_failed", reason="budget_exceeded",
+                                           profile=profile, client_ip=self.client_address[0],
+                                           key_id=key_info.get("id"), budget=blocked)
+                            raise CreditExhaustedError(
+                                f"Budget '{blocked}' has been exceeded for this key/profile"
+                            )
                     self._current_key_id = key_info.get("id")
         except (AuthError, CreditExhaustedError, ForbiddenError) as e:
             self._send_error(e)
+            return
+
+        # ── Budget enforcement (before LLM call) ──
+        blocked_budget = self._check_budget_block(
+            profile, getattr(self, '_current_key_id', None)
+        )
+        if blocked_budget:
+            self._send_json({
+                "error": {
+                    "code": "LCP-4290",
+                    "message": f"Budget '{blocked_budget}' has been exceeded. Further requests are blocked.",
+                }
+            }, 429)
             return
 
         try:
@@ -475,6 +501,15 @@ class LCPHandler(
                     }
                 record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools)
 
+                # Increment budget spend and fire alerts
+                try:
+                    self._track_budget_spend(
+                        profile, cost_info["cost"],
+                        getattr(self, '_current_key_id', None)
+                    )
+                except Exception:
+                    pass
+
                 total_wall_ms = int((time.time() - t0) * 1000)
                 logger.info(
                     "request_complete",
@@ -509,25 +544,13 @@ class LCPHandler(
             # Record cost
             record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools)
 
-            # Track spend on the API key and check limits
-            if hasattr(self, '_current_key_id') and self._current_key_id:
-                try:
-                    km = get_key_manager()
-                    if km:
-                        breach = km.record_spend(self._current_key_id, cost_info["cost"])
-                        if breach:
-                            from ..api.alert_manager import get_alert_manager
-                            am = get_alert_manager()
-                            am.fire(
-                                rule="budget_breach",
-                                severity="warning" if breach["threshold"] < 100 else "critical",
-                                title=f"Key '{breach['key_name']}' at {breach['spend_pct']}%",
-                                message=f"Key '{breach['key_name']}' has used {breach['spend_pct']}% of its ${breach['limit']:.2f} limit (${breach['current_spend']:.4f} spent).",
-                                dedup_key=f"key:{self._current_key_id}:t{breach['threshold']}",
-                                metadata=breach,
-                            )
-                except Exception:
-                    pass
+            # Budget spend tracking — unified: increments profile + key budgets
+            # and syncs ApiKey.total_spend with key-scoped budgets.
+            try:
+                key_id = getattr(self, '_current_key_id', None)
+                self._track_budget_spend(profile, cost_info["cost"], key_id)
+            except Exception:
+                pass
 
             # Send response with custom headers
             body_bytes = json.dumps(response_body).encode("utf-8")
@@ -605,6 +628,9 @@ class LCPHandler(
             self._serve_profile_update(profile)
         elif self.path == "/api/alerts/config":
             self._serve_alerts_config_update()
+        elif self.path.startswith("/api/budgets/") and len(self.path.split("/")) == 4:
+            budget_id = self.path.split("/")[3]
+            self._serve_budget_update(budget_id)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -621,5 +647,113 @@ class LCPHandler(
         elif self.path.startswith("/api/profiles/") and len(self.path.split("/")) == 4:
             profile = self.path.split("/")[3]
             self._serve_profile_delete(profile)
+        elif self.path.startswith("/api/budgets/") and len(self.path.split("/")) == 4:
+            budget_id = self.path.split("/")[3]
+            self._serve_budget_delete(budget_id)
         else:
             self._send_json({"error": "not found"}, 404)
+
+    # ── Budget Enforcement ────────────────────────────────────────────────
+
+    def _check_budget_block(self, profile: str, key_id: int | None = None) -> str | None:
+        """Check if any active budget with action=block is exceeded.
+
+        Returns the budget name if blocked, or None if allowed.
+        """
+        try:
+            with get_session(self.engine) as session:
+                query = session.query(Budget).filter(
+                    Budget.action == "block",
+                    Budget.status.in_(["active", "exceeded"]),
+                )
+                # Match budgets for this profile, or global (null profile)
+                query = query.filter(
+                    or_(Budget.profile == profile, Budget.profile.is_(None))
+                )
+                if key_id is not None:
+                    query = query.filter(
+                        or_(Budget.key_id == key_id, Budget.key_id.is_(None))
+                    )
+                else:
+                    query = query.filter(Budget.key_id.is_(None))
+
+                for budget in query.all():
+                    if budget.amount > 0 and budget.current_spend >= budget.amount:
+                        logger.warning(
+                            "budget_blocked",
+                            budget_name=budget.name,
+                            profile=profile,
+                            spend=budget.current_spend,
+                            limit=budget.amount,
+                        )
+                        return budget.name
+        except Exception as e:
+            logger.error("budget_check_failed", error=str(e))
+        return None
+
+    def _increment_budget_spend(self, profile: str, cost: float, key_id: int | None = None) -> list[dict]:
+        """Increment spend on matching budgets and return any threshold breaches."""
+        breaches = []
+        try:
+            with get_session(self.engine) as session:
+                query = session.query(Budget).filter(
+                    Budget.status == "active",
+                )
+                query = query.filter(
+                    or_(Budget.profile == profile, Budget.profile.is_(None))
+                )
+                if key_id is not None:
+                    query = query.filter(
+                        or_(Budget.key_id == key_id, Budget.key_id.is_(None))
+                    )
+                else:
+                    query = query.filter(Budget.key_id.is_(None))
+
+                for budget in query.all():
+                    old_spend = budget.current_spend
+                    budget.current_spend = round(old_spend + cost, 6)
+
+                    # Check thresholds
+                    if budget.amount > 0:
+                        old_pct = (old_spend / budget.amount) * 100
+                        new_pct = (budget.current_spend / budget.amount) * 100
+                        for t in [int(t) for t in budget.threshold_pct.split(",") if t]:
+                            if old_pct < t <= new_pct:
+                                breaches.append({
+                                    "budget_id": budget.id,
+                                    "budget_name": budget.name,
+                                    "threshold": t,
+                                    "spend_pct": round(new_pct, 1),
+                                    "limit": budget.amount,
+                                    "current_spend": budget.current_spend,
+                                })
+                    if budget.current_spend >= budget.amount and budget.amount > 0:
+                        budget.status = "exceeded"
+                        budget.last_alert_at = datetime.now(timezone.utc).isoformat()
+
+                    # Sync ApiKey.total_spend with key-scoped budget
+                    if budget.key_id is not None:
+                        key = session.query(ApiKey).filter(ApiKey.id == budget.key_id).first()
+                        if key:
+                            key.total_spend = budget.current_spend
+
+                session.commit()
+                return breaches
+        except Exception as e:
+            logger.error("budget_increment_failed", error=str(e))
+        return []
+
+    def _track_budget_spend(self, profile: str, cost: float, key_id: int | None = None) -> None:
+        """Increment budgets and fire alerts for any threshold breaches."""
+        breaches = self._increment_budget_spend(profile, cost, key_id)
+        am = get_alert_manager()
+        for breach in breaches:
+            severity = "critical" if breach["spend_pct"] >= 100 else "warning" if breach["spend_pct"] >= 80 else "info"
+            am.fire(
+                rule="budget_breach",
+                severity=severity,
+                title=f"Budget '{breach['budget_name']}' at {breach['spend_pct']}%",
+                message=f"Budget '{breach['budget_name']}' has reached {breach['spend_pct']}% of its ${breach['limit']:.2f} limit (${breach['current_spend']:.4f} spent).",
+                dedup_key=f"budget:{breach['budget_id']}:t{breach['threshold']}",
+                metadata=breach,
+            )

@@ -534,6 +534,22 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   padding-left: 0.125rem;
 }
 
+/* ── Sidebar alert badge ── */
+.sb-alert-badge {
+  display: inline-block;
+  background: #dc2626;
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 0.1rem 0.35rem;
+  border-radius: 9999px;
+  margin-left: 0.35rem;
+  line-height: 1.2;
+  vertical-align: middle;
+  min-width: 1.2em;
+  text-align: center;
+}
+
 /* ── Expandable Key Stacks ── */
 .lcp-stack {
   margin-bottom: 0.75rem !important;
@@ -693,3 +709,27 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   .header-row { flex-direction: column; gap: 0.5rem; }
   .header-plugin-badge { max-width: 100%; }
 }
+
+/* ── Budget cards on dashboard ── */
+.budget-section { margin-bottom: 1.5rem; }
+.budget-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.625rem; }
+.budget-card {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--card-border));
+  border-radius: var(--radius);
+  padding: 0.625rem 0.75rem;
+  transition: border-color 0.15s;
+}
+.budget-card:hover { border-color: hsl(var(--ring)); }
+.budget-card.exceeded { border-color: #dc2626; background: hsl(var(--card) / 0.7); }
+.bc-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; }
+.bc-name { font-size: 0.7rem; font-weight: 600; color: hsl(var(--foreground)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bc-profile { font-size: 0.55rem; color: hsl(var(--muted-foreground)); background: hsl(var(--secondary)); padding: 0.1rem 0.35rem; border-radius: 3px; text-transform: uppercase; }
+.budget-card.exceeded .bc-name { color: #fca5a5; }
+.bc-bar-wrap { height: 5px; background: hsl(var(--secondary)); border-radius: 3px; margin-bottom: 0.35rem; overflow: hidden; }
+.bc-bar { height: 100%; border-radius: 3px; background: hsl(var(--primary)); transition: width 0.3s; }
+.budget-card.exceeded .bc-bar { background: #dc2626; }
+.bc-footer { display: flex; justify-content: space-between; align-items: center; }
+.bc-pct { font-size: 0.65rem; font-weight: 600; color: hsl(var(--foreground)); }
+.bc-amount { font-size: 0.6rem; color: hsl(var(--muted-foreground)); }
+.budget-card.exceeded .bc-pct { color: #fca5a5; }

@@ -16,6 +16,7 @@
     <a href="/usage">Usage</a>
     <div class="sb-provider-rows" id="providerPluginRows"></div>
     <a href="/logs">Logs</a>
+    <a href="/alerts">Alerts <span id="sidebarAlertBadge" class="sb-alert-badge" style="display:none">0</span></a>
     <a href="/profiles">Profiles</a>
   </nav>
 </aside>
@@ -81,6 +82,30 @@
   </a>
   {% endfor %}
 </div>
+
+<!-- ── Budget Status Cards ── -->
+{% if budget_cards %}
+<div class="budget-section">
+  <h3 style="font-size:0.8rem;font-weight:600;margin-bottom:0.75rem;color:hsl(var(--foreground))">Budgets</h3>
+  <div class="budget-cards">
+  {% for bc in budget_cards %}
+    <div class="budget-card{% if bc.exceeded %} exceeded{% endif %}" title="{{ bc.name }} — {{ bc.profile }}">
+      <div class="bc-header">
+        <span class="bc-name">{{ bc.name }}</span>
+        <span class="bc-profile">{{ bc.profile }}</span>
+      </div>
+      <div class="bc-bar-wrap">
+        <div class="bc-bar" style="width:{{ [bc.spend_pct, 100] | min }}%"></div>
+      </div>
+      <div class="bc-footer">
+        <span class="bc-pct">{{ bc.spend_pct }}%</span>
+        <span class="bc-amount">${{ "%.2f"|format(bc.current_spend) }} / ${{ "%.2f"|format(bc.amount) }}</span>
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 <!-- ── Provider Edit Modal (opened from sidebar) ── -->
 <div class="modal-overlay dialog-overlay" id="provEditModal">

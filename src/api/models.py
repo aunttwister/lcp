@@ -125,6 +125,26 @@ class Budget(Base):
     last_alert_at = Column(String, nullable=True)
 
 
+# ── Alerting ────────────────────────────────────────────────────────────────
+
+class Alert(Base):
+    """Persisted alert for webhook notifications and UI history."""
+    __tablename__ = "alerts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+    dedup_key = Column(String, nullable=False, index=True)
+    rule = Column(String, nullable=False)
+    severity = Column(String, nullable=False)  # info, warning, critical
+    title = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    metadata_json = Column(Text, nullable=True)  # JSON blob
+    status = Column(String, default="firing")  # firing, resolved
+    acknowledged = Column(Integer, default=0)
+    acknowledged_at = Column(String, nullable=True)
+    resolved_at = Column(String, nullable=True)
+
+
 # ── Engine + session factory ───────────────────────────────────────────────
 
 def get_engine(db_path: str):

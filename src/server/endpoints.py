@@ -15,7 +15,7 @@ from ..api.circuit_breaker import get_circuit_breaker
 from ..api.key_manager import get_key_manager
 from ..api.alert_manager import get_alert_manager
 from ..api.cost_plugins import get_registry
-from ..api.models import get_session, Request as RequestModel
+from ..api.models import get_session, Request as RequestModel, Budget, ApiKey
 from ..api.prompt_cache import get_prompt_cache
 from ..api.token_verifier import get_token_verifier
 from ..ui.dashboard import render_dashboard
@@ -747,6 +747,157 @@ class AlertEndpoints:
         self._send_json(result)
 
 
+# ── Budget Management ────────────────────────────────────────────────────────
+
+class BudgetEndpoints:
+    """Budget CRUD and status."""
+
+    path: Any
+    engine: Any
+    _send_json: Any
+    _read_body: Any
+
+    def _serve_budgets_list(self):
+        """GET /api/budgets — list all budgets."""
+        try:
+            with get_session(self.engine) as session:
+                budgets = session.query(Budget).order_by(Budget.created_at.desc()).all()
+                result = []
+                for b in budgets:
+                    key_name = None
+                    if b.key_id:
+                        key = session.query(ApiKey).filter(ApiKey.id == b.key_id).first()
+                        key_name = key.name if key else None
+                    result.append({
+                        "id": b.id,
+                        "name": b.name,
+                        "key_id": b.key_id,
+                        "key_name": key_name,
+                        "profile": b.profile,
+                        "amount": b.amount,
+                        "current_spend": b.current_spend,
+                        "period": b.period,
+                        "threshold_pct": b.threshold_pct,
+                        "action": b.action,
+                        "status": b.status,
+                        "created_at": b.created_at,
+                        "last_alert_at": b.last_alert_at,
+                    })
+                self._send_json({"budgets": result})
+        except Exception as e:
+            logger.error("budgets_list_failed", error=str(e))
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_budget_create(self):
+        """POST /api/budgets — create a budget."""
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        try:
+            with get_session(self.engine) as session:
+                budget = Budget(
+                    name=body.get("name", ""),
+                    key_id=body.get("key_id") or None,
+                    profile=body.get("profile") or None,
+                    amount=float(body.get("amount", 0)),
+                    period=body.get("period", "monthly"),
+                    threshold_pct=body.get("threshold_pct", "80"),
+                    action=body.get("action", "log"),
+                )
+                session.add(budget)
+                session.commit()
+                self._send_json({"ok": True, "budget": {"id": budget.id, "name": budget.name}})
+        except Exception as e:
+            logger.error("budget_create_failed", error=str(e))
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_budget_update(self, budget_id: str):
+        """PUT /api/budgets/{id} — update a budget."""
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        try:
+            bid = int(budget_id)
+        except ValueError:
+            self._send_json({"error": "invalid budget id"}, 400)
+            return
+        try:
+            with get_session(self.engine) as session:
+                budget = session.query(Budget).filter(Budget.id == bid).first()
+                if not budget:
+                    self._send_json({"error": "budget not found"}, 404)
+                    return
+                if "name" in body:
+                    budget.name = body["name"]
+                if "key_id" in body:
+                    budget.key_id = body["key_id"] or None
+                if "profile" in body:
+                    budget.profile = body["profile"] or None
+                if "amount" in body:
+                    budget.amount = float(body["amount"])
+                if "period" in body:
+                    budget.period = body["period"]
+                if "threshold_pct" in body:
+                    budget.threshold_pct = body["threshold_pct"]
+                if "action" in body:
+                    budget.action = body["action"]
+                if "status" in body:
+                    budget.status = body["status"]
+                session.commit()
+                self._send_json({"ok": True, "updated": budget_id})
+        except Exception as e:
+            logger.error("budget_update_failed", error=str(e))
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_budget_delete(self, budget_id: str):
+        """DELETE /api/budgets/{id} — delete a budget."""
+        try:
+            bid = int(budget_id)
+        except ValueError:
+            self._send_json({"error": "invalid budget id"}, 400)
+            return
+        try:
+            with get_session(self.engine) as session:
+                budget = session.query(Budget).filter(Budget.id == bid).first()
+                if not budget:
+                    self._send_json({"error": "budget not found"}, 404)
+                    return
+                session.delete(budget)
+                session.commit()
+                self._send_json({"ok": True, "deleted": bid})
+        except Exception as e:
+            logger.error("budget_delete_failed", error=str(e))
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_budgets_status(self):
+        """GET /api/budgets/status — current spend vs budget for all active budgets."""
+        try:
+            with get_session(self.engine) as session:
+                budgets = session.query(Budget).filter(Budget.status == "active").all()
+                result = []
+                for b in budgets:
+                    pct = (b.current_spend / b.amount * 100) if b.amount > 0 else 0
+                    result.append({
+                        "id": b.id,
+                        "name": b.name,
+                        "profile": b.profile,
+                        "amount": b.amount,
+                        "current_spend": b.current_spend,
+                        "spend_pct": round(pct, 1),
+                        "period": b.period,
+                        "action": b.action,
+                        "thresholds": [int(t) for t in b.threshold_pct.split(",") if t],
+                    })
+                self._send_json({"budgets": result})
+        except Exception as e:
+            logger.error("budgets_status_failed", error=str(e))
+            self._send_json({"error": str(e)}, 500)
+
+
 # ── Cost Plugin API ──────────────────────────────────────────────────────────
 
 class PluginEndpoints:
@@ -1040,6 +1191,15 @@ class DashboardEndpoints:
         """Server-rendered Logs page."""
         from ..ui.pages import render_logs_page
         html = render_logs_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_alerts_page(self):
+        """Server-rendered Alerts page."""
+        from ..ui.pages import render_alerts_page
+        html = render_alerts_page(self.config, self.engine)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
