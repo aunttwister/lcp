@@ -4,18 +4,18 @@
 
 ---
 
-1. **Persist OpenCode database across redeployments**
+1. **~~Persist OpenCode database across redeployments~~** ❌ CANCELLED
 
-   The OpenCode plugin's SQLite DB must survive container restarts/redeploys.
+   ~~The OpenCode plugin's SQLite DB must survive container restarts/redeploys.
    Ensure the DB path is bind-mounted correctly in `docker-compose.yml` or
-   falls under a persistent volume.
+   falls under a persistent volume.~~
 
-2. **OpenCode DB validation + show rolling/weekly/monthly tokens**
+2. **~~OpenCode DB validation + show rolling/weekly/monthly tokens~~** ❌ CANCELLED
 
-   If the OpenCode DB file doesn't exist but the provider is configured, the
+   ~~If the OpenCode DB file doesn't exist but the provider is configured, the
    gateway should surface a clear error/warning. Currently the dashboard shows
    no token data (rolling, weekly, monthly) in this state — need proper
-   resolution: either auto-create the DB schema on first use, or fail loudly.
+   resolution: either auto-create the DB schema on first use, or fail loudly.~~
 
 3. **~~Decouple cost plugin filters (OpenCode vs DeepSeek)~~** ✅ DONE
 
@@ -30,10 +30,16 @@
    Document what they represent (estimated savings? cache hits? something else?)
    and consider a clearer label or tooltip in the UI.~~
 
-5. **Redesign the Summary page**
+5. **~~Redesign the Summary page~~** ✅ DONE
 
-   The current summary view looks broken / chaotic. Needs a cleaner layout
-   with meaningful grouped stats, not a raw data dump.
+   ~~The current summary view looks broken / chaotic. Needs a cleaner layout
+   with meaningful grouped stats, not a raw data dump.~~
+
+   Reworked the Summary page:
+   - Profile filter moved from the sidebar into a right-aligned dropdown.
+   - Removed the Daily Costs and Recent Requests tables.
+   - Replaced old summary cards with key metric cards (Total Cost, Requests,
+     Cache Ratio, Tokens) and clickable per-profile mini cards.
 
 6. **~~Extract errors/logs into a dedicated "Logs" navbar page~~** ✅ DONE
 
