@@ -12,6 +12,16 @@ from .logging_config import get_logger
 
 logger = get_logger("lcp.circuit_breaker")
 
+# Consecutive-failure weight per error type. Auth failures are permanent
+# (a rejected key won't self-heal) so they should trip the breaker faster.
+_ERROR_WEIGHTS = {
+    "ProviderAuthError": 3,
+    "ProviderTimeoutError": 1,
+    "ProviderRateLimitError": 1,
+    "ProviderInternalError": 1,
+    "ProviderBadRequestError": 1,
+}
+
 
 class CircuitBreaker:
     """Tracks provider health with configurable thresholds."""
@@ -36,14 +46,43 @@ class CircuitBreaker:
             }
         return self._health[key]
 
+    def status_of(self, provider: str, base_url: str, profile: str) -> str:
+        """Return the current status string ('healthy'|'degraded'|'dead')."""
+        return self.get_health(provider, base_url, profile)["status"]
+
     def is_available(self, provider: str, base_url: str, profile: str) -> bool:
-        """Check if provider is available (not tripped)."""
+        """Check if provider is available (not tripped).
+
+        Also implements the half-open ladder: when a cooldown expires the
+        provider is promoted one level (dead → degraded → healthy) instead of
+        jumping straight back to healthy. A single success during degraded
+        promotes to healthy; a single failure re-trips to dead.
+        """
         h = self.get_health(provider, base_url, profile)
         if h["status"] == "healthy":
             return True
-        if h["tripped_until"] and time.time() >= h["tripped_until"]:
+        if h["tripped_until"] is not None and time.time() >= h["tripped_until"]:
+            # Cooldown expired — promote one level and allow a probe request.
+            if h["status"] == "dead":
+                self._promote(h, "degraded")   # leaves tripped_until = None
+            else:  # degraded → healthy after a quiet cooldown
+                self._promote(h, "healthy")
+            return True
+        if h["status"] == "degraded" and h["tripped_until"] is None:
+            # A promoted probe provider is available for its probe request.
             return True
         return False
+
+    def _promote(self, h: dict, new_status: str) -> None:
+        """Promote a provider one step up the health ladder (half-open probe)."""
+        old_status = h["status"]
+        h["status"] = new_status
+        h["tripped_until"] = None
+        logger.info(
+            "circuit_breaker_probe",
+            old_status=old_status,
+            new_status=new_status,
+        )
 
     def record_success(self, provider: str, base_url: str, profile: str) -> None:
         """Record a successful request — resets failure count."""
@@ -63,16 +102,26 @@ class CircuitBreaker:
                 new_status="healthy",
             )
 
-    def record_failure(self, provider: str, base_url: str, profile: str) -> None:
-        """Record a failed request — may trip circuit breaker."""
+    def record_failure(self, provider: str, base_url: str, profile: str,
+                       error_type: str | None = None) -> None:
+        """Record a failed request — may trip circuit breaker.
+
+        ``error_type`` is the exception class name (e.g. 'ProviderAuthError').
+        It maps to a failure weight: permanent failures (auth) trip the breaker
+        faster than transient ones.
+        """
         cb_cfg = self._config.circuit_breaker
         h = self.get_health(provider, base_url, profile)
         old_status = h["status"]
-        h["consecutive_failures"] += 1
+        weight = _ERROR_WEIGHTS.get(error_type or "", 1)
+        h["consecutive_failures"] += weight
         h["last_failure"] = datetime.now(timezone.utc).isoformat()
         n = h["consecutive_failures"]
         new_status = old_status
         if n >= cb_cfg["failures_dead"]:
+            # A dead provider whose cooldown expired is promoted to 'degraded'
+            # for a probe; its failure count is already ≥ threshold, so a single
+            # probe failure naturally re-trips it to dead.
             h["status"] = "dead"
             h["tripped_until"] = time.time() + cb_cfg["dead_cooldown_seconds"]
             new_status = "dead"
@@ -91,6 +140,7 @@ class CircuitBreaker:
                 old_status=old_status,
                 new_status=new_status,
                 consecutive_failures=n,
+                error_type=error_type,
             )
 
     def get_all_health(self) -> dict:

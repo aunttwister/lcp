@@ -146,3 +146,82 @@ class TestGetAllHealth:
         cb1 = get_circuit_breaker(cfg)
         cb2 = get_circuit_breaker()
         assert cb1 is cb2
+
+
+class TestFailureWeighting:
+    """Auth failures (weight 3) trip the breaker faster than transient errors."""
+
+    def test_auth_failures_trip_dead_with_fewer_attempts(self, cb):
+        # 2 auth failures × weight 3 = 6 >= failures_dead(6) → dead in 2 calls
+        cb.record_failure("w", "https://x", "l2", error_type="ProviderAuthError")
+        cb.record_failure("w", "https://x", "l2", error_type="ProviderAuthError")
+        assert cb.status_of("w", "https://x", "l2") == "dead"
+
+    def test_transient_failures_need_full_threshold(self, cb):
+        # 2 transient failures × weight 1 = 2 < failures_degraded(3) → healthy
+        cb.record_failure("w", "https://x", "l2", error_type="ProviderTimeoutError")
+        cb.record_failure("w", "https://x", "l2", error_type="ProviderInternalError")
+        assert cb.status_of("w", "https://x", "l2") == "healthy"
+
+    def test_mixed_weights_accumulate(self, cb):
+        # 1 auth (3) + 1 internal (1) = 4 >= failures_degraded(3) → degraded
+        cb.record_failure("w", "https://x", "l2", error_type="ProviderAuthError")
+        cb.record_failure("w", "https://x", "l2", error_type="ProviderInternalError")
+        assert cb.status_of("w", "https://x", "l2") == "degraded"
+
+    def test_unknown_error_type_uses_weight_one(self, cb):
+        cb.record_failure("w", "https://x", "l2", error_type="SomeWeirdError")
+        assert cb.status_of("w", "https://x", "l2") == "healthy"
+        assert cb.get_health("w", "https://x", "l2")["consecutive_failures"] == 1
+
+
+class TestHalfOpenLadder:
+    """Dead → degraded (probe) → healthy on success, dead again on failure."""
+
+    def _drive_to_dead(self, cb, provider="probe"):
+        for _ in range(6):
+            cb.record_failure(provider, "https://x", "l2")
+        assert cb.status_of(provider, "https://x", "l2") == "dead"
+
+    def test_dead_promotes_to_degraded_after_cooldown(self, cb):
+        self._drive_to_dead(cb)
+        real_now = time.time()
+        with patch("time.time", return_value=real_now + 60):
+            assert cb.is_available("probe", "https://x", "l2") is True
+        assert cb.status_of("probe", "https://x", "l2") == "degraded"
+
+    def test_degraded_probe_success_promotes_to_healthy(self, cb):
+        self._drive_to_dead(cb)
+        real_now = time.time()
+        with patch("time.time", return_value=real_now + 60):
+            cb.is_available("probe", "https://x", "l2")  # → degraded
+        cb.record_success("probe", "https://x", "l2")
+        assert cb.status_of("probe", "https://x", "l2") == "healthy"
+        assert cb.get_health("probe", "https://x", "l2")["consecutive_failures"] == 0
+
+    def test_degraded_probe_failure_retrips_to_dead(self, cb):
+        self._drive_to_dead(cb)
+        real_now = time.time()
+        with patch("time.time", return_value=real_now + 60):
+            cb.is_available("probe", "https://x", "l2")  # → degraded
+        cb.record_failure("probe", "https://x", "l2", error_type="ProviderInternalError")
+        assert cb.status_of("probe", "https://x", "l2") == "dead"
+
+    def test_degraded_probe_remains_available_on_repeated_checks(self, cb):
+        """A promoted probe provider stays available across is_available calls."""
+        self._drive_to_dead(cb)
+        real_now = time.time()
+        with patch("time.time", return_value=real_now + 60):
+            assert cb.is_available("probe", "https://x", "l2") is True
+            assert cb.is_available("probe", "https://x", "l2") is True
+        assert cb.status_of("probe", "https://x", "l2") == "degraded"
+
+    def test_degraded_cooldown_expiry_promotes_to_healthy(self, cb):
+        # 3 failures → degraded (cooldown 2s). Past cooldown → healthy.
+        for _ in range(3):
+            cb.record_failure("up", "https://x", "l2")
+        assert cb.status_of("up", "https://x", "l2") == "degraded"
+        real_now = time.time()
+        with patch("time.time", return_value=real_now + 10):
+            assert cb.is_available("up", "https://x", "l2") is True
+        assert cb.status_of("up", "https://x", "l2") == "healthy"

@@ -8,13 +8,10 @@ from typing import Any
 import structlog
 import yaml
 
+from .exceptions import ConfigError
 from .logging_config import get_logger
 
 logger = get_logger("lcp.config")
-
-
-class ConfigError(Exception):
-    """Configuration validation error."""
 
 
 class Config:
@@ -98,6 +95,17 @@ class Config:
     @property
     def circuit_breaker(self) -> dict:
         return self._data["circuit_breaker"]
+
+    @property
+    def retry(self) -> dict:
+        """Per-provider retry config, with sensible defaults when absent."""
+        return self._data.get("retry", {
+            "max_attempts": 3,
+            "backoff_base": 0.5,
+            "backoff_multiplier": 2,
+            "max_backoff": 10,
+            "jitter": True,
+        })
 
     @property
     def database(self) -> dict:

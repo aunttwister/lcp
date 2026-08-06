@@ -154,7 +154,10 @@ class TestAuthEnforcement:
         h.do_POST()
         assert _status(h) == 401
         body = _json_body(h)
-        assert "API key required" in body.get("error", "")
+        err = body.get("error", {})
+        assert isinstance(err, dict)
+        assert err.get("code") == "LCP-1001"
+        assert "API key required" in err.get("message", "")
 
     def test_rejects_invalid_key(self, temp_db):
         """A bad API key should get 401."""
@@ -185,6 +188,11 @@ class TestAuthEnforcement:
                         headers={"Authorization": f"Bearer {result['key']}"})
         h.do_POST()
         assert _status(h) == 403
+        body = _json_body(h)
+        err = body.get("error", {})
+        assert isinstance(err, dict)
+        assert err.get("code") == "LCP-1003"
+        assert "access to profile" in err.get("message", "")
 
     def test_allows_public_profile(self, temp_db):
         """A profile with auth_required=false should allow access without key."""

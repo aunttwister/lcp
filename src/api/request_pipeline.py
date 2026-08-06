@@ -6,19 +6,23 @@ Handles the full request flow:
 
 import json
 import os
+import random
 import time
 import traceback
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from typing import Callable, TypeVar
 
 from .circuit_breaker import get_circuit_breaker
 from .cost_estimator import estimate_from_request
 from .cost_plugins import get_registry, init_plugins
 from .exceptions import (
     AllProvidersFailedError,
+    ConfigError,
     ProviderAuthError,
     ProviderBadRequestError,
+    ProviderInternalError,
     ProviderRateLimitError,
     ProviderTimeoutError,
     ToolBlockedError,
@@ -29,6 +33,9 @@ from .prompt_cache import get_prompt_cache
 from .token_verifier import get_token_verifier
 
 logger = get_logger("lcp.pipeline")
+
+# Generic return type for call_with_retry — it returns whatever request_fn returns.
+T = TypeVar("T")
 
 
 # ── Tool Stripping ───────────────────────────────────────────────────────────
@@ -355,9 +362,80 @@ def forward_request(provider_cfg: dict, body: dict, config):
             raise ProviderBadRequestError(
                 f"Provider {provider_cfg['provider']} HTTP {status}: {error_body}"
             )
+        elif status >= 500:
+            # 5xx — provider-side transient failure. Distinct from auth so the
+            # circuit breaker and retry logic can treat it appropriately.
+            raise ProviderInternalError(
+                f"Provider {provider_cfg['provider']} HTTP {status}: {error_body}"
+            )
         raise ProviderAuthError(f"Provider {provider_cfg['provider']} HTTP {status}: {error_body}")
     except urllib.error.URLError as e:
         raise ProviderTimeoutError(f"Provider {provider_cfg['provider']} unreachable: {e.reason}")
+
+
+def call_with_retry(request_fn: Callable[[], T], retry_cfg=None) -> T:
+    """Call request_fn, retrying transient provider errors (5xx / 429) with backoff.
+
+    ``retry_cfg`` is a dict with keys: max_attempts, backoff_base,
+    backoff_multiplier, max_backoff, jitter. When missing or empty, a single
+    attempt is made (no retry) — preserving prior behavior for callers that
+    don't opt in.
+
+    Retryable errors: ``ProviderInternalError`` (5xx), ``ProviderRateLimitError``
+    (429) — transient, worth re-attempting.
+
+    Non-retryable errors propagate immediately: ``ProviderBadRequestError``
+    (the body is wrong — retrying can't help), ``ProviderAuthError`` (the key is
+    rejected — retrying won't fix it), ``ProviderTimeoutError`` (provider may be
+    down — the chain fallback handles it instead).
+
+    Returns whatever ``request_fn`` returns on success; re-raises the last
+    retryable error once attempts are exhausted.
+    """
+    retry_cfg = retry_cfg or {}
+    max_attempts = max(1, int(retry_cfg.get("max_attempts", 1)))
+    backoff_base = float(retry_cfg.get("backoff_base", 0.5))
+    backoff_multiplier = float(retry_cfg.get("backoff_multiplier", 2))
+    max_backoff = float(retry_cfg.get("max_backoff", 10))
+    jitter = bool(retry_cfg.get("jitter", True))
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return request_fn()
+        except (ProviderInternalError, ProviderRateLimitError) as e:
+            if attempt >= max_attempts:
+                # All retryable attempts exhausted — surface the last error so
+                # the chain fallback (or caller) can decide what to do.
+                raise
+            delay = min(backoff_base * (backoff_multiplier ** (attempt - 1)), max_backoff)
+            if jitter:
+                delay *= random.uniform(0.5, 1.5)
+            logger.info(
+                "provider_retry",
+                attempt=attempt,
+                max_attempts=max_attempts,
+                delay_ms=int(delay * 1000),
+                error=str(e),
+            )
+            time.sleep(delay)
+    # Unreachable — the loop body always returns (success) or re-raises, because
+    # max_attempts is clamped to >= 1. Kept for the type checker's benefit.
+    raise RuntimeError("retry loop exited unexpectedly")  # pragma: no cover
+
+
+def _has_healthy_alternative(cb, chain: list[dict], profile_name: str,
+                             start_idx: int, config) -> bool:
+    """Return True if any chain step after start_idx has a healthy provider.
+
+    Used for degraded-provider gating: if a degraded provider is next in line
+    but a healthy provider is coming up, skip the degraded one.
+    """
+    for step in chain[start_idx + 1:]:
+        p = step["provider"]
+        url = step.get("base_url") or config.providers.get(p, {}).get("api_base", "")
+        if cb.status_of(p, url, profile_name) == "healthy":
+            return True
+    return False
 
 
 def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple[dict, int, str, str]:
@@ -402,6 +480,18 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
             errors.append(f"{provider_name}: circuit breaker open")
             continue
 
+        # Degraded gating — prefer healthy alternatives over a degraded provider.
+        # Only route to degraded when no healthy option remains in the chain.
+        if cb.status_of(provider_name, base_url, profile_name) == "degraded" \
+                and _has_healthy_alternative(cb, profile_cfg["chain"], profile_name, i, config):
+            logger.warning(
+                "provider_degraded_skipped",
+                provider=provider_name,
+                profile=profile_name,
+            )
+            errors.append(f"{provider_name}: degraded (healthy alternative available)")
+            continue
+
         # Set model in body
         body["model"] = model
 
@@ -425,9 +515,18 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
             "base_url": base_url,
         }
 
+        # Per-provider retry config (5xx/429 retried with backoff). Real Config
+        # objects expose .retry; mocks without it fall back to a single attempt.
+        retry_cfg = getattr(config, "retry", None)
+        if not isinstance(retry_cfg, dict):
+            retry_cfg = {}
+
         try:
             t0 = time.time()
-            resp, status = forward_request(step_with_key, body, config)
+            resp, status = call_with_retry(
+                lambda: forward_request(step_with_key, body, config),
+                retry_cfg,
+            )
             hop_ms = int((time.time() - t0) * 1000)
             cb.record_success(provider_name, base_url, profile_name)
             logger.info(
@@ -444,7 +543,8 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
             # Bad request — the problem is in the body, not the provider.
             # Falling back to another provider just wastes attempts.
             # Re-raise immediately so the client sees the real error.
-            cb.record_failure(provider_name, base_url, profile_name)
+            cb.record_failure(provider_name, base_url, profile_name,
+                              error_type=type(e).__name__)
             logger.error(
                 "chain_bad_request",
                 profile=profile_name,
@@ -457,8 +557,10 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
             raise AllProvidersFailedError(
                 f"Provider {provider_name} rejected the request as invalid: {e}"
             ) from e
-        except (ProviderTimeoutError, ProviderAuthError, ProviderRateLimitError) as e:
-            cb.record_failure(provider_name, base_url, profile_name)
+        except (ProviderTimeoutError, ProviderAuthError, ProviderRateLimitError,
+                ProviderInternalError) as e:
+            cb.record_failure(provider_name, base_url, profile_name,
+                              error_type=type(e).__name__)
             errors.append(f"{provider_name}: {e}")
             logger.warning(
                 "chain_fallback",
@@ -470,20 +572,20 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
                 error=str(e),
                 next=profile_cfg["chain"][i + 1]["provider"] if i + 1 < chain_len else "none",
             )
-        except Exception as e:
-            # Catch-all for config errors, network issues, etc.
-            # Report them but still try the next provider in the chain.
-            cb.record_failure(provider_name, base_url, profile_name)
+        except ConfigError as e:
+            # Provider config problem (e.g. missing API key env var) — this
+            # provider can't work, but the next one might. Fall back.
+            cb.record_failure(provider_name, base_url, profile_name,
+                              error_type="ConfigError")
             errors.append(f"{provider_name}: {e}")
             logger.error(
-                "chain_unexpected_error",
+                "chain_config_error",
                 profile=profile_name,
                 provider=provider_name,
                 model=model,
                 attempt=i + 1,
                 chain_len=chain_len,
                 error=str(e),
-                next=profile_cfg["chain"][i + 1]["provider"] if i + 1 < chain_len else "none",
             )
 
     raise AllProvidersFailedError(f"All providers failed for {profile_name}: {'; '.join(errors)}")

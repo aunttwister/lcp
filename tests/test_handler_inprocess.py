@@ -76,6 +76,12 @@ def _get_written_bytes(handler):
     return b"".join(written)
 
 
+def _json_body(handler):
+    """Parse the last JSON body written to wfile."""
+    raw = _get_written_bytes(handler)
+    return json.loads(raw.decode("utf-8"))
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # do_GET tests
 # ═══════════════════════════════════════════════════════════════════════
@@ -187,3 +193,111 @@ class TestDoPost:
 
         h.do_POST()
         assert h.send_response.called
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Structured error response tests
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestErrorResponses:
+    """do_POST error paths return structured {code, message} payloads."""
+
+    def _chat_handler(self, temp_db):
+        body = {"messages": [{"role": "user", "content": "test"}]}
+        body_bytes = json.dumps(body).encode()
+        h = _TestHandler("/l2/chat/completions", method="POST", engine=temp_db)
+        h.rfile.read = MagicMock(return_value=body_bytes)
+        h.headers = {"Content-Length": str(len(body_bytes))}
+        LCPHandler.config.get_profile = MagicMock(return_value={
+            "chain": [{"provider": "test", "model": "test-model", "base_url": "http://t"}],
+            "forbidden_tools": [],
+            "auth_required": False,
+        })
+        LCPHandler.config.providers = {"test": {"base_url": "http://t"}}
+        LCPHandler.config.get_pricing = MagicMock(return_value=None)
+        return h
+
+    def test_provider_bad_request_returns_structured_400(self, temp_db):
+        from src.api.exceptions import ProviderBadRequestError
+        h = self._chat_handler(temp_db)
+        with patch("src.server.handler.try_chain",
+                   side_effect=ProviderBadRequestError("model 'x' not found")):
+            h.do_POST()
+        assert h.send_response.call_args[0][0] == 400
+        err = _json_body(h)["error"]
+        assert err["code"] == "LCP-2004"
+        assert "model 'x' not found" in err["message"]
+
+    def test_bad_request_message_redacts_api_keys(self, temp_db):
+        from src.api.exceptions import ProviderBadRequestError
+        h = self._chat_handler(temp_db)
+        with patch("src.server.handler.try_chain",
+                   side_effect=ProviderBadRequestError(
+                       "HTTP 400: sk-abcdef1234567890 is invalid")):
+            h.do_POST()
+        err = _json_body(h)["error"]
+        assert err["code"] == "LCP-2004"
+        assert "sk-abcdef1234567890" not in err["message"]
+        assert "[REDACTED]" in err["message"]
+
+    def test_all_providers_failed_does_not_leak_internals(self, temp_db):
+        from src.api.exceptions import AllProvidersFailedError
+        h = self._chat_handler(temp_db)
+        with patch("src.server.handler.try_chain",
+                   side_effect=AllProvidersFailedError(
+                       "All providers failed for l2: secretco: HTTP 500: sk-abc123secret")):
+            h.do_POST()
+        assert h.send_response.call_args[0][0] == 502
+        err = _json_body(h)["error"]
+        assert err["code"] == "LCP-3001"
+        assert "secretco" not in err["message"]
+        assert "sk-abc123secret" not in err["message"]
+        assert "providers failed" in err["message"]
+
+    def test_provider_timeout_returns_504(self, temp_db):
+        from src.api.exceptions import ProviderTimeoutError
+        h = self._chat_handler(temp_db)
+        with patch("src.server.handler.try_chain",
+                   side_effect=ProviderTimeoutError("upstream unreachable")):
+            h.do_POST()
+        assert h.send_response.call_args[0][0] == 504
+        err = _json_body(h)["error"]
+        assert err["code"] == "LCP-2001"
+
+    def test_unhandled_exception_returns_500_structured(self, temp_db):
+        h = self._chat_handler(temp_db)
+        with patch("src.server.handler.try_chain", side_effect=RuntimeError("boom")):
+            h.do_POST()
+        assert h.send_response.call_args[0][0] == 500
+        err = _json_body(h)["error"]
+        assert err["code"] == "LCP-5001"
+        assert "internal error" in err["message"]
+
+    def test_missing_messages_returns_400(self, temp_db):
+        h = self._chat_handler(temp_db)
+        h.rfile.read = MagicMock(return_value=b"{}")
+        h.headers = {"Content-Length": "2"}
+        h.do_POST()
+        assert h.send_response.call_args[0][0] == 400
+        # Client-input validation errors keep the flat format (not structured).
+        assert "missing required field" in _json_body(h)["error"]
+
+    def test_spend_limit_exceeded_returns_429(self, temp_db):
+        from src.api.exceptions import CreditExhaustedError
+        km = MagicMock()
+        km.validate_key.return_value = {
+            "id": 1,
+            "allowed_profiles": None,
+            "spend_limit": 10,
+            "total_spend": 12,
+        }
+        with patch("src.server.handler.get_key_manager", return_value=km):
+            h = self._chat_handler(temp_db)
+            # Re-enable auth for this profile so the spend-limit path runs.
+            LCPHandler.config.get_profile.return_value["auth_required"] = True
+            h.headers["Authorization"] = "Bearer somekey123"
+            h.do_POST()
+        assert h.send_response.call_args[0][0] == 429
+        err = _json_body(h)["error"]
+        assert err["code"] == "LCP-1002"
+        assert "spend limit" in err["message"]

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import time
 import traceback
 from datetime import datetime, timezone
@@ -21,7 +22,16 @@ from ..api.cost_estimator import estimate_from_request
 from ..api.prompt_cache import get_prompt_cache
 from ..api.token_verifier import get_token_verifier
 from ..api.key_manager import get_key_manager
-from ..api.exceptions import ToolBlockedError, AllProvidersFailedError, ProviderBadRequestError
+from ..api.exceptions import (
+    AllProvidersFailedError,
+    AuthError,
+    CreditExhaustedError,
+    ForbiddenError,
+    LCPError,
+    ProviderBadRequestError,
+    ProviderError,
+    ToolBlockedError,
+)
 from .sse_helpers import extract_last_sse_chunk, estimate_cost_from_tokens
 from .endpoints import (
     HealthEndpoints,
@@ -35,6 +45,24 @@ from .endpoints import (
 )
 
 logger = get_logger("lcp.server")
+
+# Redact things that look like API keys / bearer tokens before surfacing any
+# provider error text to a client.
+_SENSITIVE_PATTERN = re.compile(
+    r"(sk-[A-Za-z0-9_-]{6,}|Bearer\s+[A-Za-z0-9._~+/=-]{8,})",
+    re.IGNORECASE,
+)
+_MAX_CLIENT_ERROR_LEN = 300
+
+
+def _sanitize_message(msg: str) -> str:
+    """Redact secrets and truncate a message for client-facing responses."""
+    if not isinstance(msg, str):
+        msg = str(msg)
+    msg = _SENSITIVE_PATTERN.sub("[REDACTED]", msg)
+    if len(msg) > _MAX_CLIENT_ERROR_LEN:
+        msg = msg[:_MAX_CLIENT_ERROR_LEN] + "..."
+    return msg
 
 
 class LCPHandler(
@@ -69,6 +97,29 @@ class LCPHandler(
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             logger.debug("client_disconnected", path=self.path, status=status)
+
+    def _send_error(self, exc: Exception, status: int | None = None,
+                    message: str | None = None) -> None:
+        """Send a sanitized, structured error response.
+
+        Format: ``{"error": {"code": "LCP-XXXX", "message": "..."}}``.
+
+        The client-facing message never includes sensitive provider internals:
+        exception ``client_message`` overrides win, provider-key patterns are
+        redacted, and long messages are truncated. Full details are logged
+        server-side by the caller.
+        """
+        if isinstance(exc, LCPError):
+            payload = exc.to_dict()
+            if message is not None:
+                payload["message"] = _sanitize_message(message)
+            else:
+                payload["message"] = _sanitize_message(payload["message"])
+            status = status if status is not None else exc.status_code
+        else:
+            payload = {"code": "LCP-5001", "message": "internal error"}
+            status = status if status is not None else 500
+        self._send_json({"error": payload}, status)
 
     def _resolve_profile(self) -> str | None:
         """Extract profile name from URL path. Returns None for non-profile routes."""
@@ -283,43 +334,45 @@ class LCPHandler(
             return
 
         # Auth check — if profile requires API key, validate Authorization header
-        if profile_cfg.get("auth_required", True):
-            auth_header = self.headers.get("Authorization", "")
-            if not auth_header.startswith("Bearer "):
-                logger.warning("auth_failed", reason="missing_bearer_token",
-                               profile=profile, client_ip=self.client_address[0])
-                self._send_json({"error": "API key required for this profile. Use Authorization: Bearer <key>"}, 401)
-                return
-            raw_key = auth_header[7:]
-            km = get_key_manager()
-            if km:
-                key_info = km.validate_key(raw_key)
-                if key_info is None:
-                    logger.warning("auth_failed", reason="invalid_or_revoked_key",
+        try:
+            if profile_cfg.get("auth_required", True):
+                auth_header = self.headers.get("Authorization", "")
+                if not auth_header.startswith("Bearer "):
+                    logger.warning("auth_failed", reason="missing_bearer_token",
                                    profile=profile, client_ip=self.client_address[0])
-                    self._send_json({"error": "invalid or revoked API key"}, 401)
-                    return
-                # Check profile access
-                allowed = key_info.get("allowed_profiles")
-                if allowed:
-                    allowed_list = [p.strip() for p in allowed.split(",") if p.strip()]
-                    if profile not in allowed_list:
-                        logger.warning("auth_failed", reason="profile_access_denied",
+                    raise AuthError("API key required for this profile. Use Authorization: Bearer <key>")
+                raw_key = auth_header[7:]
+                km = get_key_manager()
+                if km:
+                    key_info = km.validate_key(raw_key)
+                    if key_info is None:
+                        logger.warning("auth_failed", reason="invalid_or_revoked_key",
+                                       profile=profile, client_ip=self.client_address[0])
+                        raise AuthError("invalid or revoked API key")
+                    # Check profile access
+                    allowed = key_info.get("allowed_profiles")
+                    if allowed:
+                        allowed_list = [p.strip() for p in allowed.split(",") if p.strip()]
+                        if profile not in allowed_list:
+                            logger.warning("auth_failed", reason="profile_access_denied",
+                                           profile=profile, client_ip=self.client_address[0],
+                                           key_id=key_info.get("id"))
+                            raise ForbiddenError(f"key does not have access to profile '{profile}'")
+                    # Check spend limit
+                    limit = key_info.get("spend_limit", 0)
+                    spent = key_info.get("total_spend", 0)
+                    if limit > 0 and spent >= limit:
+                        logger.warning("auth_failed", reason="spend_limit_exceeded",
                                        profile=profile, client_ip=self.client_address[0],
-                                       key_id=key_info.get("id"))
-                        self._send_json({"error": f"key does not have access to profile '{profile}'"}, 403)
-                        return
-                # Check spend limit
-                limit = key_info.get("spend_limit", 0)
-                spent = key_info.get("total_spend", 0)
-                if limit > 0 and spent >= limit:
-                    logger.warning("auth_failed", reason="spend_limit_exceeded",
-                                   profile=profile, client_ip=self.client_address[0],
-                                   key_id=key_info.get("id"), spent=round(spent, 2),
-                                   limit=round(limit, 2))
-                    self._send_json({"error": f"spend limit exceeded (${spent:.2f} / ${limit:.2f})"}, 429)
-                    return
-                self._current_key_id = key_info.get("id")
+                                       key_id=key_info.get("id"), spent=round(spent, 2),
+                                       limit=round(limit, 2))
+                        raise CreditExhaustedError(
+                            f"spend limit exceeded (${spent:.2f} / ${limit:.2f})"
+                        )
+                    self._current_key_id = key_info.get("id")
+        except (AuthError, CreditExhaustedError, ForbiddenError) as e:
+            self._send_error(e)
+            return
 
         try:
             # Validate body has messages (after auth so we return 401 first if unauthenticated)
@@ -504,7 +557,7 @@ class LCPHandler(
 
         except ToolBlockedError as e:
             logger.warning("tool_blocked", profile=profile, error=str(e))
-            self._send_json({"error": str(e)}, 403)
+            self._send_error(e)
         except ProviderBadRequestError as e:
             # The provider rejected the request body as invalid (HTTP 400).
             # Report the exact error to the client so they can fix their request.
@@ -513,17 +566,29 @@ class LCPHandler(
                          "cache_miss_tokens": 0, "cost": 0, "latency_ms": 0}
             record_cost(self.engine, profile, "unknown", "unknown", cost_info, False,
                        "provider_bad_request", [], error_detail=str(e))
-            self._send_json({"error": str(e)}, 400)
+            self._send_error(e)
         except AllProvidersFailedError as e:
             logger.error("all_providers_failed", profile=profile, error=str(e))
             cost_info = {"prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0,
                          "cache_miss_tokens": 0, "cost": 0, "latency_ms": 0}
             record_cost(self.engine, profile, "unknown", "unknown", cost_info, False,
                        "all_providers_failed", [], error_detail=str(e))
-            self._send_json({"error": str(e)}, 502)
+            self._send_error(e)
+        except ProviderError as e:
+            # Any other typed provider error (timeout, rate limit, upstream
+            # auth, 5xx) that escaped the chain fallback — surface it cleanly.
+            logger.error("provider_error", profile=profile, error=str(e))
+            cost_info = {"prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0,
+                         "cache_miss_tokens": 0, "cost": 0, "latency_ms": 0}
+            record_cost(self.engine, profile, "unknown", "unknown", cost_info, False,
+                       e.code, [], error_detail=str(e))
+            self._send_error(e)
+        except LCPError as e:
+            logger.error("lcp_error", profile=profile, error=str(e))
+            self._send_error(e)
         except Exception as e:
             logger.error("unhandled_error", error=str(e), traceback=traceback.format_exc()[-500:])
-            self._send_json({"error": "internal error: {}".format(str(e))}, 500)
+            self._send_error(e)
 
     def do_PUT(self):
         self.config.check_reload()

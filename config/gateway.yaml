@@ -115,6 +115,12 @@ circuit_breaker:
   failures_dead: 6
   degraded_cooldown_seconds: 30
   dead_cooldown_seconds: 120
+retry:
+  max_attempts: 3
+  backoff_base: 0.5
+  backoff_multiplier: 2
+  max_backoff: 10
+  jitter: true
 model_limits:
   deepseek-v4-pro:
     context_window: 1000000
