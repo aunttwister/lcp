@@ -1,5 +1,6 @@
 """Tests for cost_estimator.py"""
 import pytest
+from unittest.mock import patch
 from src.api.cost_estimator import count_tokens, estimate_tokens, estimate_from_request, estimate_cost
 
 def test_count_tokens_simple():
@@ -58,6 +59,58 @@ def test_count_tokens_vision_content():
     }]
     n = count_tokens(msgs)
     assert n >= 4
+
+
+# ── Lazy encoding (crash recovery when tiktoken download fails) ──────────
+
+class TestLazyEncoding:
+    def setup_method(self):
+        import src.api.cost_estimator as ce
+        ce._ENCODING = None
+        ce._ENCODING_FAILED = False
+
+    def test_count_tokens_still_works_when_encoding_download_fails(self):
+        """count_tokens falls back to char-based heuristic when tiktoken fails."""
+        with patch("src.api.cost_estimator.tiktoken.get_encoding",
+                   side_effect=RuntimeError("no internet")):
+            n = count_tokens([{"role": "user", "content": "hello world"}])
+        # Heuristic: ~ 4 (overhead) + max(1, 11//4) = 4 + 2 = 6
+        assert n >= 4
+
+    def test_encoding_failure_is_cached(self):
+        """After first failure, _ENCODING_FAILED = True, skips retries."""
+        import src.api.cost_estimator as ce
+
+        with patch("src.api.cost_estimator.tiktoken.get_encoding",
+                   side_effect=RuntimeError("no internet")):
+            count_tokens([{"role": "user", "content": "hi"}])
+
+        assert ce._ENCODING_FAILED is True
+        assert ce._ENCODING is None
+        # Second call does not re-attempt download
+        n = count_tokens([{"role": "user", "content": "hi"}])
+        assert n >= 4
+
+    def test_encoding_loads_on_first_use_and_caches(self):
+        """Normal path: encoding loaded once, reused."""
+        import src.api.cost_estimator as ce
+        ce._ENCODING = None
+        ce._ENCODING_FAILED = False
+
+        n1 = count_tokens([{"role": "user", "content": "hi"}])
+        assert ce._ENCODING is not None
+        n2 = count_tokens([{"role": "user", "content": "hi"}])
+        assert n1 == n2
+
+    def test_tools_fallback_when_encoding_fails(self):
+        """Tool tokenization uses heuristic when tiktoken unavailable."""
+        msgs = [{"role": "user", "content": "hello"}]
+        tools = [{"type": "function", "function": {"name": "search", "parameters": {}}}]
+
+        with patch("src.api.cost_estimator.tiktoken.get_encoding",
+                   side_effect=RuntimeError("no internet")):
+            n = count_tokens(msgs, tools)
+        assert n >= 4
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -16,8 +16,28 @@ _DEFAULT_PRICING = {
     "deepseek-v4-flash": {"cache_miss": 0.14, "output": 0.28},
 }
 
-# Encodings — deepseek models use cl100k_base (same as GPT-4)
-_ENCODING = tiktoken.get_encoding("cl100k_base")
+# Encodings — deepseek models use cl100k_base (same as GPT-4).
+# Lazily loaded on first use: tiktoken downloads the tokenizer data from
+# OpenAI's CDN, which fails in containers without internet access.
+_ENCODING: Optional[object] = None
+_ENCODING_FAILED: bool = False
+
+
+def _get_encoding():
+    """Load tiktoken encoding, caching the result. Returns None on failure."""
+    global _ENCODING, _ENCODING_FAILED
+    if _ENCODING is not None:
+        return _ENCODING
+    if _ENCODING_FAILED:
+        return None
+    try:
+        _ENCODING = tiktoken.get_encoding("cl100k_base")
+        logger.info("tiktoken_encoding_loaded", encoding="cl100k_base")
+        return _ENCODING
+    except Exception as e:
+        _ENCODING_FAILED = True
+        logger.warning("tiktoken_encoding_failed", error=str(e))
+        return None
 
 
 def count_tokens(messages: list[dict], tools: Optional[list[dict]] = None) -> int:
@@ -25,26 +45,32 @@ def count_tokens(messages: list[dict], tools: Optional[list[dict]] = None) -> in
 
     Uses tiktoken with cl100k_base encoding. This is an approximation —
     exact counts require provider-specific tokenizers.
+
+    Falls back to a simple character-based heuristic when tiktoken is
+    unavailable (e.g. container without internet during first startup).
     """
+    enc = _get_encoding()
+
+    def _tokenize(text: str) -> int:
+        """Encode text using tiktoken, or fall back to ~0.25 Tok/char."""
+        if enc is not None:
+            return len(enc.encode(text))
+        return max(1, len(text) // 4)
+
     token_count = 0
     for msg in messages:
-        # Role
         token_count += 4  # approximate per-message overhead
-        # Content
         content = msg.get("content", "")
         if isinstance(content, str):
-            token_count += len(_ENCODING.encode(content))
+            token_count += _tokenize(content)
         elif isinstance(content, list):
-            # Vision content blocks
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
-                    token_count += len(_ENCODING.encode(block.get("text", "")))
+                    token_count += _tokenize(block.get("text", ""))
 
     if tools:
-        # Rough estimate: 50 tokens per tool definition
         for tool in tools:
-            tool_str = str(tool)
-            token_count += len(_ENCODING.encode(tool_str))
+            token_count += _tokenize(str(tool))
 
     return token_count
 
