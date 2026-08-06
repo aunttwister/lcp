@@ -289,6 +289,10 @@ class TestSingleton:
         plugin.set_engine = MagicMock()
         reg.register(plugin)
         base_mod._registry = reg
-        result = init_plugins(engine="fake-engine")
-        assert result is reg
-        plugin.set_engine.assert_called_once_with("fake-engine")
+        try:
+            result = init_plugins(engine="fake-engine")
+            assert result is reg
+            plugin.set_engine.assert_called_once_with("fake-engine")
+        finally:
+            # Restore the singleton so other test files see a clean registry
+            base_mod._registry = None
