@@ -192,7 +192,7 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
             if ids:
                 workspace_id = ids[0]
         except (URLError, OSError) as exc:
-            logger.warning("opencode_dashboard_fetch_failed", error=str(exc))
+            logger.warning("opencode_dashboard_fetch_failed: %s", str(exc))
             return None
 
     if not workspace_id:
@@ -205,7 +205,7 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
         url = f"{_OPENCODE_BASE}/workspace/{workspace_id}/go"
         raw = _http_get(url, headers)
     except (URLError, OSError) as exc:
-        logger.warning("opencode_go_page_fetch_failed", error=str(exc))
+        logger.warning("opencode_go_page_fetch_failed: %s", str(exc))
         return None
 
     result = _parse_ssr_subscription(raw)

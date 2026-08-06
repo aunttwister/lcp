@@ -1,4 +1,5 @@
 """Tests for src/api/cost_plugins/opencode_api.py — SSR parser and HTTP client."""
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,7 +8,9 @@ from src.api.cost_plugins.opencode_api import (
     SubscriptionSnapshot,
     _base_headers,
     _extract_workspace_ids,
+    _http_get,
     _parse_ssr_subscription,
+    fetch_subscription,
     fetch_subscription_dict,
 )
 
@@ -219,3 +222,117 @@ class TestFetchSubscriptionDict:
             assert result["rolling_reset_at"] == ""
             assert result["weekly_reset_at"] == ""
             assert result["monthly_reset_at"] == ""
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# fetch_subscription
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestFetchSubscription:
+    """Tests for fetch_subscription() — the full HTTP client flow."""
+
+    def test_missing_cookie_returns_none(self):
+        assert fetch_subscription(None) is None
+        assert fetch_subscription("") is None
+        assert fetch_subscription("   ") is None
+
+    def test_workspace_id_from_env(self):
+        page = '<script>id:"wrk_env123"</script>'
+        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": "wrk_env123"}, clear=False):
+            with patch("src.api.cost_plugins.opencode_api._http_get", return_value=page) as mock_get:
+                with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                           return_value={"rolling_pct": 6.0, "weekly_pct": 26.0, "monthly_pct": 13.0}):
+                    snap = fetch_subscription(" cookie ")
+        assert snap is not None
+        assert snap.rolling_pct == 6.0
+        assert snap.workspace_id == "wrk_env123"
+        # Only the /go page is fetched (no dashboard discovery)
+        urls = [c[0][0] for c in mock_get.call_args_list]
+        assert len(urls) == 1
+        assert "/go" in urls[0]
+
+    def test_workspace_discovered_from_dashboard(self):
+        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": ""}, clear=False):
+            with patch("src.api.cost_plugins.opencode_api._http_get") as mock_get:
+                mock_get.side_effect = [
+                    'id:"wrk_abc"',  # dashboard page -> workspace discovery
+                    "<html>go page</html>",  # /go page
+                ]
+                with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                           return_value={"rolling_pct": 10.0}):
+                    snap = fetch_subscription("cookie")
+        assert snap is not None
+        assert snap.workspace_id == "wrk_abc"
+        assert snap.rolling_pct == 10.0
+
+    def test_dashboard_fetch_failure_returns_none(self):
+        from urllib.error import URLError
+        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": ""}, clear=False):
+            with patch("src.api.cost_plugins.opencode_api._http_get",
+                       side_effect=URLError("down")):
+                assert fetch_subscription("cookie") is None
+
+    def test_no_workspace_found_returns_none(self):
+        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": ""}, clear=False):
+            with patch("src.api.cost_plugins.opencode_api._http_get",
+                       return_value="no ids here"):
+                assert fetch_subscription("cookie") is None
+
+    def test_go_page_fetch_failure_returns_none(self):
+        from urllib.error import URLError
+        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": "wrk_1"}, clear=False):
+            with patch("src.api.cost_plugins.opencode_api._http_get",
+                       side_effect=URLError("down")):
+                assert fetch_subscription("cookie") is None
+
+    def test_parse_failure_returns_none(self):
+        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": "wrk_1"}, clear=False):
+            with patch("src.api.cost_plugins.opencode_api._http_get",
+                       return_value="<html>no data</html>"):
+                with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                           return_value=None):
+                    assert fetch_subscription("cookie") is None
+
+    def test_fraction_percentages_scaled(self):
+        """Values in (0,1) are treated as fractions and multiplied by 100."""
+        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": "wrk_1"}, clear=False):
+            with patch("src.api.cost_plugins.opencode_api._http_get", return_value="<html/>"):
+                with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                           return_value={"rolling_pct": 0.5, "weekly_pct": 0.01, "monthly_pct": 1.0}):
+                    snap = fetch_subscription("cookie")
+        assert snap is not None
+        assert snap.rolling_pct == 50.0  # 0.5 * 100
+        assert snap.weekly_pct == 1.0    # 0.01 * 100
+        assert snap.monthly_pct == 1.0   # 1.0 left as-is
+
+    def test_success_rounds_and_carries_resets(self):
+        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": "wrk_1"}, clear=False):
+            with patch("src.api.cost_plugins.opencode_api._http_get", return_value="<html/>"):
+                with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                           return_value={
+                               "rolling_pct": 6.0, "weekly_pct": 26.4, "monthly_pct": 13.04,
+                               "rolling_reset_sec": 3600, "weekly_reset_sec": 7200,
+                               "monthly_reset_sec": 10800,
+                           }):
+                    snap = fetch_subscription("cookie")
+        assert snap is not None
+        assert snap.rolling_pct == 6.0
+        assert snap.weekly_pct == 26.4
+        assert snap.monthly_pct == 13.0
+        assert snap.rolling_reset_sec == 3600
+        assert snap.weekly_reset_sec == 7200
+        assert snap.monthly_reset_sec == 10800
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# _http_get
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestHttpGet:
+    def test_returns_decoded_body(self):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"<html>hello</html>"
+        mock_resp.__enter__.return_value = mock_resp
+        with patch("src.api.cost_plugins.opencode_api.urlopen", return_value=mock_resp):
+            body = _http_get("https://x", {"Cookie": "c"})
+        assert body == "<html>hello</html>"
