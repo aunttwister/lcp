@@ -611,6 +611,81 @@ class ProfileEndpoints:
         cfg.save()
         self._send_json({"ok": True, "deleted": name})
 
+    def _serve_profile_budget(self, name: str):
+        """GET /api/profiles/{name}/budget — return the profile-level budget."""
+        try:
+            with get_session(self.engine) as session:
+                budget = session.query(Budget).filter(
+                    Budget.profile == name,
+                    Budget.key_id.is_(None),
+                ).first()
+                if budget:
+                    self._send_json({
+                        "budget": {
+                            "id": budget.id,
+                            "name": budget.name,
+                            "amount": budget.amount,
+                            "current_spend": budget.current_spend,
+                            "period": budget.period,
+                            "threshold_pct": budget.threshold_pct,
+                            "action": budget.action,
+                            "status": budget.status,
+                            "spend_pct": round((budget.current_spend / budget.amount * 100) if budget.amount > 0 else 0, 1),
+                        }
+                    })
+                else:
+                    self._send_json({"budget": None})
+        except Exception as e:
+            logger.error("profile_budget_get_failed", error=str(e))
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_profile_budget_update(self, name: str):
+        """PUT /api/profiles/{name}/budget — create or update profile budget."""
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        try:
+            with get_session(self.engine) as session:
+                budget = session.query(Budget).filter(
+                    Budget.profile == name,
+                    Budget.key_id.is_(None),
+                ).first()
+                if budget:
+                    # Update existing
+                    if "amount" in body:
+                        budget.amount = float(body["amount"])
+                    if "period" in body:
+                        budget.period = body["period"]
+                    if "threshold_pct" in body:
+                        budget.threshold_pct = body["threshold_pct"]
+                    if "action" in body:
+                        budget.action = body["action"]
+                    if "status" in body:
+                        budget.status = body["status"]
+                    if "name" in body:
+                        budget.name = body["name"]
+                    session.commit()
+                    self._send_json({"ok": True, "updated": budget.id})
+                else:
+                    # Create new
+                    budget = Budget(
+                        name=body.get("name", f"{name.upper()} Budget"),
+                        key_id=None,
+                        profile=name,
+                        amount=float(body.get("amount", 0)),
+                        period=body.get("period", "monthly"),
+                        threshold_pct=body.get("threshold_pct", "80"),
+                        action=body.get("action", "log"),
+                    )
+                    session.add(budget)
+                    session.commit()
+                    self._send_json({"ok": True, "created": budget.id})
+        except Exception as e:
+            logger.error("profile_budget_update_failed", error=str(e))
+            self._send_json({"error": str(e)}, 500)
+
 
 # ── API Key Management ───────────────────────────────────────────────────────
 

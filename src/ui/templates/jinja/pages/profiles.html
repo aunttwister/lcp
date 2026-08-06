@@ -17,7 +17,7 @@
 <div class="table-wrap">
 <table>
 <thead><tr>
-  <th>Profile</th><th>Auth</th><th>Chain</th><th>Blocked Tools</th><th>Gateway URL</th><th>Actions</th>
+  <th>Profile</th><th>Auth</th><th>Budget</th><th>Chain</th><th>Blocked Tools</th><th>Gateway URL</th><th>Actions</th>
 </tr></thead>
 <tbody id="profilesBody">
 {% for pname, pcfg in profiles_dict.items() %}
@@ -28,6 +28,8 @@
 <tr>
   <td><b>{{ pname.upper() }}</b></td>
   <td style="font-size:0.6875rem">{{ 'key' if auth_required else 'public' }}</td>
+  {% set pb = profile_budgets.get(pname) if profile_budgets else None %}
+  <td style="font-size:0.6875rem">{% if pb %}${{ "%.2f"|format(pb.current_spend) }}/${{ "%.0f"|format(pb.amount) }}{% if pb.spend_pct >= 80 %} <span style="color:hsl(var(--red-fg));font-weight:600">({{ pb.spend_pct }}%)</span>{% else %}({{ pb.spend_pct }}%){% endif %}{% else %}<span style="color:hsl(var(--muted-foreground))">none</span>{% endif %}</td>
   <td style="font-size:0.75rem">{{ steps | join(' → ') or '—' }}</td>
   <td style="font-size:0.6875rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ forbidden | join(', ') }}">{{ forbidden | join(', ') or 'none' }}</td>
   <td class="mono" style="font-size:0.6875rem">/{{ pname }}/chat/completions</td>
@@ -53,6 +55,17 @@
         <input type="checkbox" id="pemAuthRequired" onchange="this.nextElementSibling.textContent = this.checked ? 'API key required' : 'No key required (public)'">
         <span>API key required</span>
       </label>
+    </div>
+    <div style="margin-bottom:0.75rem">
+      <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Budget</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+        <div><label style="font-size:0.625rem;color:hsl(var(--muted-foreground))">Monthly Cap ($)</label><input id="pemBudgetAmount" type="number" min="0" step="0.01" placeholder="0 = unlimited" style="width:100%;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem"></div>
+        <div><label style="font-size:0.625rem;color:hsl(var(--muted-foreground))">Action</label><select id="pemBudgetAction" style="width:100%;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem"><option value="log">Log &amp; Alert</option><option value="block">Block (429)</option></select></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-top:0.375rem">
+        <div><label style="font-size:0.625rem;color:hsl(var(--muted-foreground))">Alert Thresholds (%)</label><input id="pemBudgetThresholds" placeholder="50,80,90" style="width:100%;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem"></div>
+        <div><label style="font-size:0.625rem;color:hsl(var(--muted-foreground))">Current Spend</label><input id="pemBudgetSpend" readonly style="width:100%;padding:0.3rem 0.5rem;background:hsl(var(--secondary));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--muted-foreground));font-size:0.75rem"></div>
+      </div>
     </div>
     <div style="margin-bottom:0.75rem">
       <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Blocked Tools</label>
@@ -118,6 +131,8 @@ function editProfile(name) {
       document.getElementById('pemAuthRequired').nextElementSibling.textContent = authReq ? 'API key required' : 'No key required (public)';
       renderPemTools();
       renderPemChain();
+      // Load profile budget
+      loadProfileBudget(name);
       openDialog('profileEditModal');
     });
   });
@@ -225,17 +240,47 @@ function saveProfileEdit() {
       auth_required: document.getElementById('pemAuthRequired').checked
     });
   }).then(function(profResult) {
-    if (profResult.ok) {
-      statusEl.textContent = 'Saved';
-      statusEl.style.color = 'hsl(var(--green-fg))';
-      setTimeout(function() { location.reload(); }, 800);
+    // Also save budget
+    var amt = document.getElementById('pemBudgetAmount').value;
+    var budgetPromise;
+    if (amt || amt === '0') {
+      budgetPromise = api('PUT', '/api/profiles/' + _editProfileName + '/budget', {
+        amount: parseFloat(amt) || 0,
+        action: document.getElementById('pemBudgetAction').value,
+        threshold_pct: document.getElementById('pemBudgetThresholds').value || '80',
+        period: 'monthly'
+      });
     } else {
-      statusEl.textContent = 'Save failed';
-      statusEl.style.color = 'hsl(var(--red-fg))';
+      budgetPromise = Promise.resolve();
     }
+    return budgetPromise.then(function() {
+      if (profResult.ok) {
+        statusEl.textContent = 'Saved';
+        statusEl.style.color = 'hsl(var(--green-fg))';
+        setTimeout(function() { location.reload(); }, 800);
+      } else {
+        statusEl.textContent = 'Save failed';
+        statusEl.style.color = 'hsl(var(--red-fg))';
+      }
+    });
   }).catch(function(e) {
     statusEl.textContent = 'Save failed: ' + (e.message || e);
     statusEl.style.color = 'hsl(var(--red-fg))';
+  });
+}
+
+function loadProfileBudget(name) {
+  document.getElementById('pemBudgetAmount').value = '';
+  document.getElementById('pemBudgetSpend').value = '';
+  document.getElementById('pemBudgetAction').value = 'log';
+  document.getElementById('pemBudgetThresholds').value = '80';
+  api('GET', '/api/profiles/' + name + '/budget').then(function(d) {
+    if (d.budget) {
+      document.getElementById('pemBudgetAmount').value = d.budget.amount || 0;
+      document.getElementById('pemBudgetSpend').value = '$' + (d.budget.current_spend || 0).toFixed(2) + ' (' + d.budget.spend_pct + '%)';
+      document.getElementById('pemBudgetAction').value = d.budget.action || 'log';
+      document.getElementById('pemBudgetThresholds').value = d.budget.threshold_pct || '80';
+    }
   });
 }
 {% endraw %}

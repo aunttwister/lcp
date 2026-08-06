@@ -110,6 +110,7 @@ def render_page(template_name: str, config, engine=None, **kwargs) -> str:
         "providers": config.providers if config is not None and hasattr(config, 'providers') else {},
         "profiles": profiles_list,
         "profiles_dict": config.profiles if config is not None and hasattr(config, 'profiles') else {},
+        "profile_budgets": {},
         "cache_buster": _cache_buster,
     }
     # Let caller-supplied kwargs override defaults (e.g. profile-filtered monthly)

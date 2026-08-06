@@ -238,6 +238,10 @@ class LCPHandler(
             self._serve_provider_presets()
         elif self.path == "/api/profiles":
             self._serve_profiles_list()
+        elif self.path.startswith("/api/profiles/") and self.path.endswith("/budget"):
+            # GET /api/profiles/{name}/budget
+            parts = self.path.split("/")
+            self._serve_profile_budget(parts[3])
         elif self.path == "/api/keys":
             self._serve_keys_list()
         elif self.path.startswith("/api/keys/") and len(self.path.split("/")) == 4:
@@ -623,6 +627,10 @@ class LCPHandler(
         elif self.path.startswith("/api/chains/") and len(self.path.split("/")) == 4:
             profile = self.path.split("/")[3]
             self._serve_chain_reorder(profile)
+        elif self.path.startswith("/api/profiles/") and self.path.endswith("/budget"):
+            # PUT /api/profiles/{name}/budget
+            parts = self.path.split("/")
+            self._serve_profile_budget_update(parts[3])
         elif self.path.startswith("/api/profiles/") and len(self.path.split("/")) == 4:
             profile = self.path.split("/")[3]
             self._serve_profile_update(profile)
