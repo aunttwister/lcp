@@ -312,3 +312,89 @@ class TestErrorResponses:
         assert h.send_response.call_args[0][0] == 429
         err = _json_body(h)["error"]
         assert err["code"] == "LCP-1002"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Profile budget routing tests (GET/PUT /api/profiles/{name}/budget)
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestProfileBudgetRouting:
+    def test_get_profile_budget(self, temp_db):
+        from src.api.models import Budget, get_session
+        with get_session(temp_db) as session:
+            session.add(Budget(
+                name="L2 Cap", key_id=None, profile="l2",
+                amount=200.0, current_spend=50.0, period="monthly",
+                threshold_pct="50,80", action="block", status="active",
+            ))
+            session.commit()
+        LCPHandler.engine = temp_db
+        h = _TestHandler("/api/profiles/l2/budget", engine=temp_db)
+        h.do_GET()
+        assert h.send_response.call_args[0][0] == 200
+        body = _json_body(h)
+        assert body["budget"]["name"] == "L2 Cap"
+        assert body["budget"]["spend_pct"] == 25.0
+
+    def test_get_profile_budget_when_none(self, temp_db):
+        LCPHandler.engine = temp_db
+        h = _TestHandler("/api/profiles/l2/budget", engine=temp_db)
+        h.do_GET()
+        assert h.send_response.call_args[0][0] == 200
+        assert _json_body(h)["budget"] is None
+
+    def test_put_profile_budget_creates(self, temp_db):
+        LCPHandler.config = MagicMock()
+        LCPHandler.engine = temp_db
+        body = json.dumps({"amount": 150.0, "action": "block", "threshold_pct": "80,90"}).encode()
+        h = _TestHandler("/api/profiles/l1/budget", method="PUT", engine=temp_db)
+        h.rfile.read = MagicMock(return_value=body)
+        h.headers = {"Content-Length": str(len(body))}
+        h.do_PUT()
+        assert h.send_response.call_args[0][0] == 200
+        assert _json_body(h)["ok"] is True
+        from src.api.models import Budget, get_session
+        with get_session(temp_db) as session:
+            b = session.query(Budget).filter(Budget.profile == "l1").first()
+            assert b is not None
+            assert b.amount == 150.0
+            assert b.action == "block"
+
+    def test_put_profile_budget_updates_existing(self, temp_db):
+        from src.api.models import Budget, get_session
+        with get_session(temp_db) as session:
+            b = Budget(
+                name="L2 Cap", key_id=None, profile="l2",
+                amount=200.0, current_spend=50.0, period="monthly",
+                threshold_pct="50,80", action="block", status="active",
+            )
+            session.add(b)
+            session.commit()
+            budget_id = b.id
+        LCPHandler.config = MagicMock()
+        LCPHandler.engine = temp_db
+        body = json.dumps({"amount": 300.0}).encode()
+        h = _TestHandler("/api/profiles/l2/budget", method="PUT", engine=temp_db)
+        h.rfile.read = MagicMock(return_value=body)
+        h.headers = {"Content-Length": str(len(body))}
+        h.do_PUT()
+        assert h.send_response.call_args[0][0] == 200
+        with get_session(temp_db) as session:
+            assert session.get(Budget, budget_id).amount == 300.0
+
+    def test_put_profile_budget_invalid_json(self, temp_db):
+        LCPHandler.config = MagicMock()
+        LCPHandler.engine = temp_db
+        h = _TestHandler("/api/profiles/l1/budget", method="PUT", engine=temp_db)
+        h.rfile.read = MagicMock(side_effect=Exception("bad json"))
+        h.headers = {"Content-Length": "10"}
+        h.do_PUT()
+        assert h.send_response.call_args[0][0] == 400
+
+    def test_put_unknown_profile_budget_route_404(self, temp_db):
+        # Budget-less profile paths (4 segments) still route to profile update
+        LCPHandler.config = MagicMock()
+        LCPHandler.engine = temp_db
+        h = _TestHandler("/api/profiles/l2/budgets", method="PUT", engine=temp_db)
+        h.do_PUT()
+        assert h.send_response.call_args[0][0] == 404

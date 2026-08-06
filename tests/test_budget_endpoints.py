@@ -382,3 +382,215 @@ class TestTrackBudgetSpend:
             mock_get_am.return_value = mock_am
             h._track_budget_spend("l2", 5.0)  # 50 -> 55, no threshold crossed
             mock_am.fire.assert_not_called()
+
+    def test_fires_info_severity_below_80(self, budget_ep):
+        engine = budget_ep.engine
+        with get_session(engine) as session:
+            session.add(Budget(
+                name="Info Cap", key_id=None, profile="l2",
+                amount=100.0, current_spend=40.0, period="monthly",
+                threshold_pct="50,80", action="log", status="active",
+            ))
+            session.commit()
+        h = LCPHandler.__new__(LCPHandler)
+        h.engine = engine
+        with patch("src.server.handler.get_alert_manager") as mock_get_am:
+            mock_am = MagicMock()
+            mock_get_am.return_value = mock_am
+            # 40 -> 60 crosses 50 but stays under 80 -> info severity
+            h._track_budget_spend("l2", 20.0)
+            mock_am.fire.assert_called_once()
+            assert mock_am.fire.call_args[1]["severity"] == "info"
+            assert "60.0%" in mock_am.fire.call_args[1]["title"]
+
+
+# ── Key-scoped budget block matching ─────────────────────────────────────
+
+class TestCheckBudgetBlockKeyScoped:
+    def _make_handler(self, engine):
+        h = LCPHandler.__new__(LCPHandler)
+        h.engine = engine
+        return h
+
+    def _add_key_budget(self, engine, key_id, name="Key Block", spend=100.0, amount=10.0):
+        with get_session(engine) as session:
+            session.add(Budget(
+                name=name, key_id=key_id, profile=None,
+                amount=amount, current_spend=spend, period="total",
+                threshold_pct="80", action="block", status="exceeded",
+            ))
+            session.commit()
+
+    def test_blocks_when_key_matches(self, budget_ep):
+        engine = budget_ep.engine
+        with get_session(engine) as session:
+            key = ApiKey(
+                key_hash="h-kb1", key_prefix="sk-kb1", name="KB1",
+                allowed_profiles="l2", spend_limit=0, total_spend=0, status="active",
+            )
+            session.add(key)
+            session.commit()
+            key_id = key.id
+        self._add_key_budget(engine, key_id)
+        h = self._make_handler(engine)
+        assert h._check_budget_block("l2", key_id=key_id) == "Key Block"
+
+    def test_key_budget_not_blocked_for_other_key(self, budget_ep):
+        engine = budget_ep.engine
+        with get_session(engine) as session:
+            key_a = ApiKey(
+                key_hash="h-a", key_prefix="sk-a", name="A",
+                allowed_profiles="l2", spend_limit=0, total_spend=0, status="active",
+            )
+            key_b = ApiKey(
+                key_hash="h-b", key_prefix="sk-b", name="B",
+                allowed_profiles="l2", spend_limit=0, total_spend=0, status="active",
+            )
+            session.add(key_a)
+            session.add(key_b)
+            session.commit()
+            key_a_id, key_b_id = key_a.id, key_b.id
+        self._add_key_budget(engine, key_a_id)
+        h = self._make_handler(engine)
+        # Budget scoped to key A should not block key B
+        assert h._check_budget_block("l2", key_id=key_b_id) is None
+
+    def test_key_budget_not_blocked_without_key(self, budget_ep):
+        engine = budget_ep.engine
+        with get_session(engine) as session:
+            key = ApiKey(
+                key_hash="h-kb2", key_prefix="sk-kb2", name="KB2",
+                allowed_profiles="l2", spend_limit=0, total_spend=0, status="active",
+            )
+            session.add(key)
+            session.commit()
+            key_id = key.id  # capture while session is still open
+        self._add_key_budget(engine, key_id)
+        h = self._make_handler(engine)
+        # No key supplied -> only global/profile budgets considered
+        assert h._check_budget_block("l2") is None
+
+
+# ── Budget block edge cases ──────────────────────────────────────────────
+
+class TestCheckBudgetBlockEdge:
+    def _make_handler(self, engine):
+        h = LCPHandler.__new__(LCPHandler)
+        h.engine = engine
+        return h
+
+    def test_first_blocking_budget_wins(self, budget_ep):
+        engine = budget_ep.engine
+        with get_session(engine) as session:
+            session.add(Budget(
+                name="Block A", key_id=None, profile="l2",
+                amount=10.0, current_spend=10.0, period="monthly",
+                threshold_pct="80", action="block", status="exceeded",
+            ))
+            session.add(Budget(
+                name="Block B", key_id=None, profile="l2",
+                amount=5.0, current_spend=6.0, period="monthly",
+                threshold_pct="80", action="block", status="exceeded",
+            ))
+            session.commit()
+        h = self._make_handler(engine)
+        blocked = h._check_budget_block("l2")
+        assert blocked in ("Block A", "Block B")
+
+    def test_paused_budget_does_not_block(self, budget_ep):
+        engine = budget_ep.engine
+        with get_session(engine) as session:
+            session.add(Budget(
+                name="Paused Cap", key_id=None, profile="l2",
+                amount=10.0, current_spend=50.0, period="monthly",
+                threshold_pct="80", action="block", status="paused",
+            ))
+            session.commit()
+        h = self._make_handler(engine)
+        assert h._check_budget_block("l2") is None
+
+    def test_exception_returns_none(self, budget_ep):
+        engine = budget_ep.engine
+        h = self._make_handler(engine)
+        with patch("src.server.handler.get_session", side_effect=RuntimeError("db down")):
+            assert h._check_budget_block("l2") is None
+
+
+# ── Budget spend increment edge cases ────────────────────────────────────
+
+class TestIncrementBudgetSpendEdge:
+    def _make_handler(self, engine):
+        h = LCPHandler.__new__(LCPHandler)
+        h.engine = engine
+        return h
+
+    def test_syncs_api_key_total_spend(self, budget_ep):
+        engine = budget_ep.engine
+        with get_session(engine) as session:
+            key = ApiKey(
+                key_hash="h-sync", key_prefix="sk-sync", name="Sync",
+                allowed_profiles="l2", spend_limit=0, total_spend=0, status="active",
+            )
+            session.add(key)
+            session.commit()
+            key_id = key.id
+            session.add(Budget(
+                name="Sync Budget", key_id=key_id, profile=None,
+                amount=100.0, current_spend=20.0, period="total",
+                threshold_pct="80", action="log", status="active",
+            ))
+            session.commit()
+        h = self._make_handler(engine)
+        h._increment_budget_spend("l2", 15.0, key_id=key_id)
+        with get_session(engine) as session:
+            b = session.query(Budget).filter(Budget.key_id == key_id).first()
+            key = session.query(ApiKey).filter(ApiKey.id == key_id).first()
+            assert b.current_spend == 35.0
+            assert key.total_spend == 35.0  # synced from key budget
+
+    def test_key_budget_not_incremented_without_key_id(self, budget_ep):
+        engine = budget_ep.engine
+        with get_session(engine) as session:
+            key = ApiKey(
+                key_hash="h-nk", key_prefix="sk-nk", name="NK",
+                allowed_profiles="l2", spend_limit=0, total_spend=0, status="active",
+            )
+            session.add(key)
+            session.commit()
+            key_id = key.id
+            session.add(Budget(
+                name="NoKey Budget", key_id=key_id, profile=None,
+                amount=100.0, current_spend=0.0, period="total",
+                threshold_pct="80", action="log", status="active",
+            ))
+            session.commit()
+        h = self._make_handler(engine)
+        breaches = h._increment_budget_spend("l2", 50.0)  # no key_id
+        assert breaches == []
+        with get_session(engine) as session:
+            b = session.query(Budget).filter(Budget.key_id == key_id).first()
+            assert b.current_spend == 0.0  # untouched
+
+    def test_crossing_100_threshold_fires_breach(self, budget_ep):
+        engine = budget_ep.engine
+        with get_session(engine) as session:
+            session.add(Budget(
+                name="Hard Cap", key_id=None, profile="l2",
+                amount=100.0, current_spend=90.0, period="monthly",
+                threshold_pct="100", action="block", status="active",
+            ))
+            session.commit()
+        h = self._make_handler(engine)
+        breaches = h._increment_budget_spend("l2", 10.0)  # 90 -> 100
+        assert len(breaches) == 1
+        assert breaches[0]["threshold"] == 100
+        assert breaches[0]["spend_pct"] == 100.0
+        with get_session(engine) as session:
+            b = session.query(Budget).filter(Budget.name == "Hard Cap").first()
+            assert b.status == "exceeded"
+
+    def test_exception_returns_empty_list(self, budget_ep):
+        engine = budget_ep.engine
+        h = self._make_handler(engine)
+        with patch("src.server.handler.get_session", side_effect=RuntimeError("db down")):
+            assert h._increment_budget_spend("l2", 5.0) == []

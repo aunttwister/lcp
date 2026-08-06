@@ -174,6 +174,24 @@ class TestPageRenderers:
         assert "<!DOCTYPE html>" in html
         assert "LCP — Profiles" in html
 
+    def test_render_profiles_page_with_budget(self, mock_config, temp_db):
+        """Profiles page renders profile-budget spend/limit when an engine is bound."""
+        from src.ui.pages import render_profiles_page
+        from src.api.models import Budget, get_session
+        db_path, engine = temp_db
+        with get_session(engine) as session:
+            session.add(Budget(
+                name="L2 Cap", key_id=None, profile="l2",
+                amount=200.0, current_spend=50.0, period="monthly",
+                threshold_pct="50,80", action="block", status="active",
+            ))
+            session.commit()
+        html = render_profiles_page(mock_config, engine=engine)
+        assert "<!DOCTYPE html>" in html
+        # Budget column shows $spend/$limit for the l2 profile
+        assert "$50.00/$200" in html
+        assert "25.0%" in html
+
     def test_render_keys_page(self, mock_config):
         from src.ui.pages import render_keys_page
         html = render_keys_page(mock_config, engine=None)
