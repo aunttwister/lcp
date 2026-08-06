@@ -31,8 +31,11 @@ def _get_encoding():
     if _ENCODING_FAILED:
         return None
     try:
+        _t0 = __import__("time").monotonic()
         _ENCODING = tiktoken.get_encoding("cl100k_base")
-        logger.info("tiktoken_encoding_loaded", encoding="cl100k_base")
+        logger.info("tiktoken_encoding_loaded",
+                    encoding="cl100k_base",
+                    load_ms=round((__import__("time").monotonic() - _t0) * 1000, 1))
         return _ENCODING
     except Exception as e:
         _ENCODING_FAILED = True
