@@ -438,3 +438,195 @@ class TestPluginEndpoints:
             h.do_GET()
         assert _status(h) == 200
         assert _json_body(h) == {"plugin_subscriptions": {}}
+
+
+# ── Errors / metrics / export ──────────────────────────────────────────────
+
+class TestErrorsMetricsExport:
+    def test_errors_with_data(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/errors", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert len(body["errors"]) >= 1
+        assert body["errors"][0]["error_type"] == "timeout"
+
+    def test_errors_empty(self, temp_db):
+        h = TestHandler(path="/errors", engine=temp_db)
+        h.do_GET()
+        assert _json_body(h) == {"errors": []}
+
+    def test_errors_db_failure(self, temp_db):
+        h = TestHandler(path="/errors", engine=temp_db)
+        with patch("src.server.endpoints.get_session", side_effect=RuntimeError("db down")):
+            h.do_GET()
+        assert _status(h) == 500
+
+    def test_metrics_with_data(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/metrics", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
+        combined = b"".join(c[0][0] for c in h.wfile.write.call_args_list if isinstance(c[0][0], bytes))
+        assert b"lcp_requests_total" in combined
+        assert b"lcp_cost_total" in combined
+
+    def test_export_with_data(self, temp_db):
+        _seed(temp_db)
+        h = TestHandler(path="/export", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
+        combined = b"".join(c[0][0] for c in h.wfile.write.call_args_list if isinstance(c[0][0], bytes))
+        assert b"timestamp,profile,model,provider" in combined
+        assert b"deepseek-v4-pro" in combined
+
+    def test_export_db_failure(self, temp_db):
+        h = TestHandler(path="/export", engine=temp_db)
+        with patch("src.server.endpoints.get_session", side_effect=RuntimeError("db down")):
+            h.do_GET()
+        assert _status(h) == 500
+
+
+# ── Provider discover: rich metadata details ───────────────────────────────
+
+class TestProviderDiscoverDetails:
+    @patch("urllib.request.urlopen")
+    def test_rich_metadata_details(self, mock_urlopen, temp_db):
+        """Discover parses meta n_params (B/M), n_ctx, ftype, size, details, pricing."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "data": [
+                # meta.n_params (no details) -> _fmt_params B branch
+                {
+                    "id": "big-model",
+                    "meta": {
+                        "n_ctx": 131072,
+                        "n_ctx_train": 200000,
+                        "n_params": 7_300_000_000,  # -> 7.3B via _fmt_params
+                        "ftype": "Q4_K_M",
+                        "size": 4_000_000_000,
+                    },
+                    "pricing": {"prompt": 0.5, "completion": 1.5},
+                },
+                # details.parameter_size overwrites -> M branch + details fields
+                {
+                    "id": "mid-model",
+                    "meta": {"n_params": 3_500_000},  # -> 3.5M via _fmt_params
+                    "details": {
+                        "parameter_size": "3.5B",
+                        "quantization_level": "Q4_0",
+                    },
+                },
+                "simple-model-id",
+            ]
+        }).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        body = json.dumps({"api_base": "https://test.api/v1", "api_key": "sk"})
+        h = TestHandler(path="/api/providers/discover", method="POST", engine=temp_db, body=body)
+        h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is True
+        m0 = result["models"][0]
+        assert m0["context_length"] == 131072
+        assert m0["context_train"] == 200000
+        assert m0["parameters"] == "7.3B"  # _fmt_params B branch
+        assert m0["quantization"] == "Q4_K_M"
+        assert m0["size_bytes"] == 4_000_000_000
+        assert m0["pricing"] == {"prompt": 0.5, "completion": 1.5}
+        # details overwrites meta-derived parameters; quantization from details
+        m1 = result["models"][1]
+        assert m1["parameters"] == "3.5B"
+        assert m1["quantization"] == "Q4_0"
+        # String-only model entry
+        assert result["models"][2]["id"] == "simple-model-id"
+
+    @patch("urllib.request.urlopen")
+    def test_list_response_format(self, mock_urlopen, temp_db):
+        """Discover handles a top-level list response."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps([
+            {"id": "m-a"},
+            {"id": "m-b"},
+        ]).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        body = json.dumps({"api_base": "https://test.api/v1", "api_key": "sk"})
+        h = TestHandler(path="/api/providers/discover", method="POST", engine=temp_db, body=body)
+        h.do_POST()
+        result = _json_body(h)
+        assert result["count"] == 2
+        assert result["models"][0]["id"] == "m-a"
+
+    @patch("urllib.request.urlopen")
+    def test_http_error_then_success_fallback(self, mock_urlopen, temp_db):
+        """First URL fails with HTTPError, second (/v1/models) succeeds."""
+        import urllib.error
+        err = urllib.error.HTTPError("url", 404, "Not Found", {}, None)
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"data": [{"id": "m1"}]}).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.side_effect = [err, mock_resp]
+
+        body = json.dumps({"api_base": "https://test.api", "api_key": "sk"})  # no /v1
+        h = TestHandler(path="/api/providers/discover", method="POST", engine=temp_db, body=body)
+        h.do_POST()
+        result = _json_body(h)
+        assert result["ok"] is True
+        assert result["models"][0]["id"] == "m1"
+
+
+# ── Chain reorder branches ─────────────────────────────────────────────────
+
+class TestChainReorder:
+    def _chain_body(self, temp_db, body, path="/api/chains/l2"):
+        return TestHandler(path=path, method="PUT", engine=temp_db, body=body)
+
+    def test_invalid_json(self, temp_db):
+        h = TestHandler(path="/api/chains/l2", method="PUT", engine=temp_db)
+        h.rfile.read = MagicMock(side_effect=Exception("bad json"))
+        h.headers = {"Content-Length": "10"}
+        h.do_PUT()
+        assert _status(h) == 400
+
+    def test_profile_not_found(self, temp_db):
+        body = json.dumps({"chain": []})
+        h = self._chain_body(temp_db, body, path="/api/chains/ghost")
+        h.do_PUT()
+        assert _status(h) == 404
+
+    def test_missing_chain_list(self, temp_db):
+        LCPHandler.config.raw = {"profiles": {"l2": {"chain": []}}}
+        h = self._chain_body(temp_db, json.dumps({"chain": "notalist"}))
+        h.do_PUT()
+        assert _status(h) == 400
+
+    def test_reorder_preserves_base_url(self, temp_db):
+        LCPHandler.config.raw = {
+            "profiles": {
+                "l2": {
+                    "chain": [
+                        {"provider": "opencode", "model": "deepseek-v4-pro", "base_url": "https://old/v1"},
+                    ],
+                },
+            },
+        }
+        saved = {}
+        LCPHandler.config.save = MagicMock(side_effect=lambda: saved.update({"chain": LCPHandler.config.raw["profiles"]["l2"]["chain"]}))
+        body = json.dumps({"chain": [
+            {"provider": "deepseek", "model": "deepseek-v4-flash", "base_url": "https://new/v1"},
+            {"provider": "opencode", "model": "deepseek-v4-pro"},
+        ]})
+        h = self._chain_body(temp_db, body)
+        h.do_PUT()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["chain"][0]["base_url"] == "https://new/v1"
+        # New entry for opencode inherits the preserved base_url from old chain
+        assert result["chain"][1]["base_url"] == "https://old/v1"

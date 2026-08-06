@@ -457,11 +457,14 @@ class ProviderEndpoints:
             self._send_json({"ok": False, "error": last_error or "no models endpoint found"})
             return
 
-        models_raw = result.get("data") or result.get("models")
-        if models_raw is None:
-            models_raw = result if isinstance(result, list) else []
-        elif not isinstance(models_raw, list):
-            models_raw = []
+        if isinstance(result, list):
+            models_raw = result
+        else:
+            models_raw = result.get("data") or result.get("models")
+            if models_raw is None:
+                models_raw = []
+            elif not isinstance(models_raw, list):
+                models_raw = []
 
         models = []
         for m in models_raw:
