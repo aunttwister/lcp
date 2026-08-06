@@ -192,6 +192,14 @@ class TestPageRenderers:
         assert "$50.00/$200" in html
         assert "25.0%" in html
 
+    def test_render_profiles_page_budget_query_error_swallowed(self, mock_config, temp_db):
+        """A failure querying profile budgets falls back to an empty dict."""
+        from src.ui.pages import render_profiles_page
+        _db_path, engine = temp_db
+        with patch("src.api.models.get_session", side_effect=RuntimeError("db down")):
+            html = render_profiles_page(mock_config, engine=engine)
+        assert "<!DOCTYPE html>" in html
+
     def test_render_keys_page(self, mock_config):
         from src.ui.pages import render_keys_page
         html = render_keys_page(mock_config, engine=None)
@@ -422,6 +430,53 @@ class TestComputeMonthly:
 
         result = _compute_monthly(engine)
         assert "test_prov" not in result
+
+
+# ---------------------------------------------------------------------------
+# _fmt_num / _fmt_cost filters
+# ---------------------------------------------------------------------------
+
+
+class TestFormatFilters:
+    """Direct tests for the Jinja2 format filters."""
+
+    def test_fmt_num_none(self):
+        from src.ui.render import _fmt_num
+        assert _fmt_num(None) == "0"
+
+    def test_fmt_num_millions(self):
+        from src.ui.render import _fmt_num
+        assert _fmt_num(1_500_000) == "1.5M"
+
+    def test_fmt_num_thousands(self):
+        from src.ui.render import _fmt_num
+        assert _fmt_num(42_300) == "42.3K"
+
+    def test_fmt_num_small(self):
+        from src.ui.render import _fmt_num
+        assert _fmt_num(7) == "7"
+
+    def test_fmt_cost_none(self):
+        from src.ui.render import _fmt_cost
+        assert _fmt_cost(None) == "$0.000000"
+
+    def test_fmt_cost_value(self):
+        from src.ui.render import _fmt_cost
+        assert _fmt_cost(1.5) == "$1.500000"
+
+
+# ---------------------------------------------------------------------------
+# _compute_monthly exception path
+# ---------------------------------------------------------------------------
+
+
+class TestComputeMonthlyExceptions:
+    def test_db_error_returns_empty_dict(self, temp_db):
+        from src.ui.render import _compute_monthly
+        _db_path, engine = temp_db
+        # _compute_monthly imports get_session from models at call time
+        with patch("src.api.models.get_session", side_effect=RuntimeError("db down")):
+            assert _compute_monthly(engine) == {}
 
 
 # ---------------------------------------------------------------------------
