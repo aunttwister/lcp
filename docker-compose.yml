@@ -13,6 +13,7 @@ services:
     environment:
       - COST_DB=/app/data/costs.db
       - LISTEN_PORT=8734
+      - TIKTOKEN_CACHE_DIR=/app/data/tiktoken_cache
       - OPENCODE_API_KEY=${OPENCODE_API_KEY}
       - OPENCODE_COOKIE=${OPENCODE_COOKIE}
       - OPENCODE_WORKSPACE_ID=${OPENCODE_WORKSPACE_ID}

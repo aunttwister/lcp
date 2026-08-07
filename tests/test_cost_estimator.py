@@ -1,19 +1,20 @@
-"""Tests for cost_estimator.py"""
+"""Tests for cost_estimator.py — tiktoken-based exact token counting."""
 import pytest
 from src.api.cost_estimator import count_tokens, estimate_tokens, estimate_from_request, estimate_cost
 
 def test_count_tokens_simple():
     n = count_tokens([{"role": "user", "content": "hello world"}])
-    # ~4 chars/token: "hello world" = 11 chars → max(1, 11//4)=2, +4 overhead = 6
-    assert n >= 4
+    # "hello world" = 2 tokens in cl100k_base ("hello", " world")
+    assert n == 6  # 4 overhead + 2 content tokens
 
 def test_count_tokens_empty():
     n = count_tokens([{"role": "user", "content": ""}])
-    assert n >= 4
+    assert n == 4  # just the per-message overhead
 
 def test_count_tokens_multiple_msgs():
     msgs = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]
     n = count_tokens(msgs)
+    # "hello" = 1 token, "hi" = 1 token, overhead = 8
     assert n >= 8
 
 def test_count_tokens_with_tools():
@@ -23,10 +24,10 @@ def test_count_tokens_with_tools():
     n_without = count_tokens(msgs, None)
     assert n_with > n_without
 
-def test_count_tokens_short_string_minimum_one():
-    """Single character produces at least 1 token via max(1, len//4)."""
-    n = count_tokens([{"role": "user", "content": "x"}])
-    assert n == 5  # 4 overhead + max(1, 1//4) = 5
+def test_count_tokens_code():
+    """Code is more token-dense than prose — tiktoken catches this."""
+    n = count_tokens([{"role": "user", "content": "def foo(x): return x+1"}])
+    assert n > 8  # code gets many more tokens than chars/4 would estimate
 
 def test_estimate_tokens_basic():
     msgs = [{"role": "user", "content": "hello world"}]
@@ -62,7 +63,8 @@ def test_count_tokens_vision_content():
         ]
     }]
     n = count_tokens(msgs)
-    assert n >= 4
+    # "describe this image" = 3 tokens + overhead
+    assert n >= 6
 
 
 # ═══════════════════════════════════════════════════════════════════════

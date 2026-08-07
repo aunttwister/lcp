@@ -1,12 +1,14 @@
-"""Pre-request cost estimation using a character-based heuristic.
+"""Pre-request cost estimation using tiktoken (cl100k_base).
 
-Token count is approximate (~0.25 tokens per character for English text).
-Real, billed costs come from the provider's ``usage`` block in the response,
-not from this estimator. This module exists only for the pre-request
-X-Estimated-Cost header and the dynamic flash/pro router.
+Tiktoken provides exact token counts matching the provider's BPE encoding.
+The encoding is loaded at module level; the tokenizer data is downloaded
+once at build time (see Dockerfile) and cached to a persistent volume at
+runtime (TIKTOKEN_CACHE_DIR), so there is no per-request overhead.
 """
 
 from typing import Optional
+
+import tiktoken
 
 from .logging_config import get_logger
 
@@ -20,35 +22,32 @@ _DEFAULT_PRICING = {
     "deepseek-v4-flash": {"cache_miss": 0.14, "output": 0.28},
 }
 
-# Approximate ratio for English text: ~4 characters per token for BPE tokenizers
-# (cl100k_base, the encoding used by DeepSeek/OpenAI models).
-_CHARS_PER_TOKEN = 4
+# Encodings — deepseek models use cl100k_base (same as GPT-4).
+# Pre-downloaded at build time, persisted via TIKTOKEN_CACHE_DIR volume.
+_ENCODING = tiktoken.get_encoding("cl100k_base")
 
 
 def count_tokens(messages: list[dict], tools: Optional[list[dict]] = None) -> int:
-    """Estimate token count for a chat completion request.
+    """Count tokens using the cl100k_base BPE encoding.
 
-    Uses ~4 chars/token heuristic. Exact counts require provider-specific
-    tokenizers — but the real billed cost comes from the provider's response
-    ``usage`` block, not from this estimate.
+    Matches the tokenizer used by DeepSeek/OpenAI models. Real billed costs
+    come from the provider's response ``usage`` block; this is the pre-request
+    estimate for the X-Estimated-Cost header and routing decisions.
     """
-    def _tokenize(text: str) -> int:
-        return max(1, len(text) // _CHARS_PER_TOKEN)
-
     token_count = 0
     for msg in messages:
         token_count += 4  # approximate per-message overhead
         content = msg.get("content", "")
         if isinstance(content, str):
-            token_count += _tokenize(content)
+            token_count += len(_ENCODING.encode(content))
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
-                    token_count += _tokenize(block.get("text", ""))
+                    token_count += len(_ENCODING.encode(block.get("text", "")))
 
     if tools:
         for tool in tools:
-            token_count += _tokenize(str(tool))
+            token_count += len(_ENCODING.encode(str(tool)))
 
     return token_count
 
