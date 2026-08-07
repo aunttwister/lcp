@@ -615,6 +615,28 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .lcp-stack td.lcp-col-center,
 .lcp-stack th.lcp-col-center { text-align: center !important; }
 
+/* Per-row expandable key stacks — one table, one header, expandable rows */
+.lcp-stack tbody.key-stack .lcp-stack-body {
+  display: none;
+}
+.lcp-stack tbody.key-stack.expanded .lcp-stack-body {
+  display: table-row;
+}
+.lcp-stack tbody.key-stack.expanded .lcp-stack-trigger td {
+  background: hsl(var(--secondary) / 0.2);
+}
+.lcp-stack tbody.key-stack.expanded .lcp-stack-chevron {
+  transform: rotate(180deg);
+}
+
+/* ── Tabs (usage-style) ── */
+.tab-bar { display: flex; gap: 0; margin-bottom: 1rem; border-bottom: 2px solid hsl(var(--card-border)); }
+.tab-btn { padding: 0.5rem 1rem; font-size: 0.8rem; background: none; border: none; color: hsl(var(--muted-foreground)); border-bottom: 2px solid transparent; margin-bottom: -2px; cursor: pointer; transition: color 0.2s, border-color 0.2s; }
+.tab-btn:hover { color: hsl(var(--foreground)); }
+.tab-btn.active { color: hsl(var(--foreground)); border-bottom-color: hsl(var(--foreground)); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
 /* ── Profile Filter Dropdown ── */
 .lcp-filter-dropdown { position: relative; display: inline-block; }
 .lcp-filter-trigger {

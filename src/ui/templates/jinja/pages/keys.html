@@ -81,12 +81,12 @@ function loadKeys(){api('GET','/api/keys').then(function(d){
 var keys=d.keys||[],groups={};
 keys.forEach(function(k){var nm=k.name||'unnamed';if(!groups[nm])groups[nm]={active:null,revoked:[]};if(k.status==='active')groups[nm].active=k;else groups[nm].revoked.push(k)});
 Object.values(groups).forEach(function(g){g.revoked.sort(function(a,b){return (b.revoked_at||'')>(a.revoked_at||'')?1:-1})});
-var html='';
+var html='<table class="lcp-stack" id="keyTable">'+COLS+'<thead>'+HDR+'</thead>';
 Object.keys(groups).sort().forEach(function(name){
 var g=groups[name],count=g.revoked.length,sid='sk-'+name.replace(/[^a-zA-Z0-9]/g,'_');
-html+='<table class="lcp-stack" id="'+sid+'" aria-expanded="false" data-search="'+esc(name)+'">'+COLS+'<thead>'+HDR;
+html+='<tbody class="key-stack" id="'+sid+'" aria-expanded="false" data-search="'+esc(name)+'">';
 html+='<tr class="lcp-stack-trigger" onclick="toggleStack(\''+sid+'\')">';
-html+='<td><b>'+esc(name)+'</b> <span class="lcp-stack-chevron">▾</span></td>';
+html+='<td><b>'+esc(name)+'</b> <span class="lcp-stack-count">'+count+'</span> <span class="lcp-stack-chevron">▾</span></td>';
 if(g.active){
 html+='<td class="mono" style="font-size:0.75rem">'+esc(g.active.key_prefix)+'</td>';
 html+='<td style="font-size:0.75rem">'+(g.active.allowed_profiles||'all')+'</td>';
@@ -95,19 +95,16 @@ html+='<td class="cost mono" style="font-size:0.75rem">'+(g.active.spend_limit>0
 html+='<td><span class="badge badge-success">active</span></td>';
 html+='<td class="mono" style="font-size:0.6875rem">'+(g.active.created_at||'').slice(0,10)+'</td>';
 html+='<td style="white-space:nowrap">';
-if(count>0)html+='<span class="lcp-stack-count">+'+count+'</span> ';
 html+='<button class="btn-sm" onclick="event.stopPropagation();rotateKey('+g.active.id+')" title="Rotate">↻</button>';
 html+='<button class="btn-sm btn-danger" style="margin-left:0.125rem" onclick="event.stopPropagation();revokeKey('+g.active.id+')" title="Revoke">✕</button>';
 html+='</td>';
 }else{
-html+='<td colspan="5"></td><td><span class="badge badge-error">all revoked</span></td><td></td>';
-if(count>0)html+='<td><span class="lcp-stack-count">'+count+'</span></td>';
+html+='<td colspan="4"></td><td><span class="badge badge-error">all revoked</span></td><td></td><td></td>';
 }
-html+='</tr></thead>';
-html+='<tbody class="lcp-stack-body">';
+html+='</tr>';
 if(count>0){
 g.revoked.forEach(function(rk){
-html+='<tr>';
+html+='<tr class="lcp-stack-body">';
 html+='<td></td>';
 html+='<td class="mono" style="font-size:0.75rem">'+esc(rk.key_prefix)+'</td>';
 html+='<td style="font-size:0.75rem">'+(rk.allowed_profiles||'all')+'</td>';
@@ -119,8 +116,9 @@ html+='<td></td>';
 html+='</tr>';
 });
 }
-html+='</tbody></table>';
+html+='</tbody>';
 });
+html+='</table>';
 document.getElementById('keyStacks').innerHTML=html||'<div class="empty">No keys yet.</div>';
 })}
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
@@ -134,7 +132,7 @@ function createKey(){var name=document.getElementById('newKeyName').value.trim()
 function copyShownKey(){var btn=event.target;navigator.clipboard.writeText(document.getElementById('shownKey').textContent).then(function(){var o=btn.textContent;btn.textContent='Copied!';setTimeout(function(){btn.textContent=o},1500)})}
 function rotateKey(id){if(!confirm('Rotate this key?'))return;api('POST','/api/keys/'+id+'/rotate').then(function(d){if(d.key){document.getElementById('shownKey').textContent=d.key;document.getElementById('shownKeyInfo').innerHTML='Rotated from ID: '+d.old_id+' → <b>'+d.id+'</b><br>Name: <b>'+d.name+'</b>';openDialog('showKeyModal')}else{alert('Error: '+(d.error||'unknown'))}})}
 function revokeKey(id){if(!confirm('Revoke this key?'))return;api('DELETE','/api/keys/'+id).then(function(d){if(d.ok)loadKeys();else alert('Error: '+(d.error||'unknown'))})}
-function filterKeys(){var q=document.getElementById('keySearch').value.toLowerCase();document.querySelectorAll('#keyStacks .lcp-stack').forEach(function(s){s.style.display=(s.getAttribute('data-search')||'').toLowerCase().includes(q)?'':'none'})}
+function filterKeys(){var q=document.getElementById('keySearch').value.toLowerCase();document.querySelectorAll('#keyStacks tbody.key-stack').forEach(function(s){s.style.display=(s.getAttribute('data-search')||'').toLowerCase().includes(q)?'':'none'})}
 loadKeys();
 {% endraw %}
 </script>

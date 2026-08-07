@@ -6,13 +6,13 @@
 <h1>Providers</h1>
 <p class="subtitle">Monitor health and manage provider configuration</p>
 
-<div class="segmented" style="margin-bottom:1rem">
-  <button class="active" data-tab="health" onclick="switchProvTab('health', this)">Health</button>
-  <button data-tab="config" onclick="switchProvTab('config', this)">Configuration</button>
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="health" onclick="switchProvTab('health', this)">Health</button>
+  <button class="tab-btn" data-tab="config" onclick="switchProvTab('config', this)">Configuration</button>
 </div>
 
 <!-- ═══ HEALTH TAB ═══ -->
-<div id="tab-health" class="prov-tab">
+<div id="tab-health" class="tab-panel active">
 <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem">
   <button class="btn-sm" onclick="loadProviderHealth()">Refresh</button>
   <span style="font-size:0.75rem;color:hsl(var(--muted-foreground))" id="healthSummary"></span>
@@ -26,7 +26,7 @@
 </div>
 
 <!-- ═══ CONFIG TAB ═══ -->
-<div id="tab-config" class="prov-tab" style="display:none">
+<div id="tab-config" class="tab-panel">
 <div style="display:flex;gap:0.5rem;margin-bottom:1rem">
   <button class="btn-sm btn-primary" onclick="showAddProvForm()">+ Add Provider</button>
   <select id="provPreset" onchange="loadPreset()" style="padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
@@ -69,9 +69,9 @@
 var _selectedModels=[];
 
 function switchProvTab(tab, btn){
-  document.querySelectorAll('.prov-tab').forEach(function(t){t.style.display='none'});
-  document.getElementById('tab-'+tab).style.display='block';
-  document.querySelectorAll('.segmented button[data-tab]').forEach(function(b){b.classList.remove('active')});
+  document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active')});
+  document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active')});
+  document.getElementById('tab-'+tab).classList.add('active');
   btn.classList.add('active');
 }
 
