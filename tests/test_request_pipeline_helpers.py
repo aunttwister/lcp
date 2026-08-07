@@ -390,6 +390,19 @@ class TestForwardRequestStreaming:
                 with pytest.raises(ProviderAuthError):
                     forward_request(self._cfg(), body, mock_config)
 
+    def test_http_403_includes_error_body(self, mock_config):
+        """403 auth error message should include the upstream reason body."""
+        import urllib.error
+        body = {"messages": [], "stream": False}
+        err = urllib.error.HTTPError("url", 403, "Forbidden", {}, None)
+        err.read = MagicMock(return_value=b'{"error":"invalid api key","message":"key expired"}')
+        mock_config.get_provider_key.return_value = None
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", side_effect=err):
+                with pytest.raises(ProviderAuthError) as exc:
+                    forward_request(self._cfg(), body, mock_config)
+        assert "403" in str(exc.value) or "invalid api key" in str(exc.value) or "key expired" in str(exc.value)
+
     def test_api_key_from_credential_store(self, mock_config, temp_db, tmp_path):
         """When env is unset and a credential is stored, use the decrypted key."""
         from src.api.credential_store import CredentialStore

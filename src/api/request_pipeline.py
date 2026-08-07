@@ -362,7 +362,10 @@ def forward_request(provider_cfg: dict, body: dict, config):
         error_body = e.read().decode("utf-8", errors="replace")[:500]
         status = e.code
         if status == 401 or status == 403:
-            raise ProviderAuthError(f"Provider {provider_cfg['provider']} rejected auth: {status}")
+            reason = error_body.strip() if error_body.strip() else f"HTTP {status}"
+            raise ProviderAuthError(
+                f"Provider {provider_cfg['provider']} rejected auth: {reason}"
+            )
         elif status == 429:
             raise ProviderRateLimitError(f"Provider {provider_cfg['provider']} rate limited")
         elif 400 <= status < 500:
