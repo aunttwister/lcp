@@ -238,7 +238,7 @@ Every runtime dependency and what it does in LCP:
 | Package | Role in LCP |
 |---|---|
 | **`structlog`** | Structured JSON logging to stdout. Every request, error, budget breach, and startup step is a machine-readable log line — `docker logs lcp` is grep-friendly. |
-| **`sqlalchemy`** | SQLite ORM for the `requests`, `budgets`, `alerts`, `api_keys`, `teams`, `users`, and `audit_logs` tables. All cost history, spend limits, and alert state lives here. No external database. |
+| **`sqlalchemy`** | SQLite ORM for the `requests`, `budgets`, `alerts`, and `api_keys` tables (plus unused `teams`/`users`/`audit_logs` schema). All cost history, spend limits, and alert state lives here. No external database. |
 | **`alembic`** | Database schema migrations. Every schema change (alerts table, API keys, error_detail column) gets a numbered migration in `alembic/versions/`. Run automatically on container startup via `alembic upgrade head`. |
 | **`pyyaml`** | Reads and writes `config/gateway.yaml`. The config is hot-reloaded — edit providers, profiles, or pricing while the server is running and changes take effect on the next request. |
 | **`tiktoken`** | Exact BPE token counts using the `cl100k_base` encoding (same tokenizer used by DeepSeek and OpenAI models). Powers the pre-request `X-Estimated-Cost` header and the dynamic flash/pro router. The ~1 MB vocabulary file is pre-downloaded at Docker build time and persisted to a volume — zero CDN dependency at runtime. |
@@ -319,15 +319,27 @@ See [PLAN.md](PLAN.md) for the full API reference.
 - tiktoken integration — exact BPE token counts, pre-downloaded at build time
 - Startup observability — per-step timing logs in `docker logs`
 
-### In progress
-- Multi-tenant — teams, users, credit limits (schema complete, wiring TBD)
+### Scope boundary
+- **Credit limits** — already covered by per-key budgets (spend caps with hard-stop)
+- **Alerting** — already covered by the alert system (threshold breaches, webhooks)
+- **Multi-tenant teams/users** — out of scope. LCP stays a single-instance, single-org
+  gateway; we will not build org/team membership, per-user billing, or role management.
 
 ### Planned
-- Permission matrix — declarative `allow` / `block` / `blocked_globally` rules, replaces tool stripping
+- Permission matrix — declarative `allow` / `block` / `blocked_globally` rules,
+  replaces tool stripping ([spec](features/permission-plugin.md))
 - Harness-style dynamic routing — auto-route flash vs pro based on request complexity
-- Rate limiting — per-key, per-profile, global
-- Audit log — every request logged for compliance
-- Memory plugin — embedded LanceDB, unified `/v1/memories` endpoint ([spec](features/memory.md))
+- Logging enhancements — structured request telemetry, token-usage logging
+  ([spec](features/logging-enhancements.md))
+- Provider health dashboard — richer uptime/health surfacing
+  ([spec](features/provider-health.md))
+- Memory plugin — embedded LanceDB, unified `/v1/memories` endpoint
+  ([spec](features/memory.md))
+- Dashboard enhancements — backlog from the original dashboard plan
+  ([spec](features/enhancements.md))
+- Rate limiting — *only if needed*: budgets already cap spend, but they do not
+  cap request frequency. A per-key/per-profile requests-per-minute limiter is a
+  separate feature, only worth building if throughput (not cost) becomes a concern.
 
 Full details in [PLAN.md](PLAN.md).
 
@@ -336,8 +348,7 @@ Full details in [PLAN.md](PLAN.md).
 LCP runs continuously in production, routing all LLM traffic for a multi-agent homelab
 (6 Hermes profiles, 15+ custom skills, daily cron jobs) and serving as the LLM backend
 for daily VS Code Copilot usage. It handles approximately 200 requests per day across 5
-profiles with real cost tracking and budget enforcement. Phase 5 (multi-tenant) is the
-next milestone toward a 1.0 release.
+profiles with real cost tracking, budget enforcement, and alerting.
 
 ## AI Attribution
 
