@@ -1,19 +1,28 @@
-"""Token count verification — compare provider-reported usage against local estimate."""
+"""Token count verification — compare provider-reported usage against local estimate.
 
-import tiktoken
+Uses a character-based heuristic (~4 chars/token). The estimate is approximate;
+the primary purpose is detecting gross mismatches (e.g. a provider reporting
+10× more tokens than expected).
+"""
 
 from .logging_config import get_logger
 
 logger = get_logger("lcp.token_verifier")
 
-_ENCODING = tiktoken.get_encoding("cl100k_base")
+# Approximate ratio for English text: ~4 characters per token for BPE tokenizers.
+_CHARS_PER_TOKEN = 4
 
 # Discrepancy threshold beyond which we log a warning
 DISCREPANCY_THRESHOLD = 0.25  # 25% difference
 
 
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate from character count (~4 chars/token for English)."""
+    return max(1, len(text) // _CHARS_PER_TOKEN)
+
+
 class TokenVerifier:
-    """Verifies provider-reported token counts against local tiktoken estimates."""
+    """Verifies provider-reported token counts against local estimates."""
 
     def __init__(self, threshold: float = DISCREPANCY_THRESHOLD):
         self.threshold = threshold
@@ -30,12 +39,12 @@ class TokenVerifier:
         provider_prompt = response_usage.get("prompt_tokens", 0)
         provider_completion = response_usage.get("completion_tokens", 0)
 
-        # Estimate prompt tokens
+        # Estimate prompt tokens from message content
         estimated_prompt = 0
         for msg in messages:
             content = msg.get("content", "")
             if isinstance(content, str):
-                estimated_prompt += len(_ENCODING.encode(content))
+                estimated_prompt += _estimate_tokens(content)
             estimated_prompt += 4  # overhead
 
         prompt_diff_pct = (

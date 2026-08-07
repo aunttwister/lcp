@@ -1,12 +1,11 @@
 """Tests for cost_estimator.py"""
 import pytest
-from unittest.mock import patch
 from src.api.cost_estimator import count_tokens, estimate_tokens, estimate_from_request, estimate_cost
 
 def test_count_tokens_simple():
     n = count_tokens([{"role": "user", "content": "hello world"}])
-    assert n >= 2
-    assert n <= 20
+    # ~4 chars/token: "hello world" = 11 chars → max(1, 11//4)=2, +4 overhead = 6
+    assert n >= 4
 
 def test_count_tokens_empty():
     n = count_tokens([{"role": "user", "content": ""}])
@@ -23,6 +22,11 @@ def test_count_tokens_with_tools():
     n_with = count_tokens(msgs, tools)
     n_without = count_tokens(msgs, None)
     assert n_with > n_without
+
+def test_count_tokens_short_string_minimum_one():
+    """Single character produces at least 1 token via max(1, len//4)."""
+    n = count_tokens([{"role": "user", "content": "x"}])
+    assert n == 5  # 4 overhead + max(1, 1//4) = 5
 
 def test_estimate_tokens_basic():
     msgs = [{"role": "user", "content": "hello world"}]
@@ -43,7 +47,7 @@ def test_estimate_from_request():
     assert result["currency"] == "USD"
 
 def test_estimate_from_request_unknown_model():
-    """Unknown model falls back to deepseek pricing (lines 33-37)."""
+    """Unknown model falls back to deepseek pricing."""
     result = estimate_from_request("nonexistent-model", [{"role": "user", "content": "hello"}], max_tokens=100)
     assert "estimated_total_cost" in result
     assert result["estimated_total_cost"] > 0
@@ -59,58 +63,6 @@ def test_count_tokens_vision_content():
     }]
     n = count_tokens(msgs)
     assert n >= 4
-
-
-# ── Lazy encoding (crash recovery when tiktoken download fails) ──────────
-
-class TestLazyEncoding:
-    def setup_method(self):
-        import src.api.cost_estimator as ce
-        ce._ENCODING = None
-        ce._ENCODING_FAILED = False
-
-    def test_count_tokens_still_works_when_encoding_download_fails(self):
-        """count_tokens falls back to char-based heuristic when tiktoken fails."""
-        with patch("src.api.cost_estimator.tiktoken.get_encoding",
-                   side_effect=RuntimeError("no internet")):
-            n = count_tokens([{"role": "user", "content": "hello world"}])
-        # Heuristic: ~ 4 (overhead) + max(1, 11//4) = 4 + 2 = 6
-        assert n >= 4
-
-    def test_encoding_failure_is_cached(self):
-        """After first failure, _ENCODING_FAILED = True, skips retries."""
-        import src.api.cost_estimator as ce
-
-        with patch("src.api.cost_estimator.tiktoken.get_encoding",
-                   side_effect=RuntimeError("no internet")):
-            count_tokens([{"role": "user", "content": "hi"}])
-
-        assert ce._ENCODING_FAILED is True
-        assert ce._ENCODING is None
-        # Second call does not re-attempt download
-        n = count_tokens([{"role": "user", "content": "hi"}])
-        assert n >= 4
-
-    def test_encoding_loads_on_first_use_and_caches(self):
-        """Normal path: encoding loaded once, reused."""
-        import src.api.cost_estimator as ce
-        ce._ENCODING = None
-        ce._ENCODING_FAILED = False
-
-        n1 = count_tokens([{"role": "user", "content": "hi"}])
-        assert ce._ENCODING is not None
-        n2 = count_tokens([{"role": "user", "content": "hi"}])
-        assert n1 == n2
-
-    def test_tools_fallback_when_encoding_fails(self):
-        """Tool tokenization uses heuristic when tiktoken unavailable."""
-        msgs = [{"role": "user", "content": "hello"}]
-        tools = [{"type": "function", "function": {"name": "search", "parameters": {}}}]
-
-        with patch("src.api.cost_estimator.tiktoken.get_encoding",
-                   side_effect=RuntimeError("no internet")):
-            n = count_tokens(msgs, tools)
-        assert n >= 4
 
 
 # ═══════════════════════════════════════════════════════════════════════

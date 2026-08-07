@@ -1,8 +1,12 @@
-"""Pre-request cost estimation using tiktoken."""
+"""Pre-request cost estimation using a character-based heuristic.
+
+Token count is approximate (~0.25 tokens per character for English text).
+Real, billed costs come from the provider's ``usage`` block in the response,
+not from this estimator. This module exists only for the pre-request
+X-Estimated-Cost header and the dynamic flash/pro router.
+"""
 
 from typing import Optional
-
-import tiktoken
 
 from .logging_config import get_logger
 
@@ -16,49 +20,20 @@ _DEFAULT_PRICING = {
     "deepseek-v4-flash": {"cache_miss": 0.14, "output": 0.28},
 }
 
-# Encodings — deepseek models use cl100k_base (same as GPT-4).
-# Lazily loaded on first use: tiktoken downloads the tokenizer data from
-# OpenAI's CDN, which fails in containers without internet access.
-_ENCODING: Optional[object] = None
-_ENCODING_FAILED: bool = False
-
-
-def _get_encoding():
-    """Load tiktoken encoding, caching the result. Returns None on failure."""
-    global _ENCODING, _ENCODING_FAILED
-    if _ENCODING is not None:
-        return _ENCODING
-    if _ENCODING_FAILED:
-        return None
-    try:
-        _t0 = __import__("time").monotonic()
-        _ENCODING = tiktoken.get_encoding("cl100k_base")
-        logger.info("tiktoken_encoding_loaded",
-                    encoding="cl100k_base",
-                    load_ms=round((__import__("time").monotonic() - _t0) * 1000, 1))
-        return _ENCODING
-    except Exception as e:
-        _ENCODING_FAILED = True
-        logger.warning("tiktoken_encoding_failed", error=str(e))
-        return None
+# Approximate ratio for English text: ~4 characters per token for BPE tokenizers
+# (cl100k_base, the encoding used by DeepSeek/OpenAI models).
+_CHARS_PER_TOKEN = 4
 
 
 def count_tokens(messages: list[dict], tools: Optional[list[dict]] = None) -> int:
     """Estimate token count for a chat completion request.
 
-    Uses tiktoken with cl100k_base encoding. This is an approximation —
-    exact counts require provider-specific tokenizers.
-
-    Falls back to a simple character-based heuristic when tiktoken is
-    unavailable (e.g. container without internet during first startup).
+    Uses ~4 chars/token heuristic. Exact counts require provider-specific
+    tokenizers — but the real billed cost comes from the provider's response
+    ``usage`` block, not from this estimate.
     """
-    enc = _get_encoding()
-
     def _tokenize(text: str) -> int:
-        """Encode text using tiktoken, or fall back to ~0.25 Tok/char."""
-        if enc is not None:
-            return len(enc.encode(text))
-        return max(1, len(text) // 4)
+        return max(1, len(text) // _CHARS_PER_TOKEN)
 
     token_count = 0
     for msg in messages:
