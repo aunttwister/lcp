@@ -352,3 +352,27 @@ class TestTryChainErrorReasonTracked:
         h = cb.get_health("bad", "https://bad/v1", "l2")
         assert h["consecutive_failures"] >= 1
         assert "HTTP 503 Service Unavailable" in h["last_failure_reason"]
+
+
+class TestTryChainNoApiKeyEnv:
+    """try_chain must not crash when provider configs lack api_key_env."""
+
+    def test_try_chain_works_without_api_key_env(self):
+        """Config providers with no api_key_env should not cause a KeyError."""
+        from src.api.circuit_breaker import get_circuit_breaker
+        cfg = _chain_config(providers={
+            "main": {"base_url": "https://main.com/v1"},
+        })
+        get_circuit_breaker(cfg)
+        profile_cfg = {
+            "chain": [{"provider": "main", "base_url": "https://main.com/v1", "model": "m1"}],
+            "forbidden_tools": [],
+        }
+        body = {"messages": [{"role": "user", "content": "hi"}]}
+
+        with patch("src.api.request_pipeline.forward_request") as m:
+            m.return_value = ({"choices": []}, 200)
+            resp, status, provider, model = try_chain("l2", profile_cfg, body, cfg)
+
+        assert provider == "main"
+        assert status == 200

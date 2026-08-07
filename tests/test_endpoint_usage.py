@@ -384,18 +384,22 @@ class TestProviderTest:
         h.do_POST()
         assert _status(h) == 400
 
-    def test_resolves_key_from_env(self, temp_db):
+    def test_resolves_key_from_credential_store(self, temp_db):
+        """Provider test resolves key from credential store when not in body."""
+        from unittest.mock import patch as _patch
+        store = MagicMock()
+        store.get.return_value = "cred-key"
         body = {"api_base": "https://api.example.com/v1", "api_key": "", "provider": "opencode", "model": "m"}
         h = self._body_handler(temp_db, body)
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.read.return_value = b'{"model": "m"}'
         mock_resp.__enter__.return_value = mock_resp
-        with patch.dict(os.environ, {"OK": "env-key"}):
-            with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+        with _patch("src.server.endpoints.get_credential_store", return_value=store):
+            with _patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
                 h.do_POST()
         req = mock_open.call_args[0][0]
-        assert req.headers["Authorization"] == "Bearer env-key"
+        assert req.headers["Authorization"] == "Bearer cred-key"
 
 
 # ── Plugin endpoints ──────────────────────────────────────────────────────

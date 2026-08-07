@@ -517,10 +517,9 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
         if "messages" in body:
             body["messages"] = sanitize_messages(body["messages"])
 
-        # Add API key env and base_url to step config
+        # Add base_url to step config (API keys now come from credential store)
         step_with_key = {
             **step,
-            "api_key_env": config.providers[provider_name]["api_key_env"],
             "base_url": base_url,
         }
 

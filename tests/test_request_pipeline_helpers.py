@@ -412,6 +412,13 @@ class TestForwardRequestStreaming:
             req = mock_open.call_args[0][0]
             assert req.headers["Authorization"] == "Bearer sk-stored"
 
+    def test_no_credential_store_raises_config_error(self, mock_config):
+        """When credential store has no key, ConfigError is raised."""
+        body = {"messages": [], "stream": False}
+        with _cred_patch(fallback=None):
+            with pytest.raises(ConfigError, match="No API key found for provider"):
+                forward_request(self._cfg(), body, mock_config)
+
 
 # ── strip_forbidden_tools ───────────────────────────────────────────────
 

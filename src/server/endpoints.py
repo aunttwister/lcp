@@ -399,11 +399,11 @@ class ProviderEndpoints:
         api_key = body.get("api_key", "")
         model = body.get("model", "")
         provider = body.get("provider", "")
-        # Resolve API key from env if not provided
-        if not api_key and provider and provider in self.config.providers:
-            env_var = self.config.providers[provider].get("api_key_env", "")
-            if env_var:
-                api_key = os.environ.get(env_var, "")
+        # Resolve API key from credential store if not provided inline
+        if not api_key and provider:
+            store = get_credential_store(self.engine)
+            if store is not None:
+                api_key = store.get(provider) or ""
         if not api_base or not api_key:
             self._send_json({"error": "missing 'api_base' or 'api_key'"}, 400)
             return
@@ -461,10 +461,10 @@ class ProviderEndpoints:
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
             "Accept": "application/json",
         }
-        if provider and provider in self.config.providers:
-            env_var = self.config.providers[provider].get("api_key_env", "")
-            if env_var:
-                api_key = api_key or os.environ.get(env_var, "")
+        if provider and not api_key:
+            store = get_credential_store(self.engine)
+            if store is not None:
+                api_key = store.get(provider) or ""
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         cookie = os.environ.get("OPENCODE_COOKIE", "")

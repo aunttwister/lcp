@@ -415,6 +415,28 @@ class TestProviderEndpoints:
         h.do_POST()
         assert _status(h) == 400
 
+    @patch("urllib.request.urlopen")
+    def test_discover_resolves_key_from_credential_store(self, mock_urlopen, temp_db):
+        """Discover endpoint uses credential store when no api_key in body."""
+        from unittest.mock import patch as _patch
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "data": [{"id": "m1", "owned_by": "org1"}]
+        }).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        store = MagicMock()
+        store.get.return_value = "sk-stored"
+        body = json.dumps({"api_base": "https://test.api/v1", "provider": "deepseek"})
+        h = TestHandler(path="/api/providers/discover", method="POST", engine=temp_db, body=body)
+        with _patch("src.server.endpoints.get_credential_store", return_value=store):
+            h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is True
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Plugin cookie endpoint tests

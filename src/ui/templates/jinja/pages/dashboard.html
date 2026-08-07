@@ -649,7 +649,6 @@ function showAddProvForm() {
   document.getElementById('provForm').style.display = 'block';
   document.getElementById('provName').value = '';
   document.getElementById('provUrl').value = '';
-  document.getElementById('provKeyEnv').value = '';
   document.getElementById('provModels').value = '';
   document.getElementById('testResult').style.display = 'none';
   document.getElementById('btnSave').disabled = true;
@@ -669,7 +668,6 @@ function loadPreset() {
   document.getElementById('provName').value = key;
   document.getElementById('provUrl').value = p.api_base;
   document.getElementById('provModels').value = (p.models||[]).join(', ');
-  document.getElementById('provKeyEnv').value = 'LCP_'+key.toUpperCase()+'_API_KEY';
 }
 
 function editProvider(name) {
@@ -678,7 +676,6 @@ function editProvider(name) {
   showAddProvForm();
   document.getElementById('provName').value = name;
   document.getElementById('provUrl').value = p.api_base || '';
-  document.getElementById('provKeyEnv').value = p.api_key_env || '';
   document.getElementById('provModels').value = (p.models||[]).join(', ');
   // For editing existing, test not required but available
   _provTestPassed = true;
@@ -688,7 +685,6 @@ function editProvider(name) {
 
 function testProvider() {
   var url = document.getElementById('provUrl').value.trim();
-  var keyEnv = document.getElementById('provKeyEnv').value.trim();
   var models = document.getElementById('provModels').value.split(',')[0].trim();
   var resultEl = document.getElementById('testResult');
   var btnSave = document.getElementById('btnSave');
@@ -728,7 +724,6 @@ function testProvider() {
 function saveProvider() {
   var name = document.getElementById('provName').value.trim();
   var url = document.getElementById('provUrl').value.trim();
-  var keyEnv = document.getElementById('provKeyEnv').value.trim();
   var models = document.getElementById('provModels').value.split(',').map(function(s){return s.trim()}).filter(Boolean);
   if (!name) { alert('Provider name required'); return; }
 
@@ -739,7 +734,7 @@ function saveProvider() {
     return;
   }
 
-  api('POST', '/api/providers', {name:name, api_base:url, api_key_env:keyEnv, models:models}).then(function(d) {
+  api('POST', '/api/providers', {name:name, api_base:url, models:models}).then(function(d) {
     if (d.ok) {
       hideAddProvForm();
       _provTestPassed = false;
@@ -845,10 +840,9 @@ function savePemProvider() {
   var titleEl = document.getElementById('pemTitle');
   var name = titleEl.textContent.replace(/^\s+/, '').split(' ').pop() || '';
   var url = document.getElementById('pemUrl').value.trim();
-  var keyEnv = document.getElementById('pemKeyEnv').value.trim();
   var models = document.getElementById('pemModels').value.split(',').map(function(s){return s.trim()}).filter(Boolean);
   if (!name) { alert('Provider name missing'); return; }
-  api('POST', '/api/providers', {name:name, api_base:url, api_key_env:keyEnv, models:models}).then(function(d) {
+  api('POST', '/api/providers', {name:name, api_base:url, models:models}).then(function(d) {
     if (d.ok) {
       document.getElementById('pemTestResult').style.display = 'block';
       document.getElementById('pemTestResult').textContent = 'Saved. Refresh to see changes.';
