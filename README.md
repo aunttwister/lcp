@@ -238,7 +238,7 @@ Every runtime dependency and what it does in LCP:
 | Package | Role in LCP |
 |---|---|
 | **`structlog`** | Structured JSON logging to stdout. Every request, error, budget breach, and startup step is a machine-readable log line — `docker logs lcp` is grep-friendly. |
-| **`sqlalchemy`** | SQLite ORM for the `requests`, `budgets`, `alerts`, and `api_keys` tables (plus unused `teams`/`users`/`audit_logs` schema). All cost history, spend limits, and alert state lives here. No external database. |
+| **`sqlalchemy`** | SQLite ORM for the `requests`, `budgets`, `alerts`, and `api_keys` tables. All cost history, spend limits, and alert state lives here. No external database. |
 | **`alembic`** | Database schema migrations. Every schema change (alerts table, API keys, error_detail column) gets a numbered migration in `alembic/versions/`. Run automatically on container startup via `alembic upgrade head`. |
 | **`pyyaml`** | Reads and writes `config/gateway.yaml`. The config is hot-reloaded — edit providers, profiles, or pricing while the server is running and changes take effect on the next request. |
 | **`tiktoken`** | Exact BPE token counts using the `cl100k_base` encoding (same tokenizer used by DeepSeek and OpenAI models). Powers the pre-request `X-Estimated-Cost` header and the dynamic flash/pro router. The ~1 MB vocabulary file is pre-downloaded at Docker build time and persisted to a volume — zero CDN dependency at runtime. |
