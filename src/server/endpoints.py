@@ -1071,6 +1071,28 @@ class PluginEndpoints:
         store.set_cookie(provider, cookie)
         self._send_json({"ok": True, "provider": provider, "has_cookie": bool(cookie)})
 
+    def _serve_plugin_workspace_id_get(self, provider: str):
+        """Return whether a UI-managed workspace ID exists for a provider."""
+        store = get_credential_store(self.engine)
+        has = bool(store and store.has_workspace_id(provider))
+        env = bool(os.environ.get("OPENCODE_WORKSPACE_ID", "")) if provider == "opencode" else False
+        self._send_json({"provider": provider, "has_workspace_id": has, "has_env_workspace_id": env})
+
+    def _serve_plugin_workspace_id_set(self, provider: str):
+        """POST body {workspace_id: 'wrk_...'} to upsert (or clear) a UI-managed workspace ID."""
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        ws_id = (body.get("workspace_id") or "").strip()
+        store = get_credential_store(self.engine)
+        if store is None:
+            self._send_json({"error": "credential store not initialized"}, 500)
+            return
+        store.set_workspace_id(provider, ws_id)
+        self._send_json({"ok": True, "provider": provider, "has_workspace_id": bool(ws_id)})
+
 
 # ── Usage Stats API ──────────────────────────────────────────────────────────
 

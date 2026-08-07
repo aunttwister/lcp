@@ -259,21 +259,24 @@ class OpenCodeCostPlugin(CostPlugin):
                 }
             from .opencode_api import fetch_subscription_dict
             cookie = ""
-            # 1. UI-managed cookie (encrypted credential store)
+            workspace_id = ""
+            # 1. UI-managed cookie + workspace ID (encrypted credential store)
             try:
                 from ..credential_store import get_credential_store
                 store = get_credential_store()
                 if store is not None:
                     cookie = store.get_cookie("opencode") or ""
+                    workspace_id = store.get_workspace_id("opencode") or ""
             except Exception:
                 cookie = ""
+                workspace_id = ""
             # 2. Env var fallback
             if not cookie:
                 cookie = os.environ.get("OPENCODE_COOKIE", "")
             if not cookie:
                 logger.debug("opencode_cookie_not_configured")
                 return {"_error": "auth_failed", "detail": "OpenCode cookie not set — add it in the Usage tab or set OPENCODE_COOKIE"}
-            data = fetch_subscription_dict(cookie)
+            data = fetch_subscription_dict(cookie, workspace_id=workspace_id or None)
             if data is None:
                 logger.warning("subscription_fetch_returned_none")
                 return {"_error": "auth_failed", "detail": "Invalid or expired OpenCode cookie, or API unreachable"}

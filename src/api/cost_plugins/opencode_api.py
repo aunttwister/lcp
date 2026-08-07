@@ -169,8 +169,11 @@ def _debug_ssr_failure(text: str) -> None:
 
 # ── Public API ─────────────────────────────────────────────────────────────
 
-def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
+def fetch_subscription(cookie: Optional[str], workspace_id: Optional[str] = None) -> Optional[SubscriptionSnapshot]:
     """Fetch OpenCode subscription usage from the /go page SSR data.
+
+    ``workspace_id``, if provided, skips the discover step (preferred when
+    the ID is already known, e.g. from the dashboard or env var).
 
     Returns a ``SubscriptionSnapshot`` or ``None`` when the cookie is
     missing, unreachable, or no subscription data is found in the page.
@@ -183,8 +186,9 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
     headers = _base_headers(cookie)
 
     # ── Step 1: discover workspace ID ──────────────────────────────────
-    workspace_id: Optional[str] = os.environ.get("OPENCODE_WORKSPACE_ID", "").strip() or None
-
+    # Priority: explicit argument → credential store → env var → scrape
+    if not workspace_id:
+        workspace_id = os.environ.get("OPENCODE_WORKSPACE_ID", "").strip() or None
     if not workspace_id:
         try:
             raw = _http_get(_OPENCODE_BASE, headers)
@@ -237,9 +241,9 @@ def fetch_subscription(cookie: Optional[str]) -> Optional[SubscriptionSnapshot]:
     )
 
 
-def fetch_subscription_dict(cookie: Optional[str]) -> Optional[dict]:
+def fetch_subscription_dict(cookie: Optional[str], workspace_id: Optional[str] = None) -> Optional[dict]:
     """Same as ``fetch_subscription`` but returns a plain dict (or None)."""
-    snap = fetch_subscription(cookie)
+    snap = fetch_subscription(cookie, workspace_id=workspace_id)
     if snap is None:
         return None
     now = datetime.now(timezone.utc)

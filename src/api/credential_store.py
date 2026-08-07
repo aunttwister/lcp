@@ -88,6 +88,25 @@ class CredentialStore:
         """Return True if a cookie exists for this provider."""
         return self.has(self._cookie_key(provider))
 
+    # ── Workspace IDs (e.g. OpenCode wrk_*) ────────────────────────────────
+
+    @staticmethod
+    def _ws_id_key(provider: str) -> str:
+        """Namespaced key so workspace IDs never collide with API keys or cookies."""
+        return f"wsid:{provider}"
+
+    def set_workspace_id(self, provider: str, ws_id: str) -> None:
+        """Upsert a workspace ID for a provider. Empty clears it."""
+        self.set(self._ws_id_key(provider), ws_id)
+
+    def get_workspace_id(self, provider: str) -> str | None:
+        """Return the decrypted workspace ID for a provider, or None."""
+        return self.get(self._ws_id_key(provider))
+
+    def has_workspace_id(self, provider: str) -> bool:
+        """Return True if a workspace ID exists for this provider."""
+        return self.has(self._ws_id_key(provider))
+
 
 _credential_store: CredentialStore | None = None
 
