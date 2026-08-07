@@ -14,10 +14,16 @@ services:
       - COST_DB=/app/data/costs.db
       - LISTEN_PORT=8734
       - TIKTOKEN_CACHE_DIR=/app/data/tiktoken_cache
-      - OPENCODE_API_KEY=${OPENCODE_API_KEY}
-      - OPENCODE_COOKIE=${OPENCODE_COOKIE}
-      - OPENCODE_WORKSPACE_ID=${OPENCODE_WORKSPACE_ID}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - LCP_SECRET_KEY=${LCP_SECRET_KEY}
+      # Provider API keys can be managed via the dashboard UI (Providers → Configuration)
+      # instead of environment variables — they're encrypted and stored in SQLite.
+      # Uncomment these if you prefer env-var-based keys as a fallback:
+      # - OPENCODE_API_KEY=${OPENCODE_API_KEY}
+      # - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      # OpenCode web cookie for subscription tracking — can also be added in
+      # the Usage page → OpenCode tab (encrypted, same as API keys).
+      # - OPENCODE_COOKIE=${OPENCODE_COOKIE}
+      # - OPENCODE_WORKSPACE_ID=${OPENCODE_WORKSPACE_ID}
 
 volumes:
   llm-cost-tracker_cost_data:

@@ -120,7 +120,9 @@ cd lcp
 
 # Configure providers — add your API keys
 cp config/.env.example config/.env
-# Edit config/.env: DEEPSEEK_API_KEY=sk-..., OPENCODE_API_KEY=...
+# Edit config/.env: set LCP_SECRET_KEY (used to encrypt provider keys)
+# Provider keys can be pasted directly in the dashboard (Providers → Configuration)
+# OR set as env vars if you prefer: DEEPSEEK_API_KEY=sk-..., OPENCODE_API_KEY=...
 
 # Run
 docker compose up -d
