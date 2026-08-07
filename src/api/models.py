@@ -46,46 +46,6 @@ class Request(Base):
     tools_blocked = Column(String, nullable=True)  # comma-separated list
 
 
-# ── Phase 5 tables (schema defined now, populated later) ────────────────────
-
-class Team(Base):
-    """Teams that users belong to."""
-    __tablename__ = "teams"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, unique=True, nullable=False)
-    monthly_budget = Column(Float, default=0.0)
-    created_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
-
-
-class User(Base):
-    """Users who authenticate with API keys."""
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    team_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
-    username = Column(String, unique=True, nullable=False)
-    api_key_hash = Column(String, nullable=False)
-    credit_limit = Column(Float, default=100.0)
-    is_admin = Column(Integer, default=0)
-    created_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
-
-
-# ── Phase 7 tables ─────────────────────────────────────────────────────────
-
-class AuditLog(Base):
-    """Every request logged for compliance."""
-    __tablename__ = "audit_logs"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(String, nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    team_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
-    action = Column(String, nullable=False)  # "request", "auth_fail", "credit_exhausted"
-    detail = Column(Text, nullable=True)  # JSON blob with full context
-    ip_address = Column(String, nullable=True)
-
-
 # ── API Key Management ────────────────────────────────────────────────────
 
 class ApiKey(Base):

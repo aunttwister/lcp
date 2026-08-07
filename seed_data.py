@@ -13,9 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.api.models import (
     Base,
     Request,
-    Team,
-    User,
-    AuditLog,
     ApiKey,
     Budget,
     Alert,
@@ -42,41 +39,9 @@ def seed():
     session = get_session(engine)
 
     # ── Clean existing data ──
-    for table in [Alert, Budget, ApiKey, AuditLog, User, Team, Request]:
+    for table in [Alert, Budget, ApiKey, Request]:
         session.query(table).delete()
     session.commit()
-
-    # ── Teams ──
-    teams = [
-        Team(name="Engineering", monthly_budget=500.0,
-             created_at=(datetime.now(timezone.utc) - timedelta(days=60)).isoformat()),
-        Team(name="Marketing", monthly_budget=200.0,
-             created_at=(datetime.now(timezone.utc) - timedelta(days=45)).isoformat()),
-        Team(name="Research", monthly_budget=1000.0,
-             created_at=(datetime.now(timezone.utc) - timedelta(days=30)).isoformat()),
-    ]
-    session.add_all(teams)
-    session.commit()
-    print(f"  Added {len(teams)} teams.")
-
-    # ── Users ──
-    users = [
-        User(team_id=teams[0].id, username="alice", api_key_hash=hash_key("sk-alice-key"),
-             credit_limit=250.0, is_admin=1,
-             created_at=(datetime.now(timezone.utc) - timedelta(days=55)).isoformat()),
-        User(team_id=teams[0].id, username="bob", api_key_hash=hash_key("sk-bob-key"),
-             credit_limit=150.0, is_admin=0,
-             created_at=(datetime.now(timezone.utc) - timedelta(days=40)).isoformat()),
-        User(team_id=teams[1].id, username="carol", api_key_hash=hash_key("sk-carol-key"),
-             credit_limit=100.0, is_admin=0,
-             created_at=(datetime.now(timezone.utc) - timedelta(days=35)).isoformat()),
-        User(team_id=teams[2].id, username="dave", api_key_hash=hash_key("sk-dave-key"),
-             credit_limit=500.0, is_admin=0,
-             created_at=(datetime.now(timezone.utc) - timedelta(days=20)).isoformat()),
-    ]
-    session.add_all(users)
-    session.commit()
-    print(f"  Added {len(users)} users.")
 
     # ── Requests (14 days of realistic data) ──
     profiles = ["l2", "l1", "career", "cron"]
@@ -165,30 +130,6 @@ def seed():
 
     session.commit()
     print(f"  Added {request_count} requests.")
-
-    # ── Audit Logs ──
-    actions = ["request", "auth_fail", "credit_exhausted"]
-    audit_count = 0
-    for day_offset in range(13, -1, -1):
-        day = now - timedelta(days=day_offset)
-        for _ in range(random.randint(2, 8)):
-            action = random.choices(actions, weights=[0.8, 0.15, 0.05])[0]
-            ts = day + timedelta(
-                hours=random.randint(0, 23),
-                minutes=random.randint(0, 59),
-            )
-            log = AuditLog(
-                timestamp=ts.isoformat(),
-                user_id=random.choice(users).id,
-                team_id=random.choice(teams).id,
-                action=action,
-                detail=f'{{"action": "{action}", "profile": "{random.choice(profiles)}"}}',
-                ip_address=f"{random.randint(10, 200)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}",
-            )
-            session.add(log)
-            audit_count += 1
-    session.commit()
-    print(f"  Added {audit_count} audit log entries.")
 
     # ── API Keys ──
     api_keys = [
