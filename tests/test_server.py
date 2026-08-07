@@ -294,6 +294,36 @@ class TestProviderEndpoints:
         h.do_POST()
         assert _status(h) == 200
 
+    def test_create_provider_with_api_key_stored_encrypted(self, temp_db, tmp_path):
+        """api_key sent to POST /api/providers is stored in credential store, not YAML."""
+        from src.api.credential_store import CredentialStore
+        from src.api.models import ProviderCredential, get_session
+        import src.api.credential_store as cs_module
+        import os as _os
+        from unittest.mock import patch as _patch
+
+        store = CredentialStore(temp_db, data_dir=str(tmp_path))
+        cs_module._credential_store = store
+
+        body = json.dumps({"name": "secco", "api_base": "https://sec.api/v1", "api_key": "sk-secret"})
+        with _patch.dict(_os.environ, {"LCP_SECRET_KEY": "test-master"}, clear=False):
+            h = TestHandler(path="/api/providers", method="POST", engine=temp_db, body=body)
+            h.do_POST()
+            assert _status(h) == 200
+
+            # Key is retrievable via store (same master key active)
+            assert store.get("secco") == "sk-secret"
+        # And NOT stored in the YAML config
+        assert "sk-secret" not in json.dumps(LCPHandler.config.providers.get("secco", {}))
+        # And stored encrypted in DB (ciphertext != plaintext)
+        with _patch.dict(_os.environ, {"LCP_SECRET_KEY": "test-master"}, clear=False):
+            with get_session(temp_db) as session:
+                row = session.query(ProviderCredential).filter(
+                    ProviderCredential.provider == "secco"
+                ).first()
+        assert row is not None
+        assert "sk-secret" not in row.encrypted_key
+
     def test_update_provider(self, temp_db):
         body = json.dumps({"api_base": "https://updated.api/v1"})
         h = TestHandler(path="/api/providers/opencode", method="PUT", engine=temp_db, body=body)
@@ -384,6 +414,61 @@ class TestProviderEndpoints:
         h = TestHandler(path="/api/providers/discover", method="POST", engine=temp_db, body=body)
         h.do_POST()
         assert _status(h) == 400
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Plugin cookie endpoint tests
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestPluginCookieEndpoints:
+    def test_cookie_get_not_set(self, temp_db):
+        from src.api.credential_store import CredentialStore
+        import src.api.credential_store as cs_module
+        cs_module._credential_store = CredentialStore(temp_db, data_dir="tests-data")
+        h = TestHandler(path="/api/cost-plugins/cookie/opencode", engine=temp_db)
+        h.do_GET()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert body["provider"] == "opencode"
+        assert body["has_cookie"] is False
+
+    def test_cookie_set_then_get(self, temp_db):
+        from src.api.credential_store import CredentialStore
+        import src.api.credential_store as cs_module
+        import os as _os
+        from unittest.mock import patch as _patch
+        cs_module._credential_store = CredentialStore(temp_db, data_dir="tests-data")
+        body = json.dumps({"cookie": "auth=abc123"})
+        with _patch.dict(_os.environ, {"LCP_SECRET_KEY": "test-master"}, clear=False):
+            h = TestHandler(path="/api/cost-plugins/cookie/opencode", method="POST", engine=temp_db, body=body)
+            h.do_POST()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert body["ok"] is True
+        assert body["has_cookie"] is True
+        # GET reflects stored cookie (value never returned)
+        h = TestHandler(path="/api/cost-plugins/cookie/opencode", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["has_cookie"] is True
+
+    def test_cookie_clear(self, temp_db):
+        from src.api.credential_store import CredentialStore
+        import src.api.credential_store as cs_module
+        import os as _os
+        from unittest.mock import patch as _patch
+        cs_module._credential_store = CredentialStore(temp_db, data_dir="tests-data")
+        with _patch.dict(_os.environ, {"LCP_SECRET_KEY": "test-master"}, clear=False):
+            h = TestHandler(path="/api/cost-plugins/cookie/opencode", method="POST", engine=temp_db,
+                            body=json.dumps({"cookie": "auth=abc123"}))
+            h.do_POST()
+            h = TestHandler(path="/api/cost-plugins/cookie/opencode", method="POST", engine=temp_db,
+                            body=json.dumps({"cookie": ""}))
+            h.do_POST()
+        h = TestHandler(path="/api/cost-plugins/cookie/opencode", engine=temp_db)
+        h.do_GET()
+        body = _json_body(h)
+        assert body["has_cookie"] is False
 
 
 # ═══════════════════════════════════════════════════════════════════════

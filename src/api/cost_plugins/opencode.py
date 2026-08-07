@@ -240,7 +240,9 @@ class OpenCodeCostPlugin(CostPlugin):
     def fetch_subscription(self) -> Optional[dict]:
         """Fetch subscription usage snapshot from the OpenCode web API.
 
-        Requires ``OPENCODE_COOKIE`` env var.  Returns::
+        Requires the OpenCode ``auth`` cookie — read from the encrypted
+        credential store (UI-managed) first, then the ``OPENCODE_COOKIE`` env
+        var as a fallback.  Returns::
 
             {"rolling_pct": 17.0, "weekly_pct": 75.0,
              "rolling_reset_sec": 5944, "weekly_reset_sec": 278201}
@@ -256,14 +258,25 @@ class OpenCodeCostPlugin(CostPlugin):
                     "weekly_pct": 75.0, "weekly_reset_sec": 278201,
                 }
             from .opencode_api import fetch_subscription_dict
-            cookie = os.environ.get("OPENCODE_COOKIE")
+            cookie = ""
+            # 1. UI-managed cookie (encrypted credential store)
+            try:
+                from ..credential_store import get_credential_store
+                store = get_credential_store()
+                if store is not None:
+                    cookie = store.get_cookie("opencode") or ""
+            except Exception:
+                cookie = ""
+            # 2. Env var fallback
+            if not cookie:
+                cookie = os.environ.get("OPENCODE_COOKIE", "")
             if not cookie:
                 logger.debug("opencode_cookie_not_configured")
-                return {"_error": "auth_failed", "detail": "OPENCODE_COOKIE not set"}
+                return {"_error": "auth_failed", "detail": "OpenCode cookie not set — add it in the Usage tab or set OPENCODE_COOKIE"}
             data = fetch_subscription_dict(cookie)
             if data is None:
                 logger.warning("subscription_fetch_returned_none")
-                return {"_error": "auth_failed", "detail": "Invalid or expired OPENCODE_COOKIE, or API unreachable"}
+                return {"_error": "auth_failed", "detail": "Invalid or expired OpenCode cookie, or API unreachable"}
             return data
         except Exception as exc:
             logger.warning("subscription_fetch_failed", error=str(exc))

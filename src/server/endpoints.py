@@ -13,6 +13,7 @@ from urllib.parse import urlparse, parse_qs
 from ..api.logging_config import get_logger
 from ..api.circuit_breaker import get_circuit_breaker
 from ..api.key_manager import get_key_manager
+from ..api.credential_store import get_credential_store
 from ..api.alert_manager import get_alert_manager
 from ..api.cost_plugins import get_registry
 from ..api.models import get_session, Request as RequestModel, Budget, ApiKey
@@ -300,12 +301,13 @@ class ProviderEndpoints:
     def _serve_providers_list(self):
         cfg = self.config
         providers = {}
+        store = get_credential_store()
         for name, pdata in cfg.providers.items():
             providers[name] = {
                 "api_key_env": pdata.get("api_key_env", ""),
                 "api_base": pdata.get("api_base", ""),
                 "models": pdata.get("models", []),
-                "has_api_key": bool(pdata.get("api_key")),
+                "has_api_key": bool(store and store.has(name)),
             }
         profile_chains = {}
         for pname, pcfg in cfg.profiles.items():
@@ -332,10 +334,17 @@ class ProviderEndpoints:
             "api_base": body.get("api_base", ""),
             "models": body.get("models", []),
         }
-        if body.get("api_key"):
-            provider_data["api_key"] = body["api_key"]
         cfg.raw.setdefault("providers", {})[name] = provider_data
         cfg.save()
+        # Store the API key (if provided) encrypted in the credential store —
+        # never in the git-tracked gateway.yaml.
+        if body.get("api_key"):
+            store = get_credential_store(self.engine)
+            if store is not None:
+                store.set(name, body["api_key"])
+            else:
+                self._send_json({"error": "credential store not initialized"}, 500)
+                return
         self._send_json({"ok": True, "provider": name})
 
     def _serve_provider_update(self, name: str):
@@ -352,10 +361,12 @@ class ProviderEndpoints:
         if "api_key_env" in body:
             pdata["api_key_env"] = body["api_key_env"]
         if "api_key" in body:
-            if body["api_key"]:
-                pdata["api_key"] = body["api_key"]
+            store = get_credential_store(self.engine)
+            if store is not None:
+                store.set(name, body.get("api_key") or "")
             else:
-                pdata.pop("api_key", None)
+                self._send_json({"error": "credential store not initialized"}, 500)
+                return
         if "api_base" in body:
             pdata["api_base"] = body["api_base"]
         if "models" in body:
@@ -372,6 +383,10 @@ class ProviderEndpoints:
         for pname, pcfg in cfg.raw["profiles"].items():
             pcfg["chain"] = [c for c in pcfg.get("chain", []) if c.get("provider") != name]
         cfg.save()
+        # Clear any stored credential for the deleted provider
+        store = get_credential_store(self.engine)
+        if store is not None:
+            store.set(name, "")
         self._send_json({"ok": True, "deleted": name})
 
     def _serve_provider_test(self):
@@ -457,6 +472,10 @@ class ProviderEndpoints:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         cookie = os.environ.get("OPENCODE_COOKIE", "")
+        # Prefer UI-managed cookie from the credential store
+        store = get_credential_store(self.engine)
+        if store is not None:
+            cookie = store.get_cookie("opencode") or cookie
         if cookie:
             headers["Cookie"] = cookie
             headers["Origin"] = "https://opencode.ai"
@@ -1033,6 +1052,28 @@ class PluginEndpoints:
         """Return subscription usage snapshots from all cost plugins."""
         data = get_registry().fetch_all_subscriptions()
         self._send_json({"plugin_subscriptions": data})
+
+    def _serve_plugin_cookie_get(self, provider: str):
+        """Return whether a UI-managed cookie exists for a provider (never the value)."""
+        store = get_credential_store(self.engine)
+        has = bool(store and store.has_cookie(provider))
+        env = bool(os.environ.get("OPENCODE_COOKIE", "")) if provider == "opencode" else False
+        self._send_json({"provider": provider, "has_cookie": has, "has_env_cookie": env})
+
+    def _serve_plugin_cookie_set(self, provider: str):
+        """POST body {cookie: '...'} to upsert (or clear) a UI-managed cookie."""
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        cookie = (body.get("cookie") or "").strip()
+        store = get_credential_store(self.engine)
+        if store is None:
+            self._send_json({"error": "credential store not initialized"}, 500)
+            return
+        store.set_cookie(provider, cookie)
+        self._send_json({"ok": True, "provider": provider, "has_cookie": bool(cookie)})
 
 
 # ── Usage Stats API ──────────────────────────────────────────────────────────

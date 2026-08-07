@@ -1,0 +1,107 @@
+"""Credential store — encrypted persistence of upstream provider API keys.
+
+Keys entered via the UI are encrypted with Fernet (src.api.crypto) and stored
+in the ``provider_credentials`` table. This module provides a singleton store
+that mirrors the KeyManager pattern (init with engine at server startup).
+
+Precedence when resolving a provider key at request time (in forward_request):
+  1. env var named by ``api_key_env`` (container/deployment-managed)
+  2. encrypted credential stored via the UI
+  3. ``config.get_provider_key`` (env var again, raises if unset)
+"""
+
+from datetime import datetime, timezone
+
+from .crypto import encrypt_secret, decrypt_secret
+from .logging_config import get_logger
+from .models import ProviderCredential, get_session
+
+logger = get_logger("lcp.credentials")
+
+
+class CredentialStore:
+    """Persists encrypted provider credentials in SQLite."""
+
+    def __init__(self, engine, data_dir: str = "data"):
+        self._engine = engine
+        self._data_dir = data_dir
+
+    def set(self, provider: str, plaintext: str) -> None:
+        """Upsert an encrypted credential for a provider. Empty clears it."""
+        now = datetime.now(timezone.utc).isoformat()
+        with get_session(self._engine) as session:
+            row = session.query(ProviderCredential).filter(
+                ProviderCredential.provider == provider
+            ).first()
+            if not plaintext:
+                if row is not None:
+                    session.delete(row)
+                    session.commit()
+                return
+            token = encrypt_secret(plaintext, self._data_dir)
+            if row is None:
+                session.add(ProviderCredential(
+                    provider=provider,
+                    encrypted_key=token,
+                    created_at=now,
+                    updated_at=now,
+                ))
+            else:
+                row.encrypted_key = token
+                row.updated_at = now
+            session.commit()
+        logger.info("credential_upserted", provider=provider)
+
+    def get(self, provider: str) -> str | None:
+        """Return the decrypted plaintext key for a provider, or None."""
+        with get_session(self._engine) as session:
+            row = session.query(ProviderCredential).filter(
+                ProviderCredential.provider == provider
+            ).first()
+        if row is None:
+            return None
+        return decrypt_secret(row.encrypted_key, self._data_dir) or None
+
+    def has(self, provider: str) -> bool:
+        """Return True if a credential exists for this provider."""
+        with get_session(self._engine) as session:
+            return session.query(ProviderCredential).filter(
+                ProviderCredential.provider == provider
+            ).first() is not None
+
+    # ── Cookies (e.g. OpenCode browser session) ───────────────────────────
+
+    @staticmethod
+    def _cookie_key(provider: str) -> str:
+        """Namespaced key so cookies never collide with API keys."""
+        return f"cookie:{provider}"
+
+    def set_cookie(self, provider: str, cookie: str) -> None:
+        """Upsert an encrypted cookie for a provider. Empty clears it."""
+        self.set(self._cookie_key(provider), cookie)
+
+    def get_cookie(self, provider: str) -> str | None:
+        """Return the decrypted cookie for a provider, or None."""
+        return self.get(self._cookie_key(provider))
+
+    def has_cookie(self, provider: str) -> bool:
+        """Return True if a cookie exists for this provider."""
+        return self.has(self._cookie_key(provider))
+
+
+_credential_store: CredentialStore | None = None
+
+
+def get_credential_store(engine=None, data_dir: str = "data") -> CredentialStore | None:
+    """Get the singleton credential store (None if not initialized)."""
+    global _credential_store
+    if _credential_store is None and engine is not None:
+        _credential_store = CredentialStore(engine, data_dir)
+    return _credential_store
+
+
+def init_credential_store(engine, data_dir: str = "data") -> CredentialStore:
+    """Initialize the credential store singleton with the engine."""
+    global _credential_store
+    _credential_store = CredentialStore(engine, data_dir)
+    return _credential_store

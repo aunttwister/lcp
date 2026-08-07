@@ -313,15 +313,22 @@ def forward_request(provider_cfg: dict, body: dict, config):
     chunk_iterable yields raw bytes as they arrive from the upstream.
     Otherwise returns (response_body_dict, status_code).
     """
-    api_key = os.environ.get(provider_cfg.get("api_key_env", ""))
+    api_key = ""
+    provider_name = provider_cfg["provider"]
+    # 1. Encrypted credential stored via the UI (primary source)
+    from .credential_store import get_credential_store
+    store = get_credential_store()
+    if store is not None:
+        api_key = store.get(provider_name) or ""
+    # 2. Env var fallback for providers not managed via the UI
     if not api_key:
-        provider_name = provider_cfg["provider"]
-        # Check for inline api_key in provider config first
-        provider_data = config.providers.get(provider_name, {})
-        if isinstance(provider_data, dict) and provider_data.get("api_key"):
-            api_key = provider_data["api_key"]
-        if not api_key:
+        api_key = os.environ.get(provider_cfg.get("api_key_env", "")) or ""
+    # 3. Config-based lookup (env var, raises if unset)
+    if not api_key:
+        try:
             api_key = config.get_provider_key(provider_name)
+        except Exception:
+            api_key = ""
 
     streaming = body.get("stream", False)
 

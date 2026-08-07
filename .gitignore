@@ -26,6 +26,9 @@ data/*.db-shm
 data/*.db-wal
 lcp_dev_data/
 
+# On-disk secret-key fallback (used when LCP_SECRET_KEY is unset)
+data/.lcp_secret_key
+
 # Data
 *.db
 *.sqlite

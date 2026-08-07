@@ -388,6 +388,28 @@ class TestForwardRequestStreaming:
                 with pytest.raises(ProviderAuthError):
                     forward_request(self._cfg(), body, mock_config)
 
+    def test_api_key_from_credential_store(self, mock_config, temp_db, tmp_path):
+        """When env is unset and a credential is stored, use the decrypted key."""
+        from src.api.credential_store import CredentialStore
+        import src.api.credential_store as cs_module
+
+        with patch.dict("os.environ", {"LCP_SECRET_KEY": "test-master"}, clear=False):
+            store = CredentialStore(temp_db, data_dir=str(tmp_path))
+            cs_module._credential_store = store
+            store.set("testco", "sk-stored")
+
+            body = {"messages": [], "stream": False}
+            mock_resp = MagicMock()
+            mock_resp.status = 200
+            mock_resp.read.return_value = b'{"ok": true}'
+            mock_config.get_provider_key.return_value = "cfg-key"  # should NOT be used
+            with patch.dict("os.environ", {"TEST_KEY": ""}, clear=False):
+                with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+                    result, status = forward_request(self._cfg(), body, mock_config)
+            assert status == 200
+            req = mock_open.call_args[0][0]
+            assert req.headers["Authorization"] == "Bearer sk-stored"
+
 
 # ── strip_forbidden_tools ───────────────────────────────────────────────
 

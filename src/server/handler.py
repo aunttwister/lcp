@@ -265,6 +265,10 @@ class LCPHandler(
             self._serve_plugin_summary()
         elif self.path == "/api/cost-plugins/subscriptions":
             self._serve_plugin_subscriptions()
+        elif self.path.startswith("/api/cost-plugins/cookie/") and len(self.path.split("/")) == 5:
+            # GET /api/cost-plugins/cookie/{provider}
+            provider = self.path.split("/")[4]
+            self._serve_plugin_cookie_get(provider)
         elif self.path == "/api/usage/stats" or self.path.startswith("/api/usage/stats?"):
             self._serve_usage_stats_api()
         elif self.path == "/api/usage/totals" or self.path.startswith("/api/usage/totals?"):
@@ -320,6 +324,11 @@ class LCPHandler(
             return
         elif self.path == "/api/circuit-breaker/reset":
             self._serve_circuit_breaker_reset()
+            return
+        elif self.path.startswith("/api/cost-plugins/cookie/") and len(self.path.split("/")) == 5:
+            # POST /api/cost-plugins/cookie/{provider}
+            provider = self.path.split("/")[4]
+            self._serve_plugin_cookie_set(provider)
             return
 
         # Only handle chat completions

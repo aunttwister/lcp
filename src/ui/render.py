@@ -102,6 +102,16 @@ def render_page(template_name: str, config, engine=None, **kwargs) -> str:
     monthly = _compute_monthly(engine)
     provider_names = sorted(config.providers.keys()) if config is not None and hasattr(config, 'providers') else []
     profiles_list = list(config.profiles.keys()) if config is not None and hasattr(config, 'profiles') else []
+    # Which providers have an encrypted credential stored (UI-managed API key)?
+    provider_has_keys = {}
+    if engine is not None:
+        try:
+            from ..api.credential_store import get_credential_store
+            store = get_credential_store(engine)
+            if store is not None:
+                provider_has_keys = {p: store.has(p) for p in provider_names}
+        except Exception:
+            pass
     ctx = {
         "config": config,
         "monthly": monthly,
@@ -110,6 +120,7 @@ def render_page(template_name: str, config, engine=None, **kwargs) -> str:
         "providers": config.providers if config is not None and hasattr(config, 'providers') else {},
         "profiles": profiles_list,
         "profiles_dict": config.profiles if config is not None and hasattr(config, 'profiles') else {},
+        "provider_has_keys": provider_has_keys,
         "profile_budgets": {},
         "cache_buster": _cache_buster,
     }

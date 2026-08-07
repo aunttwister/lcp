@@ -164,6 +164,50 @@ function loadSubscriptions() {
         .then(function(d) { return d.plugin_subscriptions || {}; });
 }
 
+function loadOcCookieStatus() {
+    fetch('/api/cost-plugins/cookie/opencode').then(function(r) { return r.json(); }).then(function(d) {
+        var el = document.getElementById('ocCookieStatus');
+        if (!el) return;
+        if (d.has_cookie) {
+            el.innerHTML = '<span class="badge badge-success">stored</span>';
+        } else if (d.has_env_cookie) {
+            el.innerHTML = '<span class="badge badge-warning">from env</span>';
+        } else {
+            el.innerHTML = '<span class="badge" style="background:hsl(var(--secondary));color:hsl(var(--muted-foreground))">not set</span>';
+        }
+    });
+}
+
+function saveOcCookie() {
+    var val = (document.getElementById('ocCookieInput').value || '').trim();
+    if (!val) { alert('Paste the auth cookie first.'); return; }
+    fetch('/api/cost-plugins/cookie/opencode', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({cookie: val})
+    }).then(function(r) { return r.json(); }).then(function(d) {
+        if (d.ok) { document.getElementById('ocCookieInput').value = ''; loadOcCookieStatus(); loadPage(); }
+        else alert('Error: ' + (d.error || 'unknown'));
+    });
+}
+
+function clearOcCookie() {
+    if (!confirm('Clear the stored OpenCode cookie?')) return;
+    fetch('/api/cost-plugins/cookie/opencode', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({cookie: ''})
+    }).then(function(r) { return r.json(); }).then(function(d) {
+        if (d.ok) { loadOcCookieStatus(); loadPage(); }
+        else alert('Error: ' + (d.error || 'unknown'));
+    });
+}
+
+function loadPage() {
+    var providers = configuredProviders || [];
+    return buildPage(providers).catch(function(e) { console.error(e); });
+}
+
 function buildPage(providers) {
     return Promise.all([
         Promise.all(providers.map(loadStats)),
@@ -211,9 +255,20 @@ function buildPage(providers) {
                 panelsHtml += '<div class="stat-cards">' + statCardsHtml + '</div>';
             } else if (prov === 'opencode') {
                 var sub = subscriptions['opencode'] || {};
+                // ── Cookie settings card ──
+                panelsHtml += '<div class="stat-card" style="margin-bottom:1rem;border:1px solid hsl(var(--card-border))">' +
+                    '<div class="label" style="display:flex;justify-content:space-between;align-items:center">OpenCode Cookie' +
+                    '<span id="ocCookieStatus" style="font-size:0.65rem">…</span></div>' +
+                    '<div style="display:flex;gap:0.5rem;margin-top:0.5rem">' +
+                    '<input type="password" id="ocCookieInput" placeholder="auth cookie from a logged-in opencode session" autocomplete="off" style="flex:1;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">' +
+                    '<button class="btn-sm btn-primary" onclick="saveOcCookie()">Save</button>' +
+                    '<button class="btn-sm" onclick="clearOcCookie()">Clear</button>' +
+                    '</div>' +
+                    '<div style="font-size:0.625rem;color:hsl(var(--muted-foreground));margin-top:0.375rem">Stored encrypted in the gateway DB. Used for subscription usage bars; falls back to OPENCODE_COOKIE env var.</div>' +
+                    '</div>';
                 if (sub._error) {
                     var errMsg = sub._error === 'auth_failed'
-                        ? 'OpenCode subscription data unavailable — OPENCODE_COOKIE not configured or invalid. Set the environment variable to enable usage progress bars.'
+                        ? 'OpenCode subscription data unavailable — cookie missing or invalid. Paste the auth cookie above to enable usage progress bars.'
                         : 'OpenCode subscription API error: ' + (sub.detail || 'unknown');
                     panelsHtml += '<div class="stat-card" style="border-left:3px solid #f97316;margin-bottom:1rem"><div class="label" style="color:#f97316">⚠ Subscription Status</div><div class="value" style="font-size:0.85rem;font-weight:400">' + errMsg + '</div></div>';
                 }
@@ -289,6 +344,7 @@ function buildPage(providers) {
             renderBreakdownTable('table-model-' + prov, stats.by_model, 'Model');
             renderBreakdownTable('table-profile-' + prov, stats.by_profile, 'Profile');
         });
+        if (typeof loadOcCookieStatus === 'function') loadOcCookieStatus();
     });
 }
 

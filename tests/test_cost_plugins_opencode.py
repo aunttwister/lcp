@@ -319,3 +319,26 @@ class TestOpenCodeFetchSubscription:
                        return_value=mock_data):
                 result = plugin.fetch_subscription()
                 assert result == mock_data
+
+    def test_uses_credential_store_cookie_over_env(self, plugin, tmp_path):
+        """A UI-managed cookie (credential store) takes precedence over env var."""
+        from src.api.credential_store import CredentialStore
+        import src.api.credential_store as cs_module
+        from src.api.models import get_engine, Base
+        import os as _os
+
+        engine = get_engine(":memory:")
+        Base.metadata.create_all(engine)
+        cs_module._credential_store = CredentialStore(engine, data_dir=str(tmp_path))
+        # Master key stays set for the whole test so encrypt+decrypt match.
+        with patch.dict(_os.environ, {"LCP_SECRET_KEY": "test-master"}, clear=False):
+            cs_module._credential_store.set_cookie("opencode", "auth=store-cookie")
+
+            mock_data = {"rolling_pct": 10.0}
+            with patch.dict(_os.environ, {"OPENCODE_COOKIE": "auth=env-cookie"}, clear=False):
+                with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
+                           return_value=mock_data) as m:
+                    result = plugin.fetch_subscription()
+        assert result == mock_data
+        # Verify the store cookie was passed through
+        assert m.call_args[0][0] == "auth=store-cookie"

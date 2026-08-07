@@ -67,6 +67,22 @@ class ApiKey(Base):
     metadata_tags = Column(String, nullable=True)  # JSON string
 
 
+class ProviderCredential(Base):
+    """Encrypted API key for an upstream provider, managed via the UI.
+
+    The raw key is encrypted with Fernet (see src.api.crypto) using the master
+    key from ``LCP_SECRET_KEY`` (or the on-disk fallback). Only ciphertext is
+    stored here — the gateway.yaml only ever references the env var name.
+    """
+    __tablename__ = "provider_credentials"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String, unique=True, nullable=False, index=True)
+    encrypted_key = Column(Text, nullable=False)  # Fernet token (ciphertext)
+    created_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
 class Budget(Base):
     """Spending budgets per key and/or profile."""
     __tablename__ = "budgets"

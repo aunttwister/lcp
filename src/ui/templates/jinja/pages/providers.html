@@ -39,7 +39,7 @@
     <div><label>Provider Name</label><input id="provName" placeholder="e.g. openai"></div>
     <div><label>API Base URL</label><input id="provUrl" placeholder="https://api.openai.com/v1"></div>
     <div><label>API Key Env Var</label><input id="provKeyEnv" placeholder="OPENAI_API_KEY"></div>
-    <div><label>API Key Value <span style="font-weight:400;color:hsl(var(--muted-foreground))">(optional, overrides env)</span></label><input type="password" id="provKeyVal" placeholder="sk-…" autocomplete="off"></div>
+    <div><label>API Key Value <span style="font-weight:400;color:hsl(var(--muted-foreground))">(encrypted, used when env var is unset)</span></label><input type="password" id="provKeyVal" placeholder="sk-…" autocomplete="off"></div>
   </div>
   <div style="margin-top:0.75rem"><label>Selected Models</label><div id="selectedModels" style="display:flex;flex-wrap:wrap;gap:0.25rem;min-height:1.5rem;padding:0.375rem 0"></div></div>
   <div style="display:flex;justify-content:space-between;margin-top:0.5rem">
@@ -58,7 +58,7 @@
   <th>Name</th><th>Base URL</th><th>Key Source</th><th>Models</th><th>Actions</th>
 </tr></thead><tbody id="providersBody">
 {% if providers %}{% for name, pdata in providers.items() %}
-<tr><td><b>{{ name }}</b></td><td class="mono" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pdata.get('api_base', '—') }}</td><td>{{ 'inline' if pdata.get('api_key') else pdata.get('api_key_env', '—') }}</td><td>{{ pdata.get('models', []) | join(', ') or '—' }}</td>
+<tr><td><b>{{ name }}</b></td><td class="mono" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pdata.get('api_base', '—') }}</td><td>{% if provider_has_keys.get(name) %}<span class="badge badge-success">stored</span> <span style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">{{ pdata.get('api_key_env', '—') }}</span>{% else %}{{ pdata.get('api_key_env', '—') }}{% endif %}</td><td>{{ pdata.get('models', []) | join(', ') or '—' }}</td>
 <td><button class="btn-sm" onclick="editProvider('{{ name }}')">Edit</button><button class="btn-sm btn-danger" onclick="deleteProvider('{{ name }}')">Del</button></td></tr>
 {% endfor %}{% else %}<tr><td colspan="5" class="empty">No providers configured.</td></tr>{% endif %}
 </tbody></table></div>

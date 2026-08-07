@@ -104,3 +104,12 @@ def _init_circuit_breaker():
         "degraded_cooldown_seconds": 60,
     }
     get_circuit_breaker(cfg)
+
+
+@pytest.fixture(autouse=True)
+def _reset_credential_store():
+    """Reset the credential store singleton before each test."""
+    import src.api.credential_store as cs
+    cs._credential_store = None
+    yield
+    cs._credential_store = None

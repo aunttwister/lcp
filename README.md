@@ -91,6 +91,13 @@ Clients (agents, VS Code, scripts, curl)
 - Per-profile access control — each key can be scoped to specific profiles
 - Usage breakdown per key
 
+### Provider health & credentials
+- **Encrypted provider keys** — paste an upstream API key (DeepSeek, OpenCode, etc.) directly in the Providers → Configuration tab; it is encrypted with Fernet using the `LCP_SECRET_KEY` master key and stored in SQLite, never in the git-tracked `gateway.yaml`
+- Precedence when resolving a provider key: `api_key_env` env var → encrypted credential (UI) → config fallback
+- **Circuit breaker health** — Providers → Health tab shows live status per provider/profile with failure counts, last error reason, and cooldown timers
+- **Reset cooldown** — force a provider back to healthy with one click instead of waiting out the cooldown
+- Dashboard shows provider health mini-badges (healthy / degraded / dead counts)
+
 ### Dashboard
 - Server-rendered HTML — no SPA, no build step, loads instantly
 - Daily cost charts with Chart.js — stacked bars, per-profile views
