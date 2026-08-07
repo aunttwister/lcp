@@ -318,6 +318,9 @@ class LCPHandler(
         elif self.path == "/api/budgets":
             self._serve_budget_create()
             return
+        elif self.path == "/api/circuit-breaker/reset":
+            self._serve_circuit_breaker_reset()
+            return
 
         # Only handle chat completions
         if "/chat/completions" not in self.path:

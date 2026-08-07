@@ -156,6 +156,21 @@ class CircuitBreaker:
         """Return all tracked provider health entries keyed by (provider, url, profile)."""
         return dict(self._health)
 
+    def reset(self, provider: str, base_url: str, profile: str) -> None:
+        """Force-reset a provider back to healthy, clearing failures and cooldown."""
+        h = self.get_health(provider, base_url, profile)
+        h["status"] = "healthy"
+        h["consecutive_failures"] = 0
+        h["last_failure"] = None
+        h["last_failure_reason"] = None
+        h["tripped_until"] = None
+        logger.info(
+            "circuit_breaker_reset",
+            provider=provider,
+            base_url=base_url,
+            profile=profile,
+        )
+
     @property
     def stats(self) -> dict:
         """Return summary statistics across all tracked providers."""

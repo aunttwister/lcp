@@ -83,6 +83,12 @@
   {% endfor %}
 </div>
 
+<!-- ── Provider Health Mini Badges ── -->
+<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1.5rem" id="provHealthBadges">
+  <span style="font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground))">Providers</span>
+  <span id="provHealthInner" style="display:flex;gap:0.375rem">…</span>
+</div>
+
 <!-- ── Budget Status Cards ── -->
 {% if budget_cards %}
 <div class="budget-section">
@@ -1014,6 +1020,22 @@ function deleteKey(id) {
   });
 }
 {% endraw %}
+function loadProvBadges(){
+  fetch('/health').then(function(r){return r.json()}).then(function(d){
+    var ps = d.providers || {};
+    var healthy=0, degraded=0, dead=0;
+    Object.values(ps).forEach(function(h){
+      if(h.status==='healthy')healthy++;else if(h.status==='degraded')degraded++;else dead++;
+    });
+    var html='';
+    if(healthy)html+='<span class="badge badge-success" style="font-size:0.625rem">'+healthy+' healthy</span>';
+    if(degraded)html+='<span class="badge badge-warning" style="font-size:0.625rem">'+degraded+' degraded</span>';
+    if(dead)html+='<span class="badge badge-error" style="font-size:0.625rem">'+dead+' dead</span>';
+    if(!html)html='<span class="badge badge-success" style="font-size:0.625rem">all healthy</span>';
+    document.getElementById('provHealthInner').innerHTML=html;
+  });
+}
+loadProvBadges();
 
 // Dashboard-only: header badge + subscription card (sidebar rows handled by plugin-status.js)
 (function() {

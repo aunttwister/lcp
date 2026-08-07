@@ -273,3 +273,35 @@ class TestLastFailureReason:
         key = ("p", "https://x", "l2")
         assert key in all_h
         assert all_h[key]["last_failure_reason"] == "HTTP 502 Bad Gateway"
+
+
+class TestReset:
+    """Force-resetting a provider back to healthy."""
+
+    def test_reset_clears_failures_and_status(self, cb):
+        for _ in range(6):
+            cb.record_failure("p", "https://x", "l2",
+                              error_type="ProviderInternalError",
+                              error_reason="HTTP 503")
+        assert cb.status_of("p", "https://x", "l2") == "dead"
+        cb.reset("p", "https://x", "l2")
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["status"] == "healthy"
+        assert h["consecutive_failures"] == 0
+        assert h["last_failure"] is None
+        assert h["last_failure_reason"] is None
+        assert h["tripped_until"] is None
+
+    def test_reset_healthy_provider_stays_healthy(self, cb):
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["status"] == "healthy"
+        cb.reset("p", "https://x", "l2")
+        assert cb.status_of("p", "https://x", "l2") == "healthy"
+
+    def test_reset_degraded_provider(self, cb):
+        for _ in range(3):
+            cb.record_failure("p", "https://x", "l2")
+        assert cb.status_of("p", "https://x", "l2") == "degraded"
+        cb.reset("p", "https://x", "l2")
+        assert cb.status_of("p", "https://x", "l2") == "healthy"
+        assert cb.is_available("p", "https://x", "l2") is True

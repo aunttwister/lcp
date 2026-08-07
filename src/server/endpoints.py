@@ -84,6 +84,23 @@ class HealthEndpoints:
             "providers": provider_status,
         })
 
+    def _serve_circuit_breaker_reset(self):
+        """POST /api/circuit-breaker/reset — force-reset a provider to healthy."""
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        provider = body.get("provider")
+        base_url = body.get("base_url")
+        profile = body.get("profile")
+        if not provider or not base_url or not profile:
+            self._send_json({"error": "missing provider, base_url, or profile"}, 400)
+            return
+        cb = get_circuit_breaker()
+        cb.reset(provider, base_url, profile)
+        self._send_json({"ok": True, "provider": provider, "profile": profile})
+
     def _serve_models(self, profile: str | None = None):
         # Collect all providers per model: {model_id: [provider_names]}
         model_providers = {}
@@ -288,6 +305,7 @@ class ProviderEndpoints:
                 "api_key_env": pdata.get("api_key_env", ""),
                 "api_base": pdata.get("api_base", ""),
                 "models": pdata.get("models", []),
+                "has_api_key": bool(pdata.get("api_key")),
             }
         profile_chains = {}
         for pname, pcfg in cfg.profiles.items():
@@ -309,11 +327,14 @@ class ProviderEndpoints:
             self._send_json({"error": "missing 'name' field"}, 400)
             return
         cfg = self.config
-        cfg.raw.setdefault("providers", {})[name] = {
+        provider_data = {
             "api_key_env": body.get("api_key_env", f"LCP_{name.upper()}_API_KEY"),
             "api_base": body.get("api_base", ""),
             "models": body.get("models", []),
         }
+        if body.get("api_key"):
+            provider_data["api_key"] = body["api_key"]
+        cfg.raw.setdefault("providers", {})[name] = provider_data
         cfg.save()
         self._send_json({"ok": True, "provider": name})
 
@@ -330,6 +351,11 @@ class ProviderEndpoints:
         pdata = cfg.raw["providers"][name]
         if "api_key_env" in body:
             pdata["api_key_env"] = body["api_key_env"]
+        if "api_key" in body:
+            if body["api_key"]:
+                pdata["api_key"] = body["api_key"]
+            else:
+                pdata.pop("api_key", None)
         if "api_base" in body:
             pdata["api_base"] = body["api_base"]
         if "models" in body:

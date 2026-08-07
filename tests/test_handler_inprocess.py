@@ -200,6 +200,30 @@ class TestDoPost:
         h.do_POST()
         assert h.send_response.called
 
+    def test_circuit_breaker_reset(self, temp_db):
+        """POST /api/circuit-breaker/reset should reset a provider to healthy."""
+        body = {"provider": "test", "base_url": "https://t/v1", "profile": "l2"}
+        body_bytes = json.dumps(body).encode()
+        h = _TestHandler("/api/circuit-breaker/reset", method="POST", engine=temp_db)
+        h.rfile.read = MagicMock(return_value=body_bytes)
+        h.headers = {"Content-Length": str(len(body_bytes))}
+        h.do_POST()
+        assert h.send_response.called
+        combined = _get_written_bytes(h)
+        data = json.loads(combined)
+        assert data.get("ok") is True
+
+    def test_circuit_breaker_reset_missing_fields(self, temp_db):
+        """POST /api/circuit-breaker/reset with missing fields should 400."""
+        body = {"provider": "test"}
+        body_bytes = json.dumps(body).encode()
+        h = _TestHandler("/api/circuit-breaker/reset", method="POST", engine=temp_db)
+        h.rfile.read = MagicMock(return_value=body_bytes)
+        h.headers = {"Content-Length": str(len(body_bytes))}
+        h.do_POST()
+        assert h.send_response.called
+        assert h.send_response.call_args[0][0] == 400
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Structured error response tests

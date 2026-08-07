@@ -316,7 +316,12 @@ def forward_request(provider_cfg: dict, body: dict, config):
     api_key = os.environ.get(provider_cfg.get("api_key_env", ""))
     if not api_key:
         provider_name = provider_cfg["provider"]
-        api_key = config.get_provider_key(provider_name)
+        # Check for inline api_key in provider config first
+        provider_data = config.providers.get(provider_name, {})
+        if isinstance(provider_data, dict) and provider_data.get("api_key"):
+            api_key = provider_data["api_key"]
+        if not api_key:
+            api_key = config.get_provider_key(provider_name)
 
     streaming = body.get("stream", False)
 
