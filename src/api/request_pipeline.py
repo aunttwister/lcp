@@ -560,7 +560,8 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
         except (ProviderTimeoutError, ProviderAuthError, ProviderRateLimitError,
                 ProviderInternalError) as e:
             cb.record_failure(provider_name, base_url, profile_name,
-                              error_type=type(e).__name__)
+                              error_type=type(e).__name__,
+                              error_reason=str(e))
             errors.append(f"{provider_name}: {e}")
             logger.warning(
                 "chain_fallback",
@@ -576,7 +577,8 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
             # Provider config problem (e.g. missing API key env var) — this
             # provider can't work, but the next one might. Fall back.
             cb.record_failure(provider_name, base_url, profile_name,
-                              error_type="ConfigError")
+                              error_type="ConfigError",
+                              error_reason=str(e))
             errors.append(f"{provider_name}: {e}")
             logger.error(
                 "chain_config_error",

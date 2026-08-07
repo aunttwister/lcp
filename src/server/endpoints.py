@@ -74,6 +74,7 @@ class HealthEndpoints:
                 "failures": h["consecutive_failures"],
                 "last_success": h["last_success"],
                 "last_failure": h["last_failure"],
+                "last_failure_reason": h.get("last_failure_reason"),
                 "base_url": url,
                 "tripped_until": tripped_until,
             }

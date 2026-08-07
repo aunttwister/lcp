@@ -111,6 +111,12 @@ class TestDoGet:
         h = _TestHandler("/health", engine=temp_db)
         h.do_GET()
         assert h.send_response.called
+        combined = _get_written_bytes(h)
+        assert b"providers" in combined
+        # Verify provider health includes last_failure_reason field
+        data = json.loads(combined)
+        for key, info in data.get("providers", {}).items():
+            assert "last_failure_reason" in info, f"provider {key} missing last_failure_reason"
 
     def test_models(self, temp_db):
         LCPHandler.config.profiles = {"l2": {"chain": []}, "l1": {"chain": []}}

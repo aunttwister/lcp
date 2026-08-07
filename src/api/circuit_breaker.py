@@ -40,6 +40,7 @@ class CircuitBreaker:
             self._health[key] = {
                 "consecutive_failures": 0,
                 "last_failure": None,
+                "last_failure_reason": None,
                 "last_success": None,
                 "status": "healthy",
                 "tripped_until": None,
@@ -92,6 +93,7 @@ class CircuitBreaker:
         h["consecutive_failures"] = 0
         h["last_success"] = datetime.now(timezone.utc).isoformat()
         h["tripped_until"] = None
+        h["last_failure_reason"] = None
         if old_status != "healthy":
             logger.info(
                 "circuit_breaker_recovered",
@@ -103,12 +105,16 @@ class CircuitBreaker:
             )
 
     def record_failure(self, provider: str, base_url: str, profile: str,
-                       error_type: str | None = None) -> None:
+                       error_type: str | None = None,
+                       error_reason: str | None = None) -> None:
         """Record a failed request — may trip circuit breaker.
 
         ``error_type`` is the exception class name (e.g. 'ProviderAuthError').
         It maps to a failure weight: permanent failures (auth) trip the breaker
         faster than transient ones.
+
+        ``error_reason`` is a human-readable description of the error
+        (e.g. 'HTTP 503 Service Unavailable') stored for diagnostics.
         """
         cb_cfg = self._config.circuit_breaker
         h = self.get_health(provider, base_url, profile)
@@ -116,6 +122,8 @@ class CircuitBreaker:
         weight = _ERROR_WEIGHTS.get(error_type or "", 1)
         h["consecutive_failures"] += weight
         h["last_failure"] = datetime.now(timezone.utc).isoformat()
+        if error_reason:
+            h["last_failure_reason"] = error_reason
         n = h["consecutive_failures"]
         new_status = old_status
         if n >= cb_cfg["failures_dead"]:
@@ -141,6 +149,7 @@ class CircuitBreaker:
                 new_status=new_status,
                 consecutive_failures=n,
                 error_type=error_type,
+                error_reason=error_reason,
             )
 
     def get_all_health(self) -> dict:

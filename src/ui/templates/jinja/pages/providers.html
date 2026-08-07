@@ -32,7 +32,15 @@
   <div id="discoveryResult" style="display:none;margin-top:0.5rem"></div>
 </div>
 
-<div class="table-wrap" style="margin-top:0.75rem"><table><thead><tr>
+<div class="table-wrap" style="margin-top:0.75rem">
+<h3 style="margin-bottom:0.5rem">Provider Health</h3>
+<table><thead><tr>
+  <th>Provider / Profile</th><th>Status</th><th>Failures</th><th>Last Error</th><th>Cooldown Until</th>
+</tr></thead><tbody id="providerHealthBody">
+<tr><td colspan="5" class="empty">Loading…</td></tr>
+</tbody></table></div>
+
+<div class="table-wrap" style="margin-top:1.5rem"><table><thead><tr>
   <th>Name</th><th>Base URL</th><th>Key Env</th><th>Models</th><th>Actions</th>
 </tr></thead><tbody id="providersBody">
 {% if providers %}{% for name, pdata in providers.items() %}
@@ -133,5 +141,33 @@ function saveProvider(){var name=document.getElementById('provName').value.trim(
 
 function deleteProvider(name){if(!confirm('Delete provider "'+name+'"? This removes it from all profile chains.'))return;api('DELETE','/api/providers/'+name).then(function(d){if(d.ok)location.reload();else alert('Error: '+(d.error||'unknown'))})}
 
+function loadProviderHealth(){
+  api('GET','/health').then(function(d){
+    var ps = d.providers || {};
+    var keys = Object.keys(ps).sort();
+    var html = '';
+    if (keys.length === 0) {
+      html = '<tr><td colspan="5" class="empty">No provider health data yet.</td></tr>';
+    } else {
+      keys.forEach(function(k){
+        var h = ps[k];
+        var badgeClass = h.status === 'healthy' ? 'badge-success' : h.status === 'degraded' ? 'badge-warning' : 'badge-error';
+        var reason = h.last_failure_reason || '—';
+        if (reason.length > 80) reason = reason.slice(0,77)+'…';
+        var cooldown = h.tripped_until || '—';
+        html += '<tr>';
+        html += '<td><b>'+esc(k)+'</b></td>';
+        html += '<td><span class="badge '+badgeClass+'">'+esc(h.status)+'</span></td>';
+        html += '<td style="text-align:center">'+h.failures+'</td>';
+        html += '<td class="mono" style="font-size:0.6875rem;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(h.last_failure_reason||'')+'">'+esc(reason)+'</td>';
+        html += '<td class="mono" style="font-size:0.6875rem">'+esc(cooldown)+'</td>';
+        html += '</tr>';
+      });
+    }
+    document.getElementById('providerHealthBody').innerHTML = html;
+  });
+}
+
 loadPresets();
+loadProviderHealth();
 {% endraw %}</script>{% endblock %}

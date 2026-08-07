@@ -225,3 +225,51 @@ class TestHalfOpenLadder:
         with patch("time.time", return_value=real_now + 10):
             assert cb.is_available("up", "https://x", "l2") is True
         assert cb.status_of("up", "https://x", "l2") == "healthy"
+
+
+class TestLastFailureReason:
+    """Storing and clearing the last failure reason for diagnostics."""
+
+    def test_initial_state_no_reason(self, cb):
+        h = cb.get_health("test_prov", "https://test/v1", "l2")
+        assert h["last_failure_reason"] is None
+
+    def test_failure_stores_reason(self, cb):
+        cb.record_failure("p", "https://x", "l2",
+                          error_type="ProviderInternalError",
+                          error_reason="HTTP 503 Service Unavailable")
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["last_failure_reason"] == "HTTP 503 Service Unavailable"
+
+    def test_success_clears_reason(self, cb):
+        cb.record_failure("p", "https://x", "l2",
+                          error_type="ProviderInternalError",
+                          error_reason="HTTP 503 Service Unavailable")
+        cb.record_success("p", "https://x", "l2")
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["last_failure_reason"] is None
+
+    def test_reason_not_required(self, cb):
+        """error_reason is optional — omitting it keeps last_failure_reason as None."""
+        cb.record_failure("p", "https://x", "l2", error_type="ProviderTimeoutError")
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["last_failure_reason"] is None
+
+    def test_last_reason_overwrites_previous(self, cb):
+        cb.record_failure("p", "https://x", "l2",
+                          error_type="ProviderTimeoutError",
+                          error_reason="timeout")
+        cb.record_failure("p", "https://x", "l2",
+                          error_type="ProviderInternalError",
+                          error_reason="HTTP 503 Service Unavailable")
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["last_failure_reason"] == "HTTP 503 Service Unavailable"
+
+    def test_get_all_health_includes_reason(self, cb):
+        cb.record_failure("p", "https://x", "l2",
+                          error_type="ProviderInternalError",
+                          error_reason="HTTP 502 Bad Gateway")
+        all_h = cb.get_all_health()
+        key = ("p", "https://x", "l2")
+        assert key in all_h
+        assert all_h[key]["last_failure_reason"] == "HTTP 502 Bad Gateway"

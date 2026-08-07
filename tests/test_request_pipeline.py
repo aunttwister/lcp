@@ -315,3 +315,40 @@ class TestTryChainDegradedGating:
             with pytest.raises(AllProvidersFailedError):
                 try_chain("l2", profile_cfg, body, cfg)
         assert m.call_count == 0
+
+
+class TestTryChainErrorReasonTracked:
+    """Verify that circuit breaker record_failure receives error_reason."""
+
+    def test_failure_passes_error_reason_to_circuit_breaker(self):
+        """When a provider fails, record_failure is called with the error reason."""
+        from unittest.mock import patch as mock_patch
+        from src.api.circuit_breaker import get_circuit_breaker
+        cfg = _chain_config(providers={
+            "bad": {"api_key_env": "KEY", "base_url": "https://bad/v1"},
+            "good": {"api_key_env": "KEY", "base_url": "https://good/v1"},
+        })
+        cb = get_circuit_breaker(cfg)
+        profile_cfg = {
+            "chain": [
+                {"provider": "bad", "base_url": "https://bad/v1", "model": "m"},
+                {"provider": "good", "base_url": "https://good/v1", "model": "m2"},
+            ],
+            "forbidden_tools": [],
+        }
+        body = {"messages": [{"role": "user", "content": "hi"}]}
+
+        def fake_forward(step, body, config):
+            if step["provider"] == "bad":
+                raise ProviderInternalError("HTTP 503 Service Unavailable")
+            return {"choices": []}, 200
+
+        with mock_patch("src.api.request_pipeline.forward_request",
+                        side_effect=fake_forward):
+            with mock_patch("src.api.request_pipeline.time.sleep"):
+                resp, status, provider, model = try_chain("l2", profile_cfg, body, cfg)
+
+        assert provider == "good"
+        h = cb.get_health("bad", "https://bad/v1", "l2")
+        assert h["consecutive_failures"] >= 1
+        assert "HTTP 503 Service Unavailable" in h["last_failure_reason"]
