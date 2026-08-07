@@ -304,7 +304,6 @@ class ProviderEndpoints:
         store = get_credential_store()
         for name, pdata in cfg.providers.items():
             providers[name] = {
-                "api_key_env": pdata.get("api_key_env", ""),
                 "api_base": pdata.get("api_base", ""),
                 "models": pdata.get("models", []),
                 "has_api_key": bool(store and store.has(name)),
@@ -330,7 +329,6 @@ class ProviderEndpoints:
             return
         cfg = self.config
         provider_data = {
-            "api_key_env": body.get("api_key_env", f"LCP_{name.upper()}_API_KEY"),
             "api_base": body.get("api_base", ""),
             "models": body.get("models", []),
         }
@@ -358,8 +356,6 @@ class ProviderEndpoints:
             self._send_json({"error": f"provider '{name}' not found"}, 404)
             return
         pdata = cfg.raw["providers"][name]
-        if "api_key_env" in body:
-            pdata["api_key_env"] = body["api_key_env"]
         if "api_key" in body:
             store = get_credential_store(self.engine)
             if store is not None:

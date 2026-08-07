@@ -17,6 +17,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+def _cred_patch(fallback="sk-test", **keys):
+    """Context manager: a credential store that returns keys[provider] or fallback."""
+    store = MagicMock()
+    store.get.side_effect = lambda name: keys.get(name, fallback)
+    return patch("src.api.credential_store.get_credential_store", return_value=store)
+
+
 @pytest.fixture
 def temp_db():
     fd, db_path = tempfile.mkstemp(suffix=".db")
@@ -333,7 +340,7 @@ class TestForwardRequestStreaming:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.read.side_effect = chunks
-        with patch.dict("os.environ", {"TEST_KEY": "sk"}):
+        with _cred_patch(testco="sk"):
             with patch("urllib.request.urlopen", return_value=mock_resp):
                 reader, status = forward_request(self._cfg(), body, mock_config)
         assert status == 200
@@ -342,18 +349,13 @@ class TestForwardRequestStreaming:
         mock_resp.close.assert_called_once()
 
     def test_api_key_from_config_when_env_missing(self, mock_config):
+        """When no key is in the credential store, ConfigError is raised."""
         body = {"messages": [], "stream": False}
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = b'{"ok": true}'
-        mock_config.get_provider_key.return_value = "cfg-key"
-        with patch.dict("os.environ", {}, clear=False):
-            with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
-                with patch.dict("os.environ", {"TEST_KEY": ""}):
-                    result, status = forward_request(self._cfg(), body, mock_config)
-        assert status == 200
-        req = mock_open.call_args[0][0]
-        assert req.headers["Authorization"] == "Bearer cfg-key"
+        mock_config.get_provider_key.return_value = None
+        # With an empty credential store (no keys), expect ConfigError
+        with _cred_patch(fallback=None):
+            with pytest.raises(ConfigError, match="No API key found"):
+                forward_request(self._cfg(), body, mock_config)
 
     def test_http_400_raises_bad_request(self, mock_config):
         import urllib.error
@@ -361,7 +363,7 @@ class TestForwardRequestStreaming:
         err = urllib.error.HTTPError("url", 400, "Bad Request", {}, None)
         err.read = MagicMock(return_value=b'{"error":"bad"}')
         mock_config.get_provider_key.return_value = None
-        with patch.dict("os.environ", {"TEST_KEY": "sk"}):
+        with _cred_patch(testco="sk"):
             with patch("urllib.request.urlopen", side_effect=err):
                 with pytest.raises(ProviderBadRequestError):
                     forward_request(self._cfg(), body, mock_config)
@@ -372,7 +374,7 @@ class TestForwardRequestStreaming:
         err = urllib.error.HTTPError("url", 502, "Bad Gateway", {}, None)
         err.read = MagicMock(return_value=b'{"error":"down"}')
         mock_config.get_provider_key.return_value = None
-        with patch.dict("os.environ", {"TEST_KEY": "sk"}):
+        with _cred_patch(testco="sk"):
             with patch("urllib.request.urlopen", side_effect=err):
                 with pytest.raises(ProviderInternalError):
                     forward_request(self._cfg(), body, mock_config)
@@ -383,7 +385,7 @@ class TestForwardRequestStreaming:
         err = urllib.error.HTTPError("url", 401, "Unauthorized", {}, None)
         err.read = MagicMock(return_value=b'{"error":"nope"}')
         mock_config.get_provider_key.return_value = None
-        with patch.dict("os.environ", {"TEST_KEY": "sk"}):
+        with _cred_patch(testco="sk"):
             with patch("urllib.request.urlopen", side_effect=err):
                 with pytest.raises(ProviderAuthError):
                     forward_request(self._cfg(), body, mock_config)

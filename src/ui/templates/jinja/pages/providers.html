@@ -38,8 +38,7 @@
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
     <div><label>Provider Name</label><input id="provName" placeholder="e.g. openai"></div>
     <div><label>API Base URL</label><input id="provUrl" placeholder="https://api.openai.com/v1"></div>
-    <div><label>API Key Env Var</label><input id="provKeyEnv" placeholder="OPENAI_API_KEY"></div>
-    <div><label>API Key Value <span style="font-weight:400;color:hsl(var(--muted-foreground))">(encrypted, used when env var is unset)</span></label><input type="password" id="provKeyVal" placeholder="sk-…" autocomplete="off"></div>
+    <div><label>API Key Value <span style="font-weight:400;color:hsl(var(--muted-foreground))">(encrypted at rest)</span></label><input type="password" id="provKeyVal" placeholder="sk-…" autocomplete="off"></div>
   </div>
   <div style="margin-top:0.75rem"><label>Selected Models</label><div id="selectedModels" style="display:flex;flex-wrap:wrap;gap:0.25rem;min-height:1.5rem;padding:0.375rem 0"></div></div>
   <div style="display:flex;justify-content:space-between;margin-top:0.5rem">
@@ -55,10 +54,10 @@
 </div>
 
 <div class="table-wrap"><table><thead><tr>
-  <th>Name</th><th>Base URL</th><th>Key Source</th><th>Models</th><th>Actions</th>
+  <th>Name</th><th>Base URL</th><th>Key</th><th>Models</th><th>Actions</th>
 </tr></thead><tbody id="providersBody">
 {% if providers %}{% for name, pdata in providers.items() %}
-<tr><td><b>{{ name }}</b></td><td class="mono" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pdata.get('api_base', '—') }}</td><td>{% if provider_has_keys.get(name) %}<span class="badge badge-success">stored</span> <span style="font-size:0.6875rem;color:hsl(var(--muted-foreground))">{{ pdata.get('api_key_env', '—') }}</span>{% else %}{{ pdata.get('api_key_env', '—') }}{% endif %}</td><td>{{ pdata.get('models', []) | join(', ') or '—' }}</td>
+<tr><td><b>{{ name }}</b></td><td class="mono" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pdata.get('api_base', '—') }}</td><td>{% if provider_has_keys.get(name) %}<span class="badge badge-success">stored</span>{% else %}<span style="font-size:0.75rem;color:hsl(var(--muted-foreground))">—</span>{% endif %}</td><td>{{ pdata.get('models', []) | join(', ') or '—' }}</td>
 <td><button class="btn-sm" onclick="editProvider('{{ name }}')">Edit</button><button class="btn-sm btn-danger" onclick="deleteProvider('{{ name }}')">Del</button></td></tr>
 {% endfor %}{% else %}<tr><td colspan="5" class="empty">No providers configured.</td></tr>{% endif %}
 </tbody></table></div>
@@ -79,7 +78,7 @@ function loadPresets(){api('GET','/api/providers/presets').then(function(d){var 
 
 function loadPreset(){var k=document.getElementById('provPreset').value;if(!k)return;showAddProvForm();api('GET','/api/providers/presets').then(function(d){var p=(d.presets||{})[k];if(!p)return;document.getElementById('provName').value=k;document.getElementById('provUrl').value=p.api_base||'';_selectedModels=(p.models||[]).slice();renderSelected();document.getElementById('provSaveBtn').disabled=false})}
 
-function showAddProvForm(){document.getElementById('provForm').style.display='block';document.getElementById('provName').value='';document.getElementById('provUrl').value='';document.getElementById('provKeyEnv').value='';document.getElementById('provKeyVal').value='';_selectedModels=[];_allDiscovered=[];_discFilter='';_discoverPage=0;renderSelected();document.getElementById('testResult').style.display='none';document.getElementById('discoveryResult').style.display='none';document.getElementById('provSaveBtn').disabled=true}
+function showAddProvForm(){document.getElementById('provForm').style.display='block';document.getElementById('provName').value='';document.getElementById('provUrl').value='';document.getElementById('provKeyVal').value='';_selectedModels=[];_allDiscovered=[];_discFilter='';_discoverPage=0;renderSelected();document.getElementById('testResult').style.display='none';document.getElementById('discoveryResult').style.display='none';document.getElementById('provSaveBtn').disabled=true}
 
 function hideAddProvForm(){document.getElementById('provForm').style.display='none'}
 
@@ -155,9 +154,9 @@ function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g
 
 function testProvider(){var r=document.getElementById('testResult');r.style.display='block';r.textContent='Testing...';r.style.color='hsl(var(--amber-fg))';var name=document.getElementById('provName').value.trim();api('POST','/api/providers/test',{api_base:document.getElementById('provUrl').value,provider:name,model:(_selectedModels[0]||'default')}).then(function(d){if(d.ok){r.textContent='Connected — model: '+d.model;r.style.color='hsl(var(--green-fg))';document.getElementById('provSaveBtn').disabled=false}else{r.textContent='Failed: '+(d.error||'unknown');r.style.color='hsl(var(--red-fg))'}})}
 
-function editProvider(name){api('GET','/api/providers').then(function(d){var p=(d.providers||{})[name];if(!p)return;showAddProvForm();document.getElementById('provName').value=name;document.getElementById('provUrl').value=p.api_base||'';document.getElementById('provKeyEnv').value=p.api_key_env||'';document.getElementById('provKeyVal').value='';_selectedModels=(p.models||[]).slice();_allDiscovered=[];_discFilter='';_discoverPage=0;renderSelected();document.getElementById('provSaveBtn').disabled=false})}
+function editProvider(name){api('GET','/api/providers').then(function(d){var p=(d.providers||{})[name];if(!p)return;showAddProvForm();document.getElementById('provName').value=name;document.getElementById('provUrl').value=p.api_base||'';document.getElementById('provKeyVal').value='';_selectedModels=(p.models||[]).slice();_allDiscovered=[];_discFilter='';_discoverPage=0;renderSelected();document.getElementById('provSaveBtn').disabled=false})}
 
-function saveProvider(){var name=document.getElementById('provName').value.trim();if(!name){alert('Provider name is required');return}var payload={name:name,api_base:document.getElementById('provUrl').value.trim(),api_key_env:document.getElementById('provKeyEnv').value.trim(),models:_selectedModels};var kv=document.getElementById('provKeyVal').value.trim();if(kv)payload.api_key=kv;api('POST','/api/providers',payload).then(function(d){if(d.ok){location.reload()}else{alert('Error: '+(d.error||'unknown'))}})}
+function saveProvider(){var name=document.getElementById('provName').value.trim();if(!name){alert('Provider name is required');return}var payload={name:name,api_base:document.getElementById('provUrl').value.trim(),models:_selectedModels};var kv=document.getElementById('provKeyVal').value.trim();if(kv)payload.api_key=kv;api('POST','/api/providers',payload).then(function(d){if(d.ok){location.reload()}else{alert('Error: '+(d.error||'unknown'))}})}
 
 function deleteProvider(name){if(!confirm('Delete provider "'+name+'"? This removes it from all profile chains.'))return;api('DELETE','/api/providers/'+name).then(function(d){if(d.ok)location.reload();else alert('Error: '+(d.error||'unknown'))})}
 

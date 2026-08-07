@@ -9,6 +9,13 @@ from src.api.request_pipeline import record_cost
 from src.api.models import get_engine, Base
 
 
+def _cred_patch(fallback="test", **keys):
+    """Context manager: a credential store that returns keys[provider] or fallback."""
+    store = MagicMock()
+    store.get.side_effect = lambda name: keys.get(name, fallback)
+    return patch("src.api.credential_store.get_credential_store", return_value=store)
+
+
 @pytest.fixture
 def temp_db():
     fd, db_path = tempfile.mkstemp(suffix=".db")
@@ -91,7 +98,7 @@ class TestForwardRequest:
         }
         body = {"messages": [{"role": "user", "content": "hi"}], "model": "test-model"}
 
-        with patch.dict(os.environ, {"TEST_KEY": "sk-test123"}),              patch("urllib.request.urlopen") as mock_urlopen:
+        with _cred_patch(testco="sk-test123"),              patch("urllib.request.urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.read.return_value = b'{"choices":[{"message":{"content":"hello"}}]}'
@@ -112,7 +119,7 @@ class TestForwardRequest:
         body = {"messages": [{"role": "user", "content": "hi"}]}
 
         import urllib.error
-        with patch.dict(os.environ, {"TEST_KEY": "sk-test123"}),              patch("urllib.request.urlopen") as mock_urlopen:
+        with _cred_patch(),              patch("urllib.request.urlopen") as mock_urlopen:
             mock_urlopen.side_effect = urllib.error.URLError("connection refused")
             mock_config.get_provider_key.return_value = None
 
@@ -129,7 +136,7 @@ class TestForwardRequest:
         body = {"messages": [{"role": "user", "content": "hi"}]}
 
         import urllib.error
-        with patch.dict(os.environ, {"TEST_KEY": "sk-test123"}),              patch("urllib.request.urlopen") as mock_urlopen:
+        with _cred_patch(),              patch("urllib.request.urlopen") as mock_urlopen:
             # HTTPError mock must return bytes from read()
             err = urllib.error.HTTPError("url", 429, "Too Many Requests", {}, None)
             err.read = MagicMock(return_value=b'{"error":"rate limited"}')
@@ -172,7 +179,7 @@ class TestTryChain:
         }
         mock_config.get_provider_key.return_value = None
         import urllib.error
-        with patch.dict(os.environ, {"KEY": "test"}):
+        with _cred_patch():
             def urlopen_side(req, timeout=120):
                 raise urllib.error.URLError("dead")
             with patch("urllib.request.urlopen", side_effect=urlopen_side):
@@ -200,7 +207,7 @@ class TestTryChain:
         mock_config.get_provider_key.return_value = None
 
         import urllib.error
-        with patch.dict(os.environ, {"KEY": "test"}):
+        with _cred_patch():
             # badco fails with URLError, goodco succeeds
             def urlopen_side(req, timeout=120):
                 url = req.full_url if isinstance(req.full_url, str) else req.full_url.decode()
@@ -245,7 +252,7 @@ class TestTryChain:
         }
         mock_config.get_provider_key.return_value = None
 
-        with patch.dict(os.environ, {"KEY": "test"}):
+        with _cred_patch():
             with pytest.raises(AllProvidersFailedError) as exc:
                 try_chain("l2", profile_cfg, body, mock_config)
             assert "does not support vision" in str(exc.value)
@@ -277,7 +284,7 @@ class TestTryChain:
         }
         mock_config.get_provider_key.return_value = None
 
-        with patch.dict(os.environ, {"KEY": "test"}):
+        with _cred_patch():
             with patch("urllib.request.urlopen") as mock_urlopen:
                 mock_resp = MagicMock()
                 mock_resp.status = 200
