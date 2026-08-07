@@ -29,22 +29,31 @@
 
 ## What is LCP?
 
-LCP (LLM Control Plane) is a self-hosted LLM gateway that sits between your agents and LLM providers. It routes
-requests, enforces tool permissions, tracks costs, and manages API keys — all from a single Docker
-container backed by SQLite. No PostgreSQL. No Redis. No external services.
+LCP (LLM Control Plane) is a self-hosted LLM gateway that sits between your clients and LLM
+providers. It routes requests, tracks costs, enforces spending limits, and manages API keys —
+all from a single Docker container backed by SQLite. No PostgreSQL. No Redis. No external
+services.
 
-It was built for a production [Hermes Agent](https://github.com/NousResearch/hermes-agent)
-deployment managing multiple AI agents across a homelab infrastructure, where knowing exactly
-what is being spent, by whom, and with what tools is critical.
+**Two primary use cases:**
+
+- **AI agents** — Route Hermes, Claude Code, or custom agents through LCP to control which
+  tools they can use, how much they can spend, and which providers they hit
+- **VS Code / GitHub Copilot** — Point the [GitHub Copilot LLM Gateway extension](#vs-code-integration)
+  at LCP to make all your profiles appear as model providers in Copilot Chat with full context
+  windows and capabilities
+
+It was built for a production multi-agent homelab setup managing 6 Hermes profiles with 15+
+custom skills, where knowing exactly what is being spent, by whom, and with what tools is
+critical. The same instance also serves as the LLM backend for daily VS Code Copilot usage.
 
 ```
-Your agents (Hermes, scripts, external tools)
+Clients (agents, VS Code, scripts, curl)
           |
           v
 +--------------------------------------------+
 |             LCP (:8734)                   |
 |                                            |
-|  Auth -> Strip Tools -> Route              |
+|  Auth -> Estimate Cost -> Route            |
 |       -> Circuit Breaker -> Track Cost     |
 |                                            |
 |  Dashboard     API Keys     Budgets        |
@@ -53,7 +62,7 @@ Your agents (Hermes, scripts, external tools)
                     |
         +-----------+-----------+
         v           v           v
-    DeepSeek    OpenCode    (more)
+    DeepSeek    OpenCode    llama.cpp
 ```
 
 ## Features
@@ -61,13 +70,14 @@ Your agents (Hermes, scripts, external tools)
 ### Intelligent routing
 - Provider chains with automatic fallback — if one provider fails, the next in chain takes over
 - Circuit breaker with configurable thresholds — degraded providers are probed, dead providers are skipped
-- Profile-based routing by URL path: `/l2`, `/l1`, `/career`, `/coder`
+- Profile-based routing by URL path: `/l2`, `/l1`, `/career`, `/coder`, `/cron`
 - SSE streaming passthrough — real-time token delivery, no buffering
+- *(Planned)* Harness-style dynamic routing — auto-route to flash (cheap) or pro (capable) based on request complexity
 
-### Tool permission enforcement
+### Tool permission control
 - Strip dangerous tools per profile — an L1 triage agent cannot `terminal`, a cron profile strips everything
-- Configurable blocklists per profile via YAML
-- Roadmap: fails-closed permission matrix with cross-cutting `blocked_globally` rules
+- *(Being replaced)* Tool stripping will be decommissioned in favor of a fails-closed permission matrix
+- *(Planned)* Permission matrix — declarative `allow` / `block` / `blocked_globally` rules per profile, with audit trail
 
 ### Cost tracking
 - Per-request cost with DeepSeek cache hit/miss breakdown
@@ -292,22 +302,42 @@ See [PLAN.md](PLAN.md) for the full API reference.
 
 ## Roadmap
 
-| Phase | Status |
-|---|---|
-| 1 through 4 | Shipped — routing, tool stripping, cost tracking, YAML config |
-| 5 | In progress — multi-tenant users, teams, credit limits (schema complete) |
-| 6 | In progress — dashboard upgrade, time series, per-user utilization |
-| 7 | Planned — fails-closed permission matrix, rate limiting, audit log |
-| Memory plugin | [Specification complete](features/memory.md) — embedded LanceDB, unified memory endpoint |
+### Shipped
+- OpenAI-compatible chat completions API (`/{profile}/v1/chat/completions`)
+- Profile-based routing with provider chains and automatic fallback
+- Circuit breaker — degraded (probed) and dead (skipped) provider states
+- Per-request cost tracking with DeepSeek cache hit/miss breakdown
+- Prompt prefix caching — deterministic message ordering for maximum cache-hit rate
+- Server-rendered dashboard — Chart.js, budget cards, provider health, alert badge
+- Budget system — per-profile and per-key budgets, unified spend tracking
+- Budget enforcement — pre-LLM block (HTTP 429), post-request spend increment + threshold alerts
+- Alerting — DB-persisted alerts, webhook dispatch, acknowledge/resolve, alert history page
+- API key management — create, rotate, revoke; per-key spend limits; profile access scoping
+- SSE streaming passthrough — real-time token delivery, no buffering
+- Provider plugins — DeepSeek (balance API), OpenCode (web API), llama.cpp (local /models)
+- Provider model discovery — auto-detect models from `/v1/models` with metadata
+- tiktoken integration — exact BPE token counts, pre-downloaded at build time
+- Startup observability — per-step timing logs in `docker logs`
+
+### In progress
+- Multi-tenant — teams, users, credit limits (schema complete, wiring TBD)
+
+### Planned
+- Permission matrix — declarative `allow` / `block` / `blocked_globally` rules, replaces tool stripping
+- Harness-style dynamic routing — auto-route flash vs pro based on request complexity
+- Rate limiting — per-key, per-profile, global
+- Audit log — every request logged for compliance
+- Memory plugin — embedded LanceDB, unified `/v1/memories` endpoint ([spec](features/memory.md))
 
 Full details in [PLAN.md](PLAN.md).
 
 ## Status
 
-LCP runs continuously in production, routing all LLM traffic for a multi-agent homelab setup
-(6 Hermes profiles, 15+ custom skills, daily cron jobs). It handles approximately 200 requests
-per day across 4 profiles with real cost tracking. Phase 5 (multi-tenant authentication and
-authorization) is the next milestone toward a 1.0 release.
+LCP runs continuously in production, routing all LLM traffic for a multi-agent homelab
+(6 Hermes profiles, 15+ custom skills, daily cron jobs) and serving as the LLM backend
+for daily VS Code Copilot usage. It handles approximately 200 requests per day across 5
+profiles with real cost tracking and budget enforcement. Phase 5 (multi-tenant) is the
+next milestone toward a 1.0 release.
 
 ## AI Attribution
 
