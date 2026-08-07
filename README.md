@@ -5,6 +5,25 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
+[![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-758%20passed-brightgreen.svg)]()
+
+---
+
+## Contents
+
+- [What is LCP?](#what-is-lcp)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [VS Code Integration](#vs-code-integration)
+- [Configuration](#configuration)
+- [Why LCP over alternatives?](#why-lcp-over-alternatives)
+- [Architecture](#architecture)
+- [Dependencies](#dependencies)
+- [Test Coverage](#test-coverage)
+- [API](#api)
+- [Roadmap](#roadmap)
+- [Status](#status)
 
 ---
 
@@ -201,6 +220,61 @@ LCP (:8734) — single process, single port
 LCP deliberately avoids PostgreSQL, Redis, Next.js, pnpm, Kubernetes, and the broader
 TypeScript ecosystem. SQLite handles millions of cost rows at homelab scale. One container,
 one port, one `docker compose up`.
+
+## Dependencies
+
+Every runtime dependency and what it does in LCP:
+
+| Package | Role in LCP |
+|---|---|
+| **`structlog`** | Structured JSON logging to stdout. Every request, error, budget breach, and startup step is a machine-readable log line — `docker logs lcp` is grep-friendly. |
+| **`sqlalchemy`** | SQLite ORM for the `requests`, `budgets`, `alerts`, `api_keys`, `teams`, `users`, and `audit_logs` tables. All cost history, spend limits, and alert state lives here. No external database. |
+| **`alembic`** | Database schema migrations. Every schema change (alerts table, API keys, error_detail column) gets a numbered migration in `alembic/versions/`. Run automatically on container startup via `alembic upgrade head`. |
+| **`pyyaml`** | Reads and writes `config/gateway.yaml`. The config is hot-reloaded — edit providers, profiles, or pricing while the server is running and changes take effect on the next request. |
+| **`tiktoken`** | Exact BPE token counts using the `cl100k_base` encoding (same tokenizer used by DeepSeek and OpenAI models). Powers the pre-request `X-Estimated-Cost` header and the dynamic flash/pro router. The ~1 MB vocabulary file is pre-downloaded at Docker build time and persisted to a volume — zero CDN dependency at runtime. |
+| **`jinja2`** | Server-rendered HTML templates for the dashboard, profiles page, providers, API keys, alerts, and logs. No SPA, no build step, no npm — pages load instantly from the server. Shared partials for sidebar, modals, and JS utilities. |
+
+Dev-only dependencies (`pip install .[dev]`):
+
+| Package | Role |
+|---|---|
+| `pytest` | Test runner — 758 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, and the plugin system |
+| `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
+| `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
+
+## Test Coverage
+
+**95% overall** — 3,228 of 3,410 statements covered (758 tests, 0 integration tests).
+
+Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
+
+| Module | Coverage |
+|---|---|
+| `src/api/models.py` | 100% |
+| `src/api/circuit_breaker.py` | 100% |
+| `src/api/cost_estimator.py` | 100% |
+| `src/api/cost_plugins/opencode_api.py` | 100% |
+| `src/api/cost_plugins/base.py` | 100% |
+| `src/api/exceptions.py` | 100% |
+| `src/api/logging_config.py` | 100% |
+| `src/api/prompt_cache.py` | 100% |
+| `src/api/router.py` | 100% |
+| `src/server/server.py` | 100% |
+| `src/server/sse_helpers.py` | 100% |
+| `src/ui/dashboard.py` | 100% |
+| `src/ui/pages.py` | 100% |
+| `src/ui/render.py` | 100% |
+| `src/api/request_pipeline.py` | 99% |
+| `src/api/alert_manager.py` | 99% |
+| `src/api/config.py` | 98% |
+| `src/api/key_manager.py` | 98% |
+| `src/main.py` | 98% |
+| `src/api/token_verifier.py` | 97% |
+| `src/api/cost_plugins/deepseek.py` | 96% |
+| `src/api/cost_plugins/llamacpp.py` | 96% |
+| `src/api/cost_plugins/opencode.py` | 96% |
+| `src/server/handler.py` | 91% |
+| `src/server/endpoints.py` | 87% |
 
 ## API
 
