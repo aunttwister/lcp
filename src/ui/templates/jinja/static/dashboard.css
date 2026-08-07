@@ -615,6 +615,11 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .lcp-stack td.lcp-col-center,
 .lcp-stack th.lcp-col-center { text-align: center !important; }
 
+/* Provider health expandable rows (providers page Health tab) */
+.health-trigger:hover td {
+  background: hsl(var(--secondary) / 0.3);
+}
+
 /* Per-row expandable key stacks — one table, one header, expandable rows */
 .lcp-stack tbody.key-stack .lcp-stack-body {
   display: none;

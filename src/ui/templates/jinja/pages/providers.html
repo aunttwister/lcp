@@ -168,6 +168,15 @@ function resetCooldown(provider, baseUrl, profile){
   });
 }
 
+function toggleHealthDetail(id){
+  var tr = document.getElementById('hdet-'+id);
+  var chev = document.getElementById('hchev-'+id);
+  if(!tr) return;
+  var show = tr.style.display !== 'table-row';
+  tr.style.display = show ? 'table-row' : 'none';
+  if(chev) chev.textContent = show ? '▴' : '▾';
+}
+
 function loadProviderHealth(){
   api('GET','/health').then(function(d){
     var ps = d.providers || {};
@@ -186,18 +195,33 @@ function loadProviderHealth(){
         var cooldown = h.tripped_until || '—';
         var parts = k.split('/');
         var prov = parts[0], prof = parts.slice(1).join('/');
-        html += '<tr>';
-        html += '<td><b>'+esc(prov)+'</b> <span style="font-size:0.625rem;color:hsl(var(--muted-foreground))">'+esc(prof)+'</span></td>';
+        var sid = ('h' + prov + '-' + prof).replace(/[^a-zA-Z0-9]/g, '_');
+        html += '<tr class="health-trigger" style="cursor:pointer" onclick="toggleHealthDetail(\''+sid+'\')" title="Click to expand details">';
+        html += '<td><b>'+esc(prov)+'</b> <span style="font-size:0.625rem;color:hsl(var(--muted-foreground))">'+esc(prof)+'</span> <span class="lcp-stack-chevron" id="hchev-'+sid+'">▾</span></td>';
         html += '<td><span class="badge '+badgeClass+'">'+esc(h.status)+'</span></td>';
         html += '<td style="text-align:center">'+h.failures+'</td>';
-        html += '<td class="mono" style="font-size:0.6875rem;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(h.last_failure_reason||'')+'">'+esc(reason)+'</td>';
+        html += '<td class="mono" style="font-size:0.6875rem;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(reason)+'</td>';
         html += '<td class="mono" style="font-size:0.6875rem">'+esc(cooldown)+'</td>';
-        html += '<td>';
+        html += '<td style="white-space:nowrap">';
         if(h.status!=='healthy'){
-          html += '<button class="btn-sm btn-success" onclick="resetCooldown(\''+prov+'\',\''+esc(h.base_url||'')+'\',\''+prof+'\')" title="Force-reset to healthy">↺ Reset</button>';
+          html += '<button class="btn-sm btn-success" onclick="event.stopPropagation();resetCooldown(\''+prov+'\',\''+esc(h.base_url||'')+'\',\''+prof+'\')" title="Force-reset to healthy">↺ Reset</button>';
         }
         html += '</td>';
         html += '</tr>';
+        // ── Expandable detail row ──
+        html += '<tr id="hdet-'+sid+'" style="display:none"><td colspan="6" style="padding:0">';
+        html += '<div style="background:hsl(var(--secondary)/0.15);border-top:1px solid hsl(var(--card-border));border-bottom:1px solid hsl(var(--card-border));padding:0.75rem 1rem;font-size:0.75rem">';
+        html += '<div style="font-weight:600;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Last Error</div>';
+        html += '<pre style="white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.6875rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:0.5rem;margin:0 0 0.75rem;max-height:180px;overflow:auto">'+esc(h.last_failure_reason||'—')+'</pre>';
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0.5rem">';
+        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Status</div><div>'+esc(h.status)+'</div></div>';
+        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Failures</div><div>'+h.failures+'</div></div>';
+        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Last Failure</div><div class="mono">'+esc(h.last_failure||'—')+'</div></div>';
+        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Last Success</div><div class="mono">'+esc(h.last_success||'—')+'</div></div>';
+        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Base URL</div><div class="mono" style="word-break:break-all">'+esc(h.base_url||'—')+'</div></div>';
+        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Cooldown Until</div><div class="mono">'+esc(h.tripped_until||'—')+'</div></div>';
+        html += '</div>';
+        html += '</div></td></tr>';
       });
     }
     document.getElementById('providerHealthBody').innerHTML = html;
