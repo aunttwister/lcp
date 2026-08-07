@@ -162,13 +162,15 @@ class TestNormalizeMessagesForCache:
         assert "reasoning_content" not in result[0]
         assert "reasoning_content" not in result[1]
 
-    def test_empty_reasoning_not_added(self):
-        """Empty/falsy reasoning_content is not added to normalized output."""
+    def test_empty_reasoning_content_is_preserved(self):
+        """Empty reasoning_content must be passed through — providers (especially
+        OpenCode's proxy) validate field presence, not value, in thinking-mode."""
         messages = [
             {"role": "assistant", "content": "OK", "reasoning_content": ""},
         ]
         result = normalize_messages_for_cache(messages)
-        assert "reasoning_content" not in result[0]
+        assert "reasoning_content" in result[0]
+        assert result[0]["reasoning_content"] == ""
 
     def test_full_conversation_roundtrip(self):
         """Mixed conversation: user → assistant(with reasoning) → assistant(tool_calls + reasoning) → tool."""

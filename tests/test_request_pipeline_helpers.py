@@ -135,6 +135,38 @@ class TestNormalizeMessagesForCache:
         assert out[0]["reasoning_content"] == "secret chain-of-thought"
         assert out[0]["name"] == "helper"
 
+    def test_empty_reasoning_content_preserved(self):
+        """Empty reasoning_content must be passed through — providers validate
+        field presence, not value, in thinking-mode conversations."""
+        msg = {
+            "role": "assistant",
+            "content": "ok",
+            "reasoning_content": "",  # falsy but must be kept
+        }
+        out = normalize_messages_for_cache([msg])
+        assert "reasoning_content" in out[0]
+        assert out[0]["reasoning_content"] == ""
+
+    def test_no_reasoning_content_not_added(self):
+        """When reasoning_content is absent, we should NOT add an empty one."""
+        msg = {"role": "assistant", "content": "ok"}
+        out = normalize_messages_for_cache([msg])
+        assert "reasoning_content" not in out[0]
+
+    def test_empty_reasoning_with_tool_calls_preserved(self):
+        """Empty reasoning_content with tool_calls must also be preserved."""
+        msg = {
+            "role": "assistant",
+            "content": "ok",
+            "reasoning_content": "",
+            "tool_calls": [{"id": "t1", "type": "function",
+                            "function": {"name": "read", "arguments": "{}"}}],
+        }
+        out = normalize_messages_for_cache([msg])
+        assert "reasoning_content" in out[0]
+        assert out[0]["reasoning_content"] == ""
+        assert out[0]["tool_calls"] == msg["tool_calls"]
+
     def test_tool_message_without_id_gets_empty(self):
         out = normalize_messages_for_cache([{"role": "tool", "content": "x"}])
         assert out[0]["tool_call_id"] == ""

@@ -104,7 +104,7 @@ def normalize_messages_for_cache(messages: list[dict]) -> list[dict]:
                 "content": content,
                 "tool_calls": msg["tool_calls"],
             }
-            if msg.get("reasoning_content"):
+            if "reasoning_content" in msg:
                 entry["reasoning_content"] = msg["reasoning_content"]
             if msg.get("name"):
                 entry["name"] = msg["name"]
@@ -113,7 +113,9 @@ def normalize_messages_for_cache(messages: list[dict]) -> list[dict]:
             entry = {"role": role, "content": content}
             # DeepSeek thinking mode requires reasoning_content to be passed
             # back in subsequent requests — omit it and get HTTP 400.
-            if role == "assistant" and msg.get("reasoning_content"):
+            # Must include the field even when empty (falsy), because providers
+            # (especially OpenCode's proxy) validate field presence, not the value.
+            if role == "assistant" and "reasoning_content" in msg:
                 entry["reasoning_content"] = msg["reasoning_content"]
             if msg.get("name"):
                 entry["name"] = msg["name"]
