@@ -2,7 +2,7 @@
 
 **A self-hosted LLM gateway. Route, meter, control — one container, one port, no cloud dependency.**
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)]()
@@ -347,4 +347,9 @@ collaboration between a human operator and AI. The bugs are mine; the architectu
 
 ## License
 
-MIT — use it however you like. If you build something with it, I would enjoy hearing about it.
+[GNU Affero General Public License v3.0](LICENSE) — you can use, modify, and
+distribute LCP freely. If you modify it and offer it as a network service
+(e.g. a hosted LLM gateway SaaS), you must make your modified source code
+available to users under the same license. This protects the project from
+being wrapped into proprietary services without contributing improvements
+back to the community.
