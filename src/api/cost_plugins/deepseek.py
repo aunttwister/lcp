@@ -88,6 +88,17 @@ class DeepSeekCostPlugin(CostPlugin):
         self._balance_cached_at: float = 0.0
 
     def _api_key(self) -> Optional[str]:
+        # 1. UI-managed key (encrypted credential store)
+        try:
+            from ..credential_store import get_credential_store
+            store = get_credential_store()
+            if store is not None:
+                key = store.get("deepseek")
+                if key:
+                    return key
+        except Exception:
+            pass
+        # 2. Env var fallback
         return os.environ.get("DEEPSEEK_API_KEY")
 
     def fetch_balance(self) -> Optional[dict]:

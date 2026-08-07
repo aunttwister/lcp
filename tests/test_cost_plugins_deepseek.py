@@ -104,6 +104,35 @@ class TestDeepSeekFetchBalance:
         with patch.dict("os.environ", {}, clear=True):
             assert self.plugin.fetch_balance() is None
 
+    def test_api_key_from_credential_store(self):
+        """Balance query uses the UI-managed key from the credential store."""
+        from unittest.mock import patch as _patch
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = json.dumps({
+            "is_available": True,
+            "balance_infos": [{
+                "currency": "USD",
+                "total_balance": "9.99",
+                "granted_balance": "10.00",
+                "topped_up_balance": "0.00",
+            }],
+        }).encode("utf-8")
+        fake_resp.__enter__.return_value = fake_resp
+
+        store = MagicMock()
+        store.get.return_value = "sk-stored"
+        with _patch.dict("os.environ", {}, clear=True):  # no env var — must use store
+            with _patch("src.api.credential_store.get_credential_store", return_value=store):
+                with _patch("src.api.cost_plugins.deepseek.urlopen", return_value=fake_resp) as mock_req:
+                    result = self.plugin.fetch_balance()
+
+        assert result is not None
+        assert result["balance"] == 9.99
+        store.get.assert_called_with("deepseek")
+        # Verify the stored key was used in the Authorization header
+        args, _ = mock_req.call_args
+        assert args[0].headers["Authorization"] == "Bearer sk-stored"
+
     def test_successful_balance_query(self):
         fake_resp = MagicMock()
         fake_resp.read.return_value = json.dumps({
