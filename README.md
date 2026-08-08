@@ -176,6 +176,11 @@ picker with their full context windows and capabilities.**
   caps output at **Default Max Output Tokens** (default `4096`) even though LCP reports the full
   1M context. Raise `github.copilot.llm-gateway.defaultMaxOutputTokens` in VS Code settings
   (e.g. `8192`–`16384`) so the model has room to finish reasoning and emit a real response.
+- **DeepSeek 400 "reasoning_content must be passed back"?** This happens when an agent / Copilot
+  strips the `reasoning_content` field from thinking-mode assistant turns in multi-turn history.
+  LCP automatically recovers the real reasoning content it saw in earlier responses and
+  re-attaches it. See [Thinking-Mode Reasoning Recovery](features/thinking-mode-recovery.md)
+  for the architecture.
 
 ## Configuration
 

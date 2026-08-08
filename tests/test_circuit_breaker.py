@@ -174,6 +174,12 @@ class TestFailureWeighting:
         assert cb.status_of("w", "https://x", "l2") == "healthy"
         assert cb.get_health("w", "https://x", "l2")["consecutive_failures"] == 1
 
+    def test_credits_failures_trip_dead_with_fewer_attempts(self, cb):
+        # 2 credits failures × weight 3 = 6 >= failures_dead(6) → dead in 2 calls
+        cb.record_failure("w", "https://x", "l2", error_type="ProviderCreditsError")
+        cb.record_failure("w", "https://x", "l2", error_type="ProviderCreditsError")
+        assert cb.status_of("w", "https://x", "l2") == "dead"
+
 
 class TestHalfOpenLadder:
     """Dead → degraded (probe) → healthy on success, dead again on failure."""

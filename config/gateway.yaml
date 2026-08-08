@@ -126,12 +126,14 @@ model_limits:
     context_window: 1000000
     max_output_tokens: 384000
     supports_vision: false
+    supports_thinking: true
     description: DeepSeek V4 Pro — flagship MoE for coding, reasoning, and agentic
       work
   deepseek-v4-flash:
     context_window: 1000000
     max_output_tokens: 384000
     supports_vision: false
+    supports_thinking: true
     description: DeepSeek V4 Flash — fast lane for economical reasoning and long-context
       work
 database:

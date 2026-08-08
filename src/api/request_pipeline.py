@@ -22,6 +22,7 @@ from .exceptions import (
     ConfigError,
     ProviderAuthError,
     ProviderBadRequestError,
+    ProviderCreditsError,
     ProviderInternalError,
     ProviderRateLimitError,
     ProviderTimeoutError,
@@ -36,6 +37,32 @@ logger = get_logger("lcp.pipeline")
 
 # Generic return type for call_with_retry — it returns whatever request_fn returns.
 T = TypeVar("T")
+
+# Substrings that identify an insufficient-balance / out-of-credits response
+# from a provider. Detected in the HTTP error body regardless of status code.
+_CREDITS_MARKERS = (
+    "creditserror",
+    "insufficient balance",
+    "insufficient funds",
+    "out of credits",
+    "no credits",
+    "billing",
+    "payment required",
+)
+
+
+def _is_credits_error(error_body: str, status: int) -> bool:
+    """Return True when a provider error body indicates an out-of-credits state.
+
+    The opencode API returns a ``CreditsError`` (often with an HTTP 401/403 or
+    402) when the workspace balance is exhausted. These should trip the circuit
+    breaker rather than be treated as a plain auth failure or a bad request.
+    """
+    body = (error_body or "").lower()
+    if any(marker in body for marker in _CREDITS_MARKERS):
+        return True
+    # HTTP 402 Payment Required is the canonical "insufficient balance" status.
+    return status == 402
 
 
 # ── Tool Stripping ───────────────────────────────────────────────────────────
@@ -142,6 +169,114 @@ def has_image_content(messages: list[dict]) -> bool:
 
 
 # ── Message Sanitization ─────────────────────────────────────────────────────
+
+def capture_reasoning_from_response(response_body: dict) -> None:
+    """Capture reasoning_content from a non-streaming provider response.
+
+    DeepSeek returns ``choices[0].message.reasoning_content`` alongside
+    ``tool_calls``. We store it keyed by tool_call_id so a later request whose
+    client stripped reasoning_content can be rehydrated with the real content.
+    Best-effort; never raises.
+    """
+    try:
+        message = (response_body or {}).get("choices", [{}])[0].get("message", {})
+        reasoning = message.get("reasoning_content")
+        tool_calls = message.get("tool_calls") or []
+        ids = [tc.get("id", tc.get("tool_call_id")) for tc in tool_calls
+               if tc.get("id", tc.get("tool_call_id"))]
+        if ids and reasoning:
+            from .reasoning_store import get_reasoning_store
+            get_reasoning_store().capture(ids, reasoning)
+    except Exception:
+        pass
+
+
+def capture_reasoning_from_sse(raw_bytes: bytes) -> None:
+    """Capture reasoning_content from a streaming (SSE) provider response.
+
+    SSE deltas carry ``reasoning_content`` and ``tool_calls`` across chunks.
+    We accumulate reasoning deltas and pair them with any tool_call ids seen
+    in the same response, storing the real content keyed by tool_call_id.
+    Best-effort; never raises.
+    """
+    try:
+        text = raw_bytes.decode("utf-8", errors="replace")
+        reasoning_buf: list[str] = []
+        tool_ids: list[str] = []
+        for line in text.split("\n"):
+            if not line.startswith("data:"):
+                continue
+            data_str = line[5:].strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+            try:
+                obj = json.loads(data_str)
+            except Exception:
+                continue
+            for choice in obj.get("choices", []):
+                delta = choice.get("delta") or {}
+                rc = delta.get("reasoning_content")
+                if rc:
+                    reasoning_buf.append(rc)
+                for tc in delta.get("tool_calls") or []:
+                    tc_id = tc.get("id", tc.get("tool_call_id"))
+                    if tc_id:
+                        tool_ids.append(tc_id)
+        if tool_ids and reasoning_buf:
+            from .reasoning_store import get_reasoning_store
+            get_reasoning_store().capture(tool_ids, "".join(reasoning_buf))
+    except Exception:
+        pass
+
+
+def ensure_thinking_reasoning_content(messages: list[dict], model: str,
+                                      config) -> list[dict]:
+    """Ensure tool-calling assistant turns carry a ``reasoning_content`` key.
+
+    Per the official DeepSeek thinking-mode docs:
+      - For requests carrying the ``tools`` parameter, ``reasoning_content``
+        must be passed back on assistant messages that performed a tool call.
+        Omitting it returns HTTP 400: "The `reasoning_content` in the thinking
+        mode must be passed back to the API."
+      - For assistant turns WITHOUT a tool call, ``reasoning_content`` is
+        ignored by the API — no injection needed.
+
+    The gateway preserves ``reasoning_content`` when the client sends it, but
+    clients (agents / Copilot) often strip it when rebuilding multi-turn
+    history. Two recovery layers:
+      1. Rehydrate from the reasoning store — LCP remembers the real content
+         keyed by tool_call_id (captured when the provider returned it) and
+         re-attaches it, so the genuine chain-of-thought is passed back.
+      2. Fallback: inject an empty string as a presence placeholder when no
+         stored content exists, since DeepSeek's validation is on field
+         presence for this error path.
+
+    Only applied when the target model declares ``supports_thinking: true`` in
+    ``model_limits`` (e.g. deepseek-v4-pro / deepseek-v4-flash).
+    """
+    try:
+        limits = config.get_model_limits(model) if hasattr(config, "get_model_limits") else None
+        supports_thinking = bool((limits or {}).get("supports_thinking", False))
+    except Exception:
+        supports_thinking = False
+    if not supports_thinking:
+        return messages
+
+    # Layer 1: reattach genuinely captured reasoning content (by tool_call_id)
+    try:
+        from .reasoning_store import get_reasoning_store
+        messages = get_reasoning_store().rehydrate(messages)
+    except Exception:
+        pass
+
+    # Layer 2: presence fallback for any tool-call turn still missing it
+    for msg in messages:
+        # Docs: only tool-calling assistant turns require reasoning_content.
+        if msg.get("role") == "assistant" and msg.get("tool_calls") \
+                and "reasoning_content" not in msg:
+            msg["reasoning_content"] = ""
+    return messages
+
 
 def sanitize_messages(messages: list[dict]) -> list[dict]:
     """Fix malformed conversation histories before forwarding to providers.
@@ -363,6 +498,14 @@ def forward_request(provider_cfg: dict, body: dict, config):
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")[:500]
         status = e.code
+        # Insufficient balance / credits error — provider-side funding issue.
+        # Must be detected BEFORE the generic 4xx / auth branches so it gets a
+        # dedicated exception that trips the circuit breaker (a drained account
+        # won't self-heal, so fall back + break rather than retry).
+        if _is_credits_error(error_body, status):
+            raise ProviderCreditsError(
+                f"Provider {provider_cfg['provider']} out of credits: {error_body}"
+            )
         if status == 401 or status == 403:
             reason = error_body.strip() if error_body.strip() else f"HTTP {status}"
             raise ProviderAuthError(
@@ -522,6 +665,13 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
         if "messages" in body:
             body["messages"] = sanitize_messages(body["messages"])
 
+        # Inject empty reasoning_content for thinking-mode models (DeepSeek).
+        # Clients often strip it from history; DeepSeek requires presence.
+        if "messages" in body:
+            body["messages"] = ensure_thinking_reasoning_content(
+                body["messages"], model, config
+            )
+
         # Add base_url to step config (API keys now come from credential store)
         step_with_key = {
             **step,
@@ -556,8 +706,9 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
             # Bad request — the problem is in the body, not the provider.
             # Falling back to another provider just wastes attempts.
             # Re-raise immediately so the client sees the real error.
-            cb.record_failure(provider_name, base_url, profile_name,
-                              error_type=type(e).__name__)
+            # NOTE: deliberately NOT calling cb.record_failure() — a 400 caused
+            # by a bad client body is not a provider outage, and counting it
+            # against provider health would falsely degrade healthy providers.
             logger.error(
                 "chain_bad_request",
                 profile=profile_name,
@@ -570,8 +721,8 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
             raise AllProvidersFailedError(
                 f"Provider {provider_name} rejected the request as invalid: {e}"
             ) from e
-        except (ProviderTimeoutError, ProviderAuthError, ProviderRateLimitError,
-                ProviderInternalError) as e:
+        except (ProviderTimeoutError, ProviderAuthError, ProviderCreditsError,
+                ProviderRateLimitError, ProviderInternalError) as e:
             cb.record_failure(provider_name, base_url, profile_name,
                               error_type=type(e).__name__,
                               error_reason=str(e))

@@ -92,6 +92,18 @@ class ProviderAuthError(ProviderError):
     status_code = 502
 
 
+class ProviderCreditsError(ProviderError):
+    """Upstream provider account is out of credits / insufficient balance.
+
+    A provider-side condition (e.g. opencode ``CreditsError``): the account
+    needs top-up. It will not resolve by retrying the same request, so it
+    should trip the circuit breaker and fall back to another provider rather
+    than being re-attempted against the same drained account.
+    """
+    code = "LCP-2006"
+    status_code = 402
+
+
 class ProviderBadRequestError(ProviderError):
     """Upstream provider returned HTTP 400 — the request itself is invalid.
 

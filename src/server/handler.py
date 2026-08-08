@@ -17,6 +17,8 @@ from ..api.request_pipeline import (
     calculate_cost,
     try_chain,
     record_cost,
+    capture_reasoning_from_response,
+    capture_reasoning_from_sse,
 )
 from ..api.cost_estimator import estimate_from_request
 from ..api.prompt_cache import get_prompt_cache
@@ -514,6 +516,12 @@ class LCPHandler(
                     logger.debug("client_disconnected", path=self.path, stream="SSE")
 
                 full_sse = b"".join(sse_parts)
+                # Capture reasoning_content from the stream so it can be
+                # re-attached to later requests (DeepSeek thinking mode).
+                try:
+                    capture_reasoning_from_sse(full_sse)
+                except Exception:
+                    pass
                 last_chunk = extract_last_sse_chunk(full_sse)
                 if last_chunk and last_chunk.get("usage"):
                     cost_info = {
@@ -563,6 +571,12 @@ class LCPHandler(
                 return
 
             # ── Non-streaming ──
+            # Capture reasoning_content so it can be re-attached to later
+            # requests (DeepSeek thinking mode requires it on tool-call turns).
+            try:
+                capture_reasoning_from_response(response_body)
+            except Exception:
+                pass
             cache.set(profile, model, body, response_body)
 
             # Token verification

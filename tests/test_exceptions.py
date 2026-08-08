@@ -4,8 +4,8 @@ import sys
 from src.api.exceptions import (
     LCPError, ConfigError, AuthError, ForbiddenError, CreditExhaustedError,
     ProviderError, ProviderTimeoutError, ProviderRateLimitError,
-    ProviderAuthError, ProviderBadRequestError, ProviderInternalError,
-    AllProvidersFailedError, ToolBlockedError,
+    ProviderAuthError, ProviderCreditsError, ProviderBadRequestError,
+    ProviderInternalError, AllProvidersFailedError, ToolBlockedError,
 )
 
 def test_base_is_lcp_error():
@@ -23,6 +23,12 @@ def test_provider_errors_are_lcp():
 
 def test_auth_error_is_provider():
     e = ProviderAuthError("unauthorized")
+    assert isinstance(e, ProviderError)
+    assert isinstance(e, LCPError)
+
+
+def test_credits_error_is_provider():
+    e = ProviderCreditsError("out of credits")
     assert isinstance(e, ProviderError)
     assert isinstance(e, LCPError)
 
@@ -82,6 +88,7 @@ def test_every_exception_has_code_and_status(exc_cls):
     (ProviderTimeoutError, "LCP-2001"),
     (ProviderRateLimitError, "LCP-2002"),
     (ProviderAuthError, "LCP-2003"),
+    (ProviderCreditsError, "LCP-2006"),
     (ProviderBadRequestError, "LCP-2004"),
     (ProviderInternalError, "LCP-2005"),
     (AllProvidersFailedError, "LCP-3001"),
@@ -98,6 +105,7 @@ def test_known_error_codes(exc_cls, expected):
     (ProviderTimeoutError, 504),
     (ProviderRateLimitError, 429),
     (ProviderBadRequestError, 400),
+    (ProviderCreditsError, 402),
     (ProviderInternalError, 502),
     (AllProvidersFailedError, 502),
     (ToolBlockedError, 403),

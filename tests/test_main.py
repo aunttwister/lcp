@@ -14,6 +14,7 @@ from src.api.request_pipeline import (
     strip_forbidden_tools,
     calculate_cost,
     normalize_messages_for_cache,
+    ensure_thinking_reasoning_content,
     has_image_content,
 )
 from src.api.circuit_breaker import get_circuit_breaker
@@ -200,6 +201,85 @@ class TestNormalizeMessagesForCache:
         # Tool
         assert result[3]["role"] == "tool"
         assert result[3]["tool_call_id"] == "call_1"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ensure_thinking_reasoning_content
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestEnsureThinkingReasoningContent:
+    def _thinking_config(self):
+        cfg = MagicMock()
+        cfg.get_model_limits.return_value = {"supports_thinking": True}
+        return cfg
+
+    def _non_thinking_config(self):
+        cfg = MagicMock()
+        cfg.get_model_limits.return_value = {"supports_thinking": False}
+        return cfg
+
+    def test_injects_empty_reasoning_for_tool_call_assistant(self):
+        """Per DeepSeek docs, ONLY tool-calling assistant turns require
+        reasoning_content. A missing field on a tool-call turn gets an empty
+        value injected for thinking-capable models."""
+        messages = [
+            {"role": "user", "content": "Write a function"},
+            {
+                "role": "assistant",
+                "content": "Let me write that.",
+                "tool_calls": [{"id": "call_1", "function": {"name": "write_file", "arguments": "{}"}}],
+            },
+        ]
+        result = ensure_thinking_reasoning_content(messages, "deepseek-v4-flash",
+                                                   self._thinking_config())
+        # tool-call assistant turn gets empty reasoning_content injected
+        assert result[1]["reasoning_content"] == ""
+        assert result[1]["tool_calls"] == messages[1]["tool_calls"]
+
+    def test_does_not_inject_on_non_tool_call_assistant(self):
+        """Per docs, assistant turns WITHOUT a tool call don't need
+        reasoning_content (the API ignores it) — no injection needed."""
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+        result = ensure_thinking_reasoning_content(messages, "deepseek-v4-flash",
+                                                   self._thinking_config())
+        assert "reasoning_content" not in result[1]
+
+    def test_preserves_existing_reasoning_content(self):
+        """Assistant messages that already carry reasoning_content are untouched."""
+        messages = [
+            {"role": "assistant", "content": "x", "reasoning_content": "thinking..."},
+        ]
+        result = ensure_thinking_reasoning_content(messages, "deepseek-v4-flash",
+                                                   self._thinking_config())
+        assert result[0]["reasoning_content"] == "thinking..."
+
+    def test_noop_for_non_thinking_model(self):
+        """Models without supports_thinking are left completely untouched."""
+        messages = [
+            {"role": "assistant", "content": "hello"},
+        ]
+        result = ensure_thinking_reasoning_content(messages, "gpt-4o",
+                                                   self._non_thinking_config())
+        assert "reasoning_content" not in result[0]
+
+    def test_noop_when_config_lacks_model_limits(self):
+        """If get_model_limits returns None/absent, no injection happens."""
+        cfg = MagicMock()
+        cfg.get_model_limits.return_value = None
+        messages = [{"role": "assistant", "content": "hi"}]
+        result = ensure_thinking_reasoning_content(messages, "some-model", cfg)
+        assert "reasoning_content" not in result[0]
+
+    def test_noop_when_config_has_no_get_model_limits(self):
+        """Config objects without get_model_limits are handled defensively."""
+        cfg = MagicMock()
+        del cfg.get_model_limits
+        messages = [{"role": "assistant", "content": "hi"}]
+        result = ensure_thinking_reasoning_content(messages, "some-model", cfg)
+        assert "reasoning_content" not in result[0]
 
 
 # ═══════════════════════════════════════════════════════════════════════

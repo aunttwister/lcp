@@ -16,6 +16,7 @@ logger = get_logger("lcp.circuit_breaker")
 # (a rejected key won't self-heal) so they should trip the breaker faster.
 _ERROR_WEIGHTS = {
     "ProviderAuthError": 3,
+    "ProviderCreditsError": 3,  # drained account won't self-heal — trip fast
     "ProviderTimeoutError": 1,
     "ProviderRateLimitError": 1,
     "ProviderInternalError": 1,

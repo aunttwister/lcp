@@ -57,6 +57,7 @@ from src.api.exceptions import (
     ConfigError,
     ProviderAuthError,
     ProviderBadRequestError,
+    ProviderCreditsError,
     ProviderInternalError,
 )
 
@@ -422,6 +423,49 @@ class TestForwardRequestStreaming:
                 with pytest.raises(ProviderAuthError):
                     forward_request(self._cfg(), body, mock_config)
 
+    def test_opencode_credits_error_raises_credits_error(self, mock_config):
+        """opencode CreditsError (insufficient balance) must map to ProviderCreditsError,
+        NOT ProviderAuthError — so it trips the circuit breaker."""
+        import urllib.error
+        body = {"messages": [], "stream": False}
+        err = urllib.error.HTTPError("url", 403, "Forbidden", {}, None)
+        err.read = MagicMock(return_value=(
+            b'{"type":"error","error":{"type":"CreditsError",'
+            b'"message":"Insufficient balance. Manage your billing here: '
+            b'https://opencode.ai/workspace/wrk_X/billing"}}'
+        ))
+        mock_config.get_provider_key.return_value = None
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", side_effect=err):
+                with pytest.raises(ProviderCreditsError) as exc:
+                    forward_request(self._cfg(), body, mock_config)
+        assert "out of credits" in str(exc.value)
+        assert "Insufficient balance" in str(exc.value)
+
+    def test_http_402_raises_credits_error(self, mock_config):
+        """HTTP 402 Payment Required is the canonical insufficient-balance status."""
+        import urllib.error
+        body = {"messages": [], "stream": False}
+        err = urllib.error.HTTPError("url", 402, "Payment Required", {}, None)
+        err.read = MagicMock(return_value=b'{"error":"payment required"}')
+        mock_config.get_provider_key.return_value = None
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", side_effect=err):
+                with pytest.raises(ProviderCreditsError):
+                    forward_request(self._cfg(), body, mock_config)
+
+    def test_plain_401_body_not_credits(self, mock_config):
+        """A plain auth rejection (no credits markers, non-402) stays ProviderAuthError."""
+        import urllib.error
+        body = {"messages": [], "stream": False}
+        err = urllib.error.HTTPError("url", 401, "Unauthorized", {}, None)
+        err.read = MagicMock(return_value=b'{"error":"invalid key"}')
+        mock_config.get_provider_key.return_value = None
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", side_effect=err):
+                with pytest.raises(ProviderAuthError):
+                    forward_request(self._cfg(), body, mock_config)
+
     def test_http_403_includes_error_body(self, mock_config):
         """403 auth error message should include the upstream reason body."""
         import urllib.error
@@ -550,6 +594,112 @@ class TestTryChainErrorPaths:
             with pytest.raises(AllProvidersFailedError) as exc:
                 try_chain("l2", chain_config.profiles["l2"], self._body(), chain_config)
         assert "rejected the request as invalid" in str(exc.value)
+
+    def test_bad_request_does_not_trip_circuit_breaker(self, chain_config):
+        """A 400 bad-request is a client/body problem, NOT a provider failure.
+
+        It must not call record_failure — otherwise a few bad client bodies
+        would falsely mark a healthy provider degraded.
+        """
+        from src.api.circuit_breaker import get_circuit_breaker
+        cb = get_circuit_breaker()
+        with patch("src.api.request_pipeline.forward_request",
+                   side_effect=ProviderBadRequestError("reasoning_content missing")):
+            with pytest.raises(AllProvidersFailedError):
+                try_chain("l2", chain_config.profiles["l2"], self._body(), chain_config)
+        # Provider must remain healthy with zero recorded failures
+        h = cb.get_health("first", "https://first.com/v1", "l2")
+        assert h["status"] == "healthy"
+        assert h["consecutive_failures"] == 0
+        assert h["last_failure"] is None
+
+    def test_credits_error_trips_circuit_breaker_and_falls_back(self, chain_config):
+        """ProviderCreditsError (insufficient balance) MUST trip the circuit breaker
+        and fall back to the next provider — a drained account won't self-heal."""
+        from src.api.circuit_breaker import get_circuit_breaker
+        cb = get_circuit_breaker()
+
+        good_resp = MagicMock()
+        good_resp.status = 200
+        good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
+
+        def fake_forward(provider_cfg, body, config):
+            if provider_cfg["provider"] == "first":
+                raise ProviderCreditsError("out of credits: Insufficient balance")
+            return json.loads(good_resp.read()), 200
+
+        with patch("src.api.request_pipeline.forward_request", side_effect=fake_forward):
+            result_body, status, provider, model = try_chain(
+                "l2", chain_config.profiles["l2"], self._body(), chain_config)
+
+        # Fell back to the second provider
+        assert status == 200
+        assert provider == "second"
+        # First provider was marked degraded (weight 3, threshold 3)
+        h = cb.get_health("first", "https://first.com/v1", "l2")
+        assert h["status"] == "degraded"
+        assert h["consecutive_failures"] == 3
+        assert "Insufficient balance" in (h["last_failure_reason"] or "")
+
+    def test_thinking_model_injects_reasoning_content_before_forward(self, chain_config):
+        """For a thinking-capable model, a tool-calling assistant message missing
+        reasoning_content gets an empty field injected before forwarding —
+        preventing the DeepSeek 400 'reasoning_content must be passed back'."""
+        # Give the model thinking capability
+        chain_config.model_limits = {"m1": {"supports_thinking": True}}
+
+        good_resp = MagicMock()
+        good_resp.status = 200
+        good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
+        captured = {}
+
+        def fake_forward(provider_cfg, body, config):
+            captured["messages"] = list(body.get("messages", []))
+            return json.loads(good_resp.read()), 200
+
+        # Real scenario: assistant issued a tool call, the tool responded, but the
+        # client stripped reasoning_content from the assistant turn.
+        body = {"messages": [
+            {"role": "user", "content": "Write a function"},
+            {"role": "assistant", "content": "Here it is:",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "write_file", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "Wrote file successfully."},
+        ]}
+        with patch("src.api.request_pipeline.forward_request", side_effect=fake_forward):
+            try_chain("l2", chain_config.profiles["l2"], body, chain_config)
+
+        msgs = captured["messages"]
+        # Tool-call assistant message must carry reasoning_content (empty) when forwarded
+        assert msgs[1]["role"] == "assistant"
+        assert msgs[1]["tool_calls"] == body["messages"][1]["tool_calls"]
+        assert "reasoning_content" in msgs[1]
+        assert msgs[1]["reasoning_content"] == ""
+
+    def test_thinking_model_does_not_inject_on_plain_assistant(self, chain_config):
+        """Per docs, a plain assistant turn (no tool_calls) does not need
+        reasoning_content — the API ignores it."""
+        chain_config.model_limits = {"m1": {"supports_thinking": True}}
+
+        good_resp = MagicMock()
+        good_resp.status = 200
+        good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
+        captured = {}
+
+        def fake_forward(provider_cfg, body, config):
+            captured["messages"] = list(body.get("messages", []))
+            return json.loads(good_resp.read()), 200
+
+        body = {"messages": [
+            {"role": "user", "content": "Write a function"},
+            {"role": "assistant", "content": "Here it is:"},
+        ]}
+        with patch("src.api.request_pipeline.forward_request", side_effect=fake_forward):
+            try_chain("l2", chain_config.profiles["l2"], body, chain_config)
+
+        msgs = captured["messages"]
+        assert msgs[1]["role"] == "assistant"
+        assert "reasoning_content" not in msgs[1]
 
     def test_config_error_falls_back_to_next_provider(self, chain_config):
         """ConfigError on the first provider falls back to the second."""

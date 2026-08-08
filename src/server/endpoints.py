@@ -226,6 +226,8 @@ class HealthEndpoints:
             e = (et or "").lower()
             if "timeout" in e:
                 return "timeout"
+            if "credit" in e or "balance" in e or "insufficient" in e or "funds" in e:
+                return "credits"
             if "rate" in e or "429" in e:
                 return "rate_limit"
             if "auth" in e or "401" in e or "403" in e:
@@ -237,7 +239,7 @@ class HealthEndpoints:
             return "other"
 
         buckets = {"timeout": 0, "internal_error": 0, "rate_limit": 0,
-                   "auth": 0, "bad_request": 0, "other": 0}
+                   "auth": 0, "bad_request": 0, "credits": 0, "other": 0}
         for et, n in breakdown.items():
             buckets[_bucket(et)] += n
         self._send_json({
