@@ -222,7 +222,7 @@ pricing:
 | **Tool permission enforcement** | Yes, per profile | No | No |
 | **Deployment** | Single container, SQLite | Container + PostgreSQL + Redis | Container |
 | **Dashboard** | Server-rendered HTML, no build | React SPA | Next.js SPA |
-| **License** | MIT, all features included | MIT core, enterprise tier | Source-available |
+| **License** | AGPL-3.0, all features included | MIT core, enterprise tier | Source-available |
 | **Memory footprint** | ~100 MB baseline | 500 MB+ service stack | Node.js baseline |
 | **Agent-native** | Built for Hermes agents | Generic API proxy | Generic API proxy |
 | **API key management** | Virtual keys, spend limits | Virtual keys | Limited |

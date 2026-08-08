@@ -71,7 +71,7 @@ permissions:
 
   resources:                                # named resources profiles can request
     ssh_keys:
-      deploy:          { hosts: [node01, bridge] }
+      deploy:          { hosts: [node01, gateway] }
       readonly-backup: { hosts: ["*"] }
 
   profiles:

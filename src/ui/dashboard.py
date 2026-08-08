@@ -317,7 +317,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         return f"${float(c):.6f}" if c else "$0.000000"
 
     # ── Data for the Jinja2 dashboard template ──
-    host = headers.get("Host", "localhost:8735")
+    host = headers.get("Host", "localhost:8734")
     scheme = "https" if (
         headers.get("X-Forwarded-Proto", "").split(",")[0].strip() == "https"
         or headers.get("X-Forwarded-Scheme") == "https"

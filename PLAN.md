@@ -2,9 +2,9 @@
 
 Created: 2026-06-18
 Status: in_progress (Phases 1-4 ✅ resolved, 5-7 in_progress, 8 open)
-Merged from: llm-gateway-router (completed Phases 1-3), llm-cost-tracking, os-sandboxing
+Merged from: llm-gateway-router (completed Phases 1-3), llm-cost-tracking
 Name chosen: LCP — "control plane" as in the networking architecture term: routes traffic, enforces policy, manages state.
-Active consideration: Replace with https://github.com/theopenco/llmgateway (TypeScript, 1.3K stars) — see replacement task.
+Active consideration: Replace with https://github.com/theopenco/llmgateway (TypeScript, 1.3K stars).
 
 ## North Star
 
@@ -14,7 +14,7 @@ A self-hosted LLM management gateway that a homelab operator or small team deplo
 - **Track utilization** — who's using what, time-series analytics
 - **Route intelligently** — provider chains with circuit breaker, automatic fallback
 
-**What's already live** (Phases 1-3, deployed on production host):
+**What's already live** (Phases 1-3, deployed in production):
 - Python stdlib HTTP proxy, single Docker container, port :8734, SQLite
 - URL-path profile routing (`/l2`, `/l1`, `/career`, `/cron`)
 - Tool stripping per profile (L2: write_file/patch/cronjob blocked; L1: everything except read; Cron: all tools blocked)
@@ -28,7 +28,7 @@ A self-hosted LLM management gateway that a homelab operator or small team deplo
 
 ### Phase 1: URL-path gateway + tool stripping + fallback ✅
 **Status: resolved** (completed June 15-16)
-**Resolution:** Deployed on production host (`/opt/lcp/`). Docker container on :8734 with 4 profiles:
+**Resolution:** Deployed on a production host (`/opt/lcp/`). Docker container on :8734 with 4 profiles:
 - `/l2` → strip write_file/patch/cronjob → chain: opencode(v4-pro) → deepseek(v4-pro)
 - `/l1` → strip terminal/write_file/patch/execute_code/cronjob/memory → chain: opencode(v4-flash) → deepseek(v4-flash)
 - `/career` → strip all except web_search/session_search → deepseek(v4-flash)
@@ -181,7 +181,7 @@ permission_matrix:
 **Status:** open
 **Features this addresses:** ③ Daemon socket permission limiting
 **Approach:**
-1. Gateway provides the "what tools can this agent use" enforcement. The OS-level sandboxing (systemd service with restricted capabilities, cgroups) is a separate task (from `os-sandboxing` — completed).
+1. Gateway provides the "what tools can this agent use" enforcement. The OS-level sandboxing (systemd service with restricted capabilities, cgroups) is a separate completed task.
 
 ## Feature → Phase Mapping
 
@@ -258,13 +258,13 @@ with API key              │                                      │
 | Dashboard | Chart.js (CDN) + server-rendered HTML | No build step, single binary |
 | Auth | API key hashing (hashlib) | Simple, effective, no JWT complexity |
 | Config | YAML | Human-readable, hot-reloadable |
-| Deploy | Single Docker container, port :8734 | Already deployed on bridge |
+| Deploy | Single Docker container, port :8734 | Already deployed in production |
 
 **We do NOT add** PostgreSQL, Redis, pnpm, Next.js, or anything from the TypeScript ecosystem. SQLite handles our scale. One binary, one port.
 
 ## Open Source Strategy (if applicable)
 
-- **License:** MIT or AGPLv3 — prevents enterprise upsell like llmgateway
+- **License:** AGPL-3.0 — prevents enterprise upsell like llmgateway
 - **Differentiator vs llmgateway & LiteLLM:** "The only LLM gateway that understands agent tool permissions"
 - **Positioning:** Lean (no PG/Redis), agent-native (tool stripping), truly open source (no enterprise tears)
 
@@ -272,6 +272,6 @@ with API key              │                                      │
 
 | Task | Status | Relationship |
 |---|---|---|
-| llm-cost-tracking | ✅ completed | Absorbed into llm-gateway-router Phase 1 |
+| llm-cost-tracking | ✅ completed | Absorbed into the router Phase 1 |
 | os-sandboxing | ✅ completed | Parallel task — OS-level sandboxing, complements Phase 8 |
 | llm-gateway-router | ✅ completed | Phases 1-3 absorbed here |
