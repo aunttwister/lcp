@@ -609,6 +609,7 @@ class ProviderEndpoints:
         import urllib.request
         import urllib.error
         import ssl
+        import time
 
         try:
             body = self._read_body()
@@ -620,19 +621,34 @@ class ProviderEndpoints:
         model = body.get("model", "")
         provider = body.get("provider", "")
         # Resolve API key from credential store if not provided inline
+        key_source = "inline"
         if not api_key and provider:
             store = get_credential_store(self.engine)
             if store is not None:
                 api_key = store.get(provider) or ""
+                if api_key:
+                    key_source = "credential_store"
         if not api_base or not api_key:
             self._send_json({"error": "missing 'api_base' or 'api_key'"}, 400)
             return
+
         url = f"{api_base}/chat/completions"
+        test_model = model or "gpt-3.5-turbo"
         test_body = json.dumps({
-            "model": model or "gpt-3.5-turbo",
+            "model": test_model,
             "messages": [{"role": "user", "content": "hi"}],
             "max_tokens": 5,
         }).encode()
+
+        logger.info(
+            "provider_test_start",
+            provider=provider or "",
+            api_base=api_base,
+            model=test_model,
+            key_source=key_source,
+        )
+
+        start_ts = time.monotonic()
         req = urllib.request.Request(url, data=test_body, headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
@@ -642,11 +658,85 @@ class ProviderEndpoints:
             with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
                 result = json.loads(resp.read().decode())
                 model_used = result.get("model", "unknown")
+                duration_ms = round((time.monotonic() - start_ts) * 1000)
+                logger.info(
+                    "provider_test_ok",
+                    provider=provider or "",
+                    api_base=api_base,
+                    model_returned=model_used,
+                    status=resp.status,
+                    duration_ms=duration_ms,
+                )
                 self._send_json({"ok": True, "model": model_used, "status": resp.status})
         except urllib.error.HTTPError as e:
-            err_body = e.read().decode()[:300] if e.fp else ""
-            self._send_json({"ok": False, "status": e.code, "error": err_body})
+            duration_ms = round((time.monotonic() - start_ts) * 1000)
+            err_body = ""
+            if e.fp:
+                try:
+                    err_body = e.read().decode("utf-8", errors="replace")
+                except Exception:
+                    err_body = ""
+
+            # Detect Cloudflare-specific signatures
+            body_lower = err_body.lower()
+            is_cloudflare = (
+                "cloudflare" in body_lower
+                or "error 1010" in body_lower
+                or "ray id:" in body_lower
+            )
+            ray_id = ""
+            if "cf-ray" in body_lower:
+                import re
+                m = re.search(r"cf-ray[:\s]+([a-z0-9-]+)", body_lower)
+                if m:
+                    ray_id = m.group(1)
+            if not ray_id and "ray id:" in body_lower:
+                import re
+                m = re.search(r"ray\s*id[:\s]+([a-z0-9-]+)", body_lower)
+                if m:
+                    ray_id = m.group(1)
+            # Also check response headers for cf-ray
+            cf_ray_header = ""
+            if hasattr(e, "headers"):
+                hdrs = dict(e.headers) if isinstance(e.headers, dict) else {}
+                cf_ray_header = hdrs.get("cf-ray") or hdrs.get("Cf-Ray") or ""
+                if cf_ray_header and not ray_id:
+                    ray_id = cf_ray_header
+                if cf_ray_header:
+                    is_cloudflare = True
+
+            logger.warning(
+                "provider_test_http_error",
+                provider=provider or "",
+                api_base=api_base,
+                status=e.code,
+                duration_ms=duration_ms,
+                cloudflare_block=is_cloudflare,
+                cf_ray=ray_id,
+                error_preview=err_body[:500],
+            )
+
+            response = {"ok": False, "status": e.code}
+            if is_cloudflare:
+                response["error"] = (
+                    f"Cloudflare block (error 1010) — the request was rejected at the "
+                    f"TLS layer because it does not appear to come from a real browser."
+                )
+                if ray_id:
+                    response["cf_ray"] = ray_id
+            else:
+                response["error"] = err_body[:300]
+            self._send_json(response)
         except Exception as e:
+            duration_ms = round((time.monotonic() - start_ts) * 1000)
+            logger.warning(
+                "provider_test_error",
+                provider=provider or "",
+                api_base=api_base,
+                error_type=type(e).__name__,
+                error_message=str(e)[:500],
+                duration_ms=duration_ms,
+            )
             self._send_json({"ok": False, "error": str(e)})
 
     def _serve_provider_discover(self):

@@ -401,6 +401,63 @@ class TestProviderTest:
         req = mock_open.call_args[0][0]
         assert req.headers["Authorization"] == "Bearer cred-key"
 
+    def test_cloudflare_block_1010(self, temp_db):
+        """Cloudflare 1010 error body is detected and surfaced with a clear message."""
+        import urllib.error
+        body = {"api_base": "https://api.commandcode.ai/v1", "api_key": "sk-test", "model": "gpt-3.5-turbo", "provider": "commandcode"}
+        h = self._body_handler(temp_db, body)
+        cloudflare_body = (
+            b'<html><head><title>commandcode.ai</title></head><body>'
+            b'<span data-translate="error">1010</span>'
+            b'<span>Ray ID: abc123def456</span>'
+            b'</body></html>'
+        )
+        err = urllib.error.HTTPError("url", 403, "Forbidden", {"cf-ray": "abc123def456"}, None)
+        err.read = MagicMock(return_value=cloudflare_body)
+        with patch("urllib.request.urlopen", side_effect=err):
+            h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is False
+        assert result["status"] == 403
+        assert "Cloudflare" in result["error"]
+        assert "1010" in result["error"]
+        assert "TLS" in result["error"]
+        assert result["cf_ray"] == "abc123def456"
+
+    def test_cloudflare_block_no_ray(self, temp_db):
+        """Cloudflare block without a ray ID still detected."""
+        import urllib.error
+        body = {"api_base": "https://api.commandcode.ai/v1", "api_key": "sk-test", "model": "m", "provider": "commandcode"}
+        h = self._body_handler(temp_db, body)
+        err = urllib.error.HTTPError("url", 403, "Forbidden", {}, None)
+        err.read = MagicMock(return_value=b'Error 1010: cloudflare block')
+        with patch("urllib.request.urlopen", side_effect=err):
+            h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is False
+        assert result["status"] == 403
+        assert "Cloudflare" in result["error"]
+        assert "1010" in result["error"]
+        assert "cf_ray" not in result
+
+    def test_non_cloudflare_http_error(self, temp_db):
+        """Non-Cloudflare HTTP errors still return raw error body."""
+        import urllib.error
+        body = {"api_base": "https://api.example.com/v1", "api_key": "sk-test", "model": "gpt-3.5-turbo"}
+        h = self._body_handler(temp_db, body)
+        err = urllib.error.HTTPError("url", 500, "Server Error", {}, None)
+        err.read = MagicMock(return_value=b'{"error": "internal explosion"}')
+        with patch("urllib.request.urlopen", side_effect=err):
+            h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is False
+        assert result["status"] == 500
+        assert "internal explosion" in result["error"]
+        assert "Cloudflare" not in result["error"]
+
 
 # ── Plugin endpoints ──────────────────────────────────────────────────────
 
