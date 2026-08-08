@@ -263,7 +263,7 @@ function loadPage() {
 
 function buildPage(providers) {
     return Promise.all([
-        Promise.all(providers.map(loadStats)),
+        Promise.all(providers.map(function(p) { return loadStats(p, INITIAL_DAYS); })),
         loadSummaries(),
         loadSubscriptions()
     ]).then(function(results) {
