@@ -170,6 +170,12 @@ picker with their full context windows and capabilities.**
   serves `max_model_len` and `context_length` in `/v1/models`.
 - **"model does not support vision" errors?** Make sure "Enable Image Input" is turned **off**
   in the extension settings — your DeepSeek models are text-only.
+- **Chat errors with "received 0 chars / 0 text parts / 0 tool calls"?** This happens on long
+  agentic tasks when a reasoning model (`deepseek-v4-*`) spends its entire output budget on
+  thinking and produces no answer before hitting the extension's output-token cap. The gateway
+  caps output at **Default Max Output Tokens** (default `4096`) even though LCP reports the full
+  1M context. Raise `github.copilot.llm-gateway.defaultMaxOutputTokens` in VS Code settings
+  (e.g. `8192`–`16384`) so the model has room to finish reasoning and emit a real response.
 
 ## Configuration
 
