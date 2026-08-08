@@ -89,6 +89,16 @@ providers:
       strategy: prefix
       savings: cost
       hit_field: prompt_cache_hit_tokens
+  commandcode:
+    api_base: https://api.commandcode.ai/v1
+    models:
+    - deepseek-v4-pro
+    - deepseek-v4-flash
+    - claude-sonnet-5
+    - gpt-5.6-luna
+    - kimi-k3
+    - minimax-m3
+    - qwen3.8-max
 pricing:
 - provider: deepseek
   model: deepseek-v4-pro

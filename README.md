@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-804%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-906%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -107,7 +107,8 @@ Clients (agents, VS Code, scripts, curl)
 - Budget alerts with configurable thresholds
 
 ### Plugin architecture
-- Provider cost extraction plugins — DeepSeek, OpenCode, OpenAI
+- Provider cost extraction plugins — DeepSeek, OpenCode, Command Code, llama.cpp, OpenAI
+- **Command Code plugin** — subscription usage tracking (rolling 5-hour / weekly usage windows, monthly credits remaining, plan + status) via a browser session cookie from the credential store, plus cost history from the gateway `requests` table
 - Memory plugin with embedded [LanceDB](https://github.com/lancedb/lancedb) backend — columnar vector storage, ANN indexing, no separate service
 - See [features/memory.md](features/memory.md) for the unified memory specification
 
@@ -269,13 +270,13 @@ Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 804 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, and the plugin system |
+| `pytest` | Test runner — 906 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**94% overall** — 3,433 of 3,657 statements covered (804 tests, 0 integration tests).
+**93% overall** — 3,948 of 4,232 statements covered (906 tests, 0 integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 
@@ -286,6 +287,9 @@ Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 | `src/api/cost_estimator.py` | 100% |
 | `src/api/cost_plugins/opencode_api.py` | 100% |
 | `src/api/cost_plugins/base.py` | 100% |
+| `src/api/cost_plugins/commandcode_api.py` | 96% |
+| `src/api/cost_plugins/commandcode.py` | 87% |
+| `src/api/reasoning_store.py` | 92% |
 | `src/api/credential_store.py` | 97% |
 | `src/api/crypto.py` | 93% |
 | `src/api/exceptions.py` | 100% |
@@ -293,11 +297,11 @@ Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 | `src/api/logging_config.py` | 100% |
 | `src/api/models.py` | 100% |
 | `src/api/prompt_cache.py` | 100% |
-| `src/api/request_pipeline.py` | 99% |
+| `src/api/request_pipeline.py` | 96% |
 | `src/api/router.py` | 100% |
 | `src/server/server.py` | 100% |
 | `src/server/sse_helpers.py` | 100% |
-| `src/ui/dashboard.py` | 100% |
+| `src/ui/dashboard.py` | 99% |
 | `src/ui/pages.py` | 100% |
 | `src/api/config.py` | 98% |
 | `src/api/cost_plugins/deepseek.py` | 94% |
@@ -337,7 +341,7 @@ See [PLAN.md](PLAN.md) for the full API reference.
 - Alerting — DB-persisted alerts, webhook dispatch, acknowledge/resolve, alert history page
 - API key management — create, rotate, revoke; per-key spend limits; profile access scoping
 - SSE streaming passthrough — real-time token delivery, no buffering
-- Provider plugins — DeepSeek (balance API), OpenCode (web API), llama.cpp (local /models)
+- Provider plugins — DeepSeek (balance API), OpenCode (web API), Command Code (subscription usage API), llama.cpp (local /models)
 - Provider model discovery — auto-detect models from `/v1/models` with metadata
 - tiktoken integration — exact BPE token counts, pre-downloaded at build time
 - Startup observability — per-step timing logs in `docker logs`

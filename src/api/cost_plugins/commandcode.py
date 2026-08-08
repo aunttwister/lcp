@@ -1,0 +1,351 @@
+"""Cost tracking plugin for Command Code (commandcode.ai).
+
+Command Code is a coding-agent platform that provides access to numerous
+LLM providers through a single API endpoint (``https://api.commandcode.ai/v1``).
+
+Usage tracking has two sources:
+  - ``fetch_subscription`` — Command Code's internal billing API
+    (``/internal/billing/credits`` + ``/internal/billing/subscriptions``),
+    authenticated with a browser session cookie from the encrypted credential
+    store (same pattern as OpenCode). Returns rolling 5-hour / weekly usage
+    percentages with reset countdowns plus remaining monthly credits.
+  - ``fetch_summary`` / ``fetch_usage`` — cost history from the gateway's own
+    ``requests`` table (every routed request is logged with the provider name).
+
+Pricing is at the provider's list price (Command Code passes through at
+cost). Common models are pre-priced; unknown models fall back to config-based
+pricing from ``gateway.yaml``.
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from sqlalchemy import func
+
+from ..logging_config import get_logger
+from .base import CostPlugin, get_registry
+
+logger = get_logger("lcp.cost.commandcode")
+
+# ── API endpoint ────────────────────────────────────────────────────────────
+_COMMANDCODE_BASE = "https://api.commandcode.ai/v1"
+
+# ── Pre-known model pricing (per 1M tokens, USD) ────────────────────────────
+# Sourced from commandcode.ai/docs/resources/pricing-limits (August 2026).
+# Only models commonly routed through commandcode are listed. Unlisted models
+# are billed through config-based pricing from gateway.yaml.
+_COMMANDCODE_PRICING: dict[str, dict[str, float]] = {
+    # DeepSeek (primary models — 75% off deal)
+    "deepseek-v4-pro": {
+        "cache_hit": 0.003625,
+        "cache_miss": 0.435,
+        "output": 0.87,
+    },
+    "deepseek-v4-flash": {
+        "cache_hit": 0.0028,
+        "cache_miss": 0.14,
+        "output": 0.28,
+    },
+    # Anthropic Claude
+    "claude-sonnet-4-6": {
+        "cache_hit": 0.30,
+        "cache_miss": 3.00,
+        "output": 15.00,
+    },
+    "claude-sonnet-5": {
+        "cache_hit": 0.30,
+        "cache_miss": 3.00,
+        "output": 15.00,
+    },
+    "claude-opus-5": {
+        "cache_hit": 0.375,
+        "cache_miss": 15.00,
+        "output": 75.00,
+    },
+    "claude-haiku-4-5": {
+        "cache_hit": 0.08,
+        "cache_miss": 0.80,
+        "output": 4.00,
+    },
+    # OpenAI GPT
+    "gpt-5.6-luna": {
+        "cache_hit": 0.01,
+        "cache_miss": 0.10,
+        "output": 0.60,
+    },
+    "gpt-5.6-terra": {
+        "cache_hit": 0.10,
+        "cache_miss": 1.00,
+        "output": 6.00,
+    },
+    # Kimi
+    "kimi-k3": {
+        "cache_hit": 0.30,
+        "cache_miss": 3.00,
+        "output": 15.00,
+    },
+    "kimi-k2.7-code": {
+        "cache_hit": 0.19,
+        "cache_miss": 0.95,
+        "output": 4.00,
+    },
+    # MiniMax
+    "minimax-m3": {
+        "cache_hit": 0.06,
+        "cache_miss": 0.30,
+        "output": 1.20,
+    },
+    # Qwen
+    "qwen3.8-max": {
+        "cache_hit": 0.10,
+        "cache_miss": 1.00,
+        "output": 4.00,
+    },
+}
+
+
+class CommandCodeCostPlugin(CostPlugin):
+    """Cost tracking for Command Code.
+
+    Command Code does not expose a public balance or subscription API, so
+    ``fetch_balance`` and ``fetch_subscription`` always return ``None``.
+    Cost history comes from the gateway's ``requests`` table.
+    """
+
+    def __init__(self, engine: Any = None) -> None:
+        self._engine = engine
+
+    def set_engine(self, engine: Any) -> None:
+        """Bind the gateway SQLAlchemy engine for DB queries."""
+        self._engine = engine
+
+    # ── Identity ───────────────────────────────────────────────────────────
+
+    @property
+    def provider_name(self) -> str:
+        return "commandcode"
+
+    @property
+    def preset(self) -> Optional[dict]:
+        return {
+            "api_base": _COMMANDCODE_BASE,
+            "models": self.get_supported_models(),
+        }
+
+    def get_supported_models(self) -> list[str]:
+        return list(_COMMANDCODE_PRICING.keys())
+
+    # ── Pricing ────────────────────────────────────────────────────────────
+
+    def get_pricing(self, model: str) -> Optional[dict]:
+        return _COMMANDCODE_PRICING.get(model)
+
+    def calculate_cost(self, model: str, usage: dict) -> Optional[float]:
+        pricing = _COMMANDCODE_PRICING.get(model)
+        if pricing is None:
+            return None
+
+        cache_hit = usage.get("prompt_cache_hit_tokens", 0)
+        cache_miss = usage.get(
+            "prompt_cache_miss_tokens",
+            usage.get("prompt_tokens", 0) - cache_hit,
+        )
+        output = usage.get("completion_tokens", 0)
+
+        if cache_hit == 0 and cache_miss == 0:
+            cache_miss = usage.get("prompt_tokens", 0)
+
+        cost = (
+            (cache_hit / 1_000_000) * pricing["cache_hit"]
+            + (cache_miss / 1_000_000) * pricing["cache_miss"]
+            + (output / 1_000_000) * pricing["output"]
+        )
+        return round(cost, 8)
+
+    # ── Database helpers ───────────────────────────────────────────────────
+
+    def _ensure_engine(self) -> Any:
+        if self._engine is None:
+            raise RuntimeError(
+                "CommandCode plugin has no gateway engine — call set_engine() "
+                "or pass engine= to the constructor before querying."
+            )
+        return self._engine
+
+    def _gw_session(self):
+        from ..models import get_session
+        return get_session(self._ensure_engine())
+
+    # ── Usage history (from gateway requests table) ────────────────────────
+
+    def fetch_usage(self,
+                    start_date: Optional[str] = None,
+                    end_date: Optional[str] = None) -> list[dict]:
+        """Return daily aggregates for commandcode from the gateway DB."""
+        if self._engine is None:
+            return []
+
+        from ..models import Request as RequestModel
+
+        try:
+            with self._gw_session() as session:
+                q = session.query(
+                    func.substr(RequestModel.timestamp, 1, 10).label("day"),
+                    RequestModel.model,
+                    RequestModel.provider,
+                    func.coalesce(func.sum(RequestModel.prompt_tokens), 0).label("prompt_tokens"),
+                    func.coalesce(func.sum(RequestModel.completion_tokens), 0).label("completion_tokens"),
+                    func.coalesce(func.sum(RequestModel.cache_hit_tokens), 0).label("cache_hit_tokens"),
+                    func.coalesce(func.sum(RequestModel.cache_miss_tokens), 0).label("cache_miss_tokens"),
+                    func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
+                    func.count(RequestModel.id).label("request_count"),
+                ).filter(
+                    RequestModel.provider == "commandcode",
+                    RequestModel.success == 1,
+                )
+
+                if start_date:
+                    q = q.filter(RequestModel.timestamp >= start_date)
+                if end_date:
+                    q = q.filter(RequestModel.timestamp <= (end_date + "T23:59:59"))
+
+                q = q.group_by("day").order_by("day")
+                rows = q.all()
+
+            result: list[dict] = []
+            for r in rows:
+                result.append({
+                    "date": r.day,
+                    "model": r.model or "unknown",
+                    "provider": r.provider or "commandcode",
+                    "prompt_tokens": int(r.prompt_tokens),
+                    "completion_tokens": int(r.completion_tokens),
+                    "cache_hit_tokens": int(r.cache_hit_tokens),
+                    "cache_miss_tokens": int(r.cache_miss_tokens),
+                    "cost": round(float(r.cost), 8),
+                    "request_count": int(r.request_count),
+                })
+
+            logger.debug("usage_fetched", provider="commandcode", days=len(result))
+            return result
+        except Exception as exc:
+            logger.warning("usage_query_failed", provider="commandcode", error=str(exc))
+            return []
+
+    # ── Balance (not available) ────────────────────────────────────────────
+
+    def fetch_balance(self) -> Optional[dict]:
+        return None
+
+    # ── Rich summary — daily / weekly / monthly from gateway DB ────────────
+
+    def fetch_summary(self) -> Optional[dict]:
+        """Return daily, weekly, and monthly cost aggregates from the gateway DB."""
+        if self._engine is None:
+            return None
+
+        from ..models import Request as RequestModel
+
+        try:
+            with self._gw_session() as session:
+                now = datetime.now(timezone.utc)
+                thresholds: dict[str, str] = {
+                    "daily": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
+                    "weekly": (now - timedelta(days=7)).strftime("%Y-%m-%d"),
+                    "monthly": now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M:%S"),
+                }
+
+                result: dict[str, dict] = {}
+                for period_label, cutoff in thresholds.items():
+                    row = session.query(
+                        func.coalesce(
+                            func.sum(RequestModel.prompt_tokens + RequestModel.completion_tokens),
+                            0,
+                        ).label("tokens"),
+                        func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
+                        func.count(RequestModel.id).label("requests"),
+                    ).filter(
+                        RequestModel.provider == "commandcode",
+                        RequestModel.success == 1,
+                        RequestModel.timestamp >= cutoff,
+                    ).first()
+
+                    if row:
+                        result[period_label] = {
+                            "tokens": int(row.tokens),
+                            "cost": round(float(row.cost), 8),
+                            "requests": int(row.requests),
+                        }
+                    else:
+                        result[period_label] = {"tokens": 0, "cost": 0.0, "requests": 0}
+
+            return result
+        except Exception as exc:
+            logger.warning("summary_query_failed", provider="commandcode", error=str(exc))
+            return None
+
+    # ── Subscription (from Command Code billing API) ──────────────────────
+
+    def fetch_subscription(self) -> Optional[dict]:
+        """Fetch subscription/usage snapshot from the Command Code billing API.
+
+        Requires a Command Code browser session cookie — read from the
+        encrypted credential store (UI-managed).  Returns::
+
+            {"monthly_credits_remaining": 8.78, "purchased_credits": 0.0,
+             "five_hour_pct": 32.0, "weekly_pct": 41.0,
+             "five_hour_reset_sec": 11520, "weekly_reset_sec": 172800,
+             "plan_id": "go", "plan_status": "active", ...}
+
+        Returns ``{"_error": "auth_failed", "detail": "..."}`` when the cookie
+        is missing/invalid, or ``{"_error": "api_error", "detail": "..."}`` on
+        an API failure.
+        """
+        try:
+            if os.environ.get("LCP_MOCK_PLUGIN_DATA"):
+                return {
+                    "monthly_credits_remaining": 8.78,
+                    "purchased_credits": 0.0,
+                    "premium_monthly_credits": 0.0,
+                    "opensource_monthly_credits": 8.78,
+                    "five_hour_pct": 32.0,
+                    "weekly_pct": 41.0,
+                    "five_hour_reset_sec": 11520,
+                    "weekly_reset_sec": 172800,
+                    "five_hour_reset_at": "",
+                    "weekly_reset_at": "",
+                    "plan_id": "go",
+                    "plan_status": "active",
+                    "billing_period_end": None,
+                }
+            from .commandcode_api import fetch_subscription_snapshot_dict
+            cookie = ""
+            # Cookie from the encrypted credential store (UI-managed)
+            try:
+                from ..credential_store import get_credential_store
+                store = get_credential_store()
+                if store is not None:
+                    cookie = store.get_cookie("commandcode") or ""
+            except Exception:
+                cookie = ""
+            if not cookie:
+                logger.debug("commandcode_cookie_not_configured")
+                return {"_error": "auth_failed",
+                        "detail": "Command Code cookie not set — add it in the Usage tab"}
+            data = fetch_subscription_snapshot_dict(cookie)
+            if data is None:
+                logger.warning("commandcode_subscription_fetch_returned_none")
+                return {"_error": "auth_failed",
+                        "detail": "Invalid or expired Command Code cookie, or API unreachable"}
+            return data
+        except Exception as exc:
+            logger.warning("commandcode_subscription_fetch_failed", error=str(exc))
+            return {"_error": "api_error", "detail": str(exc)}
+
+
+# ── Auto-register ──────────────────────────────────────────────────────────
+_registry = get_registry()
+_registry.register(CommandCodeCostPlugin())
