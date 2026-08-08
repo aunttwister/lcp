@@ -180,8 +180,8 @@ function loadOcCredStatus() {
         fetch('/api/cost-plugins/cookie/opencode').then(function(r){return r.json()}),
         fetch('/api/cost-plugins/workspace-id/opencode').then(function(r){return r.json()})
     ]).then(function(res){
-        _ocCookieSet = res[0].has_cookie || res[0].has_env_cookie;
-        _ocWsIdSet = res[1].has_workspace_id || res[1].has_env_workspace_id;
+        _ocCookieSet = res[0].has_cookie;
+        _ocWsIdSet = res[1].has_workspace_id;
         updateOcCredSummary();
     });
 }
@@ -326,7 +326,7 @@ function buildPage(providers) {
                     '<button class="btn-sm btn-primary" onclick="saveOcWsId()">Save</button>' +
                     '<button class="btn-sm" onclick="clearOcWsId()">Clear</button>' +
                     '</div>' +
-                    '<div style="font-size:0.625rem;color:hsl(var(--muted-foreground));margin-top:0.5rem">Stored encrypted. Cookie + Workspace ID together enable subscription usage tracking. Falls back to OPENCODE_COOKIE / OPENCODE_WORKSPACE_ID env vars.</div>' +
+                    '<div style="font-size:0.625rem;color:hsl(var(--muted-foreground));margin-top:0.5rem">Stored encrypted. Cookie + Workspace ID together enable subscription usage tracking.</div>' +
                     '</div>' +
                     '</div>';
                 if (sub._error) {

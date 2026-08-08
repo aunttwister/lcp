@@ -7,7 +7,7 @@ Authenticates via the ``auth`` browser cookie from a logged-in session.
 Usage::
 
     from .opencode_api import fetch_subscription
-    snapshot = fetch_subscription(os.environ.get("OPENCODE_COOKIE"))
+    snapshot = fetch_subscription(cookie, workspace_id=workspace_id)
     # => {"rolling_pct": 6.0, "weekly_pct": 26.0, "monthly_pct": 13.0,
     #     "rolling_reset_sec": 14213, "weekly_reset_sec": 197701,
     #     "monthly_reset_sec": 2483586}
@@ -186,9 +186,7 @@ def fetch_subscription(cookie: Optional[str], workspace_id: Optional[str] = None
     headers = _base_headers(cookie)
 
     # ── Step 1: discover workspace ID ──────────────────────────────────
-    # Priority: explicit argument → credential store → env var → scrape
-    if not workspace_id:
-        workspace_id = os.environ.get("OPENCODE_WORKSPACE_ID", "").strip() or None
+    # Priority: explicit argument → scrape as a fallback
     if not workspace_id:
         try:
             raw = _http_get(_OPENCODE_BASE, headers)

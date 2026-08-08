@@ -5,7 +5,7 @@ Uses a temporary SQLite database with the gateway ``requests`` table
 correctly via SQLAlchemy engine.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from src.api.cost_plugins.opencode import OpenCodeCostPlugin, _OPENCODE_PRICING, _FREE_MODELS
@@ -284,29 +284,35 @@ class TestOpenCodeFetchSummary:
 
 class TestOpenCodeFetchSubscription:
     def test_returns_error_when_no_cookie(self, plugin):
-        """When OPENCODE_COOKIE is not set, returns error dict."""
-        with patch.dict("os.environ", {}, clear=True):
+        """When no cookie is stored, returns error dict."""
+        store = MagicMock()
+        store.get_cookie.return_value = ""
+        with patch("src.api.credential_store.get_credential_store", return_value=store):
             result = plugin.fetch_subscription()
-            assert result is not None
-            assert result["_error"] == "auth_failed"
+        assert result is not None
+        assert result["_error"] == "auth_failed"
 
     def test_returns_error_when_api_returns_none(self, plugin):
         """When the API call returns None (invalid cookie, etc.), returns error dict."""
-        with patch.dict("os.environ", {"OPENCODE_COOKIE": "test-cookie"}):
+        store = MagicMock()
+        store.get_cookie.return_value = "auth=test-cookie"
+        with patch("src.api.credential_store.get_credential_store", return_value=store):
             with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
                        return_value=None):
                 result = plugin.fetch_subscription()
-                assert result is not None
-                assert result["_error"] == "auth_failed"
+        assert result is not None
+        assert result["_error"] == "auth_failed"
 
     def test_returns_error_when_api_raises(self, plugin):
         """When the API call raises, returns error dict."""
-        with patch.dict("os.environ", {"OPENCODE_COOKIE": "test-cookie"}):
+        store = MagicMock()
+        store.get_cookie.return_value = "auth=test-cookie"
+        with patch("src.api.credential_store.get_credential_store", return_value=store):
             with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
                        side_effect=RuntimeError("network down")):
                 result = plugin.fetch_subscription()
-                assert result is not None
-                assert result["_error"] == "api_error"
+        assert result is not None
+        assert result["_error"] == "api_error"
 
     def test_returns_subscription_data(self, plugin):
         """Happy path: returns subscription snapshot."""
@@ -314,14 +320,16 @@ class TestOpenCodeFetchSubscription:
             "rolling_pct": 17.0, "weekly_pct": 75.0,
             "rolling_reset_sec": 5944, "weekly_reset_sec": 278201,
         }
-        with patch.dict("os.environ", {"OPENCODE_COOKIE": "test-cookie"}):
+        store = MagicMock()
+        store.get_cookie.return_value = "auth=test-cookie"
+        with patch("src.api.credential_store.get_credential_store", return_value=store):
             with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
                        return_value=mock_data):
                 result = plugin.fetch_subscription()
-                assert result == mock_data
+        assert result == mock_data
 
-    def test_uses_credential_store_cookie_over_env(self, plugin, tmp_path):
-        """A UI-managed cookie (credential store) takes precedence over env var."""
+    def test_uses_credential_store_cookie(self, plugin, tmp_path):
+        """A UI-managed cookie (credential store) is used for the subscription call."""
         from src.api.credential_store import CredentialStore
         import src.api.credential_store as cs_module
         from src.api.models import get_engine, Base
@@ -330,15 +338,13 @@ class TestOpenCodeFetchSubscription:
         engine = get_engine(":memory:")
         Base.metadata.create_all(engine)
         cs_module._credential_store = CredentialStore(engine, data_dir=str(tmp_path))
-        # Master key stays set for the whole test so encrypt+decrypt match.
         with patch.dict(_os.environ, {"LCP_SECRET_KEY": "test-master"}, clear=False):
             cs_module._credential_store.set_cookie("opencode", "auth=store-cookie")
 
             mock_data = {"rolling_pct": 10.0}
-            with patch.dict(_os.environ, {"OPENCODE_COOKIE": "auth=env-cookie"}, clear=False):
-                with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
-                           return_value=mock_data) as m:
-                    result = plugin.fetch_subscription()
+            with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
+                       return_value=mock_data) as m:
+                result = plugin.fetch_subscription()
         assert result == mock_data
         # Verify the store cookie was passed through
         assert m.call_args[0][0] == "auth=store-cookie"

@@ -467,16 +467,18 @@ class ProviderEndpoints:
                 api_key = store.get(provider) or ""
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        cookie = os.environ.get("OPENCODE_COOKIE", "")
-        # Prefer UI-managed cookie from the credential store
+        # UI-managed cookie from the credential store
         store = get_credential_store(self.engine)
+        cookie = ""
         if store is not None:
-            cookie = store.get_cookie("opencode") or cookie
+            cookie = store.get_cookie("opencode") or ""
         if cookie:
             headers["Cookie"] = cookie
             headers["Origin"] = "https://opencode.ai"
             headers["Referer"] = "https://opencode.ai/"
-        ws = os.environ.get("OPENCODE_WORKSPACE_ID", "")
+        ws = ""
+        if store is not None:
+            ws = store.get_workspace_id("opencode") or ""
         if ws:
             headers["X-Workspace-Id"] = ws
 
@@ -1053,8 +1055,7 @@ class PluginEndpoints:
         """Return whether a UI-managed cookie exists for a provider (never the value)."""
         store = get_credential_store(self.engine)
         has = bool(store and store.has_cookie(provider))
-        env = bool(os.environ.get("OPENCODE_COOKIE", "")) if provider == "opencode" else False
-        self._send_json({"provider": provider, "has_cookie": has, "has_env_cookie": env})
+        self._send_json({"provider": provider, "has_cookie": has})
 
     def _serve_plugin_cookie_set(self, provider: str):
         """POST body {cookie: '...'} to upsert (or clear) a UI-managed cookie."""
@@ -1075,8 +1076,7 @@ class PluginEndpoints:
         """Return whether a UI-managed workspace ID exists for a provider."""
         store = get_credential_store(self.engine)
         has = bool(store and store.has_workspace_id(provider))
-        env = bool(os.environ.get("OPENCODE_WORKSPACE_ID", "")) if provider == "opencode" else False
-        self._send_json({"provider": provider, "has_workspace_id": has, "has_env_workspace_id": env})
+        self._send_json({"provider": provider, "has_workspace_id": has})
 
     def _serve_plugin_workspace_id_set(self, provider: str):
         """POST body {workspace_id: 'wrk_...'} to upsert (or clear) a UI-managed workspace ID."""

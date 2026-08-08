@@ -3,7 +3,8 @@
 Uses the gateway's own ``requests`` table for cost history (every routed
 request is logged there with ``provider='opencode'``) and optionally polls
 the OpenCode web API for subscription usage (5-hour / weekly percentages
-and reset countdowns) via ``OPENCODE_COOKIE`` env var.
+and reset countdowns) using the UI-managed cookie + workspace ID from the
+encrypted credential store.
 
 Pricing is the same as DeepSeek (OpenCode uses deepseek models under the
 hood).  The plugin also reports the free OpenCode-hosted models as zero-cost.
@@ -48,8 +49,8 @@ class OpenCodeCostPlugin(CostPlugin):
 
     Cost history comes from the gateway ``requests`` table (single source
     of truth for every routed request).  Subscription usage (usage % and
-    reset countdowns) comes from the OpenCode web API when the
-    ``OPENCODE_COOKIE`` env var is set.
+    reset countdowns) comes from the OpenCode web API using the UI-managed
+    cookie + workspace ID from the encrypted credential store.
 
     Requires a SQLAlchemy *engine* for gateway DB queries — pass it to the
     constructor or call ``set_engine()`` before any query methods are used.
@@ -240,9 +241,8 @@ class OpenCodeCostPlugin(CostPlugin):
     def fetch_subscription(self) -> Optional[dict]:
         """Fetch subscription usage snapshot from the OpenCode web API.
 
-        Requires the OpenCode ``auth`` cookie — read from the encrypted
-        credential store (UI-managed) first, then the ``OPENCODE_COOKIE`` env
-        var as a fallback.  Returns::
+        Requires the OpenCode ``auth`` cookie and workspace ID — read from the
+        encrypted credential store (UI-managed).  Returns::
 
             {"rolling_pct": 17.0, "weekly_pct": 75.0,
              "rolling_reset_sec": 5944, "weekly_reset_sec": 278201}
@@ -260,7 +260,7 @@ class OpenCodeCostPlugin(CostPlugin):
             from .opencode_api import fetch_subscription_dict
             cookie = ""
             workspace_id = ""
-            # 1. UI-managed cookie + workspace ID (encrypted credential store)
+            # Cookie + workspace ID from the encrypted credential store (UI-managed)
             try:
                 from ..credential_store import get_credential_store
                 store = get_credential_store()
@@ -270,12 +270,9 @@ class OpenCodeCostPlugin(CostPlugin):
             except Exception:
                 cookie = ""
                 workspace_id = ""
-            # 2. Env var fallback
-            if not cookie:
-                cookie = os.environ.get("OPENCODE_COOKIE", "")
             if not cookie:
                 logger.debug("opencode_cookie_not_configured")
-                return {"_error": "auth_failed", "detail": "OpenCode cookie not set — add it in the Usage tab or set OPENCODE_COOKIE"}
+                return {"_error": "auth_failed", "detail": "OpenCode cookie not set — add it in the Usage tab"}
             data = fetch_subscription_dict(cookie, workspace_id=workspace_id or None)
             if data is None:
                 logger.warning("subscription_fetch_returned_none")

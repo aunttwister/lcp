@@ -1,5 +1,4 @@
 """Tests for src/api/cost_plugins/opencode_api.py — SSR parser and HTTP client."""
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -236,13 +235,12 @@ class TestFetchSubscription:
         assert fetch_subscription("") is None
         assert fetch_subscription("   ") is None
 
-    def test_workspace_id_from_env(self):
+    def test_workspace_id_from_arg(self):
         page = '<script>id:"wrk_env123"</script>'
-        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": "wrk_env123"}, clear=False):
-            with patch("src.api.cost_plugins.opencode_api._http_get", return_value=page) as mock_get:
-                with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
-                           return_value={"rolling_pct": 6.0, "weekly_pct": 26.0, "monthly_pct": 13.0}):
-                    snap = fetch_subscription(" cookie ")
+        with patch("src.api.cost_plugins.opencode_api._http_get", return_value=page) as mock_get:
+            with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                       return_value={"rolling_pct": 6.0, "weekly_pct": 26.0, "monthly_pct": 13.0}):
+                snap = fetch_subscription(" cookie ", workspace_id="wrk_env123")
         assert snap is not None
         assert snap.rolling_pct == 6.0
         assert snap.workspace_id == "wrk_env123"
@@ -252,69 +250,62 @@ class TestFetchSubscription:
         assert "/go" in urls[0]
 
     def test_workspace_discovered_from_dashboard(self):
-        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": ""}, clear=False):
-            with patch("src.api.cost_plugins.opencode_api._http_get") as mock_get:
-                mock_get.side_effect = [
-                    'id:"wrk_abc"',  # dashboard page -> workspace discovery
-                    "<html>go page</html>",  # /go page
-                ]
-                with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
-                           return_value={"rolling_pct": 10.0}):
-                    snap = fetch_subscription("cookie")
+        with patch("src.api.cost_plugins.opencode_api._http_get") as mock_get:
+            mock_get.side_effect = [
+                'id:"wrk_abc"',  # dashboard page -> workspace discovery
+                "<html>go page</html>",  # /go page
+            ]
+            with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                       return_value={"rolling_pct": 10.0}):
+                snap = fetch_subscription("cookie")
         assert snap is not None
         assert snap.workspace_id == "wrk_abc"
         assert snap.rolling_pct == 10.0
 
     def test_dashboard_fetch_failure_returns_none(self):
         from urllib.error import URLError
-        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": ""}, clear=False):
-            with patch("src.api.cost_plugins.opencode_api._http_get",
-                       side_effect=URLError("down")):
-                assert fetch_subscription("cookie") is None
+        with patch("src.api.cost_plugins.opencode_api._http_get",
+                   side_effect=URLError("down")):
+            assert fetch_subscription("cookie") is None
 
     def test_no_workspace_found_returns_none(self):
-        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": ""}, clear=False):
-            with patch("src.api.cost_plugins.opencode_api._http_get",
-                       return_value="no ids here"):
-                assert fetch_subscription("cookie") is None
+        with patch("src.api.cost_plugins.opencode_api._http_get",
+                   return_value="no ids here"):
+            assert fetch_subscription("cookie") is None
 
     def test_go_page_fetch_failure_returns_none(self):
         from urllib.error import URLError
-        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": "wrk_1"}, clear=False):
-            with patch("src.api.cost_plugins.opencode_api._http_get",
-                       side_effect=URLError("down")):
-                assert fetch_subscription("cookie") is None
+        with patch("src.api.cost_plugins.opencode_api._http_get",
+                   side_effect=URLError("down")):
+            assert fetch_subscription("cookie", workspace_id="wrk_1") is None
 
     def test_parse_failure_returns_none(self):
-        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": "wrk_1"}, clear=False):
-            with patch("src.api.cost_plugins.opencode_api._http_get",
-                       return_value="<html>no data</html>"):
-                with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
-                           return_value=None):
-                    assert fetch_subscription("cookie") is None
+        with patch("src.api.cost_plugins.opencode_api._http_get",
+                   return_value="<html>no data</html>"):
+            with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                       return_value=None):
+                assert fetch_subscription("cookie", workspace_id="wrk_1") is None
 
     def test_fraction_percentages_scaled(self):
         """Values in (0,1) are treated as fractions and multiplied by 100."""
-        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": "wrk_1"}, clear=False):
-            with patch("src.api.cost_plugins.opencode_api._http_get", return_value="<html/>"):
-                with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
-                           return_value={"rolling_pct": 0.5, "weekly_pct": 0.01, "monthly_pct": 1.0}):
-                    snap = fetch_subscription("cookie")
+        with patch("src.api.cost_plugins.opencode_api._http_get", return_value="<html/>"):
+            with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                       return_value={"rolling_pct": 0.5, "weekly_pct": 0.01, "monthly_pct": 1.0}):
+                snap = fetch_subscription("cookie", workspace_id="wrk_1")
         assert snap is not None
         assert snap.rolling_pct == 50.0  # 0.5 * 100
         assert snap.weekly_pct == 1.0    # 0.01 * 100
         assert snap.monthly_pct == 1.0   # 1.0 left as-is
 
     def test_success_rounds_and_carries_resets(self):
-        with patch.dict(os.environ, {"OPENCODE_WORKSPACE_ID": "wrk_1"}, clear=False):
-            with patch("src.api.cost_plugins.opencode_api._http_get", return_value="<html/>"):
-                with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
-                           return_value={
-                               "rolling_pct": 6.0, "weekly_pct": 26.4, "monthly_pct": 13.04,
-                               "rolling_reset_sec": 3600, "weekly_reset_sec": 7200,
-                               "monthly_reset_sec": 10800,
+        with patch("src.api.cost_plugins.opencode_api._http_get", return_value="<html/>"):
+            with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                       return_value={
+                           "rolling_pct": 6.0, "weekly_pct": 26.4, "monthly_pct": 13.04,
+                           "rolling_reset_sec": 3600, "weekly_reset_sec": 7200,
+                           "monthly_reset_sec": 10800,
                            }):
-                    snap = fetch_subscription("cookie")
+                    snap = fetch_subscription("cookie", workspace_id="wrk_1")
         assert snap is not None
         assert snap.rolling_pct == 6.0
         assert snap.weekly_pct == 26.4

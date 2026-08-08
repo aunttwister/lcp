@@ -93,7 +93,7 @@ Clients (agents, VS Code, scripts, curl)
 
 ### Provider health & credentials
 - **Encrypted provider keys** — paste an upstream API key (DeepSeek, OpenCode, etc.) directly in the Providers → Configuration tab; it is encrypted with Fernet using the `LCP_SECRET_KEY` master key and stored in SQLite, never in the git-tracked `gateway.yaml`
-- Precedence when resolving a provider key: `api_key_env` env var → encrypted credential (UI) → config fallback
+- No env vars needed — keys come exclusively from the encrypted credential store (UI-managed)
 - **Circuit breaker health** — Providers → Health tab shows live status per provider/profile with failure counts, last error reason, and cooldown timers
 - **Reset cooldown** — force a provider back to healthy with one click instead of waiting out the cooldown
 - Dashboard shows provider health mini-badges (healthy / degraded / dead counts)
@@ -121,8 +121,8 @@ cd lcp
 # Configure providers — add your API keys
 cp config/.env.example config/.env
 # Edit config/.env: set LCP_SECRET_KEY (used to encrypt provider keys)
-# Provider keys can be pasted directly in the dashboard (Providers → Configuration)
-# OR set as env vars if you prefer: DEEPSEEK_API_KEY=sk-..., OPENCODE_API_KEY=...
+# Provider keys are managed via the dashboard (Providers → Configuration tab)
+# Only LCP_SECRET_KEY needs to be set (used to encrypt stored keys).
 
 # Run
 docker compose up -d
@@ -194,7 +194,8 @@ profiles:
 
 providers:
   deepseek:
-    api_key_env: DEEPSEEK_API_KEY
+    # API key is entered via the dashboard (Providers → Configuration tab),
+    # encrypted with LCP_SECRET_KEY and stored in SQLite — no env vars here.
     cache:
       strategy: prefix
       savings: cost
