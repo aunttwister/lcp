@@ -379,10 +379,27 @@ class TestProviderTest:
         assert _status(h) == 200
         assert _json_body(h)["ok"] is False
 
-    def test_missing_api_base_or_key(self, temp_db):
+    def test_missing_api_base(self, temp_db):
         h = self._body_handler(temp_db, {"api_base": "", "api_key": ""})
         h.do_POST()
         assert _status(h) == 400
+
+    def test_works_without_api_key(self, temp_db):
+        """llama.cpp (local) needs no API key — test connection must proceed without one."""
+        body = {"api_base": "http://localhost:8080/v1", "api_key": "", "provider": "llamacpp", "model": "m"}
+        h = self._body_handler(temp_db, body)
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"model": "m"}'
+        mock_resp.__enter__.return_value = mock_resp
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is True
+        req = mock_open.call_args[0][0]
+        hdrs = {k.lower(): v for k, v in req.headers.items()}
+        assert "authorization" not in hdrs
 
     def test_resolves_key_from_credential_store(self, temp_db):
         """Provider test resolves key from credential store when not in body."""

@@ -657,8 +657,9 @@ class ProviderEndpoints:
                 api_key = store.get(provider) or ""
                 if api_key:
                     key_source = "credential_store"
-        if not api_base or not api_key:
-            self._send_json({"error": "missing 'api_base' or 'api_key'"}, 400)
+        # API key is optional — providers like llama.cpp (local) need none.
+        if not api_base:
+            self._send_json({"error": "missing 'api_base'"}, 400)
             return
 
         url = f"{api_base}/chat/completions"
@@ -678,10 +679,10 @@ class ProviderEndpoints:
         )
 
         start_ts = time.monotonic()
-        req = urllib.request.Request(
-            url, data=test_body,
-            headers=_browser_headers(api_base, {"Authorization": f"Bearer {api_key}"}),
-        )
+        headers = _browser_headers(api_base)
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        req = urllib.request.Request(url, data=test_body, headers=headers)
         try:
             ctx = ssl.create_default_context()
             with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
