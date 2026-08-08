@@ -442,6 +442,23 @@ class TestProviderTest:
         assert "1010" in result["error"]
         assert "cf_ray" not in result
 
+    def test_cloudflare_block_minimal_body(self, temp_db):
+        """Minimal 'error code: 1010' body (observed from api.commandcode.ai) detected."""
+        import urllib.error
+        body = {"api_base": "https://api.commandcode.ai/v1", "api_key": "sk-test", "model": "deepseek-v4-pro", "provider": "commandcode"}
+        h = self._body_handler(temp_db, body)
+        err = urllib.error.HTTPError("url", 403, "Forbidden", {}, None)
+        err.read = MagicMock(return_value=b'error code: 1010\n')
+        with patch("urllib.request.urlopen", side_effect=err):
+            h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is False
+        assert result["status"] == 403
+        assert "Cloudflare" in result["error"]
+        assert "1010" in result["error"]
+        assert "TLS" in result["error"]
+
     def test_non_cloudflare_http_error(self, temp_db):
         """Non-Cloudflare HTTP errors still return raw error body."""
         import urllib.error

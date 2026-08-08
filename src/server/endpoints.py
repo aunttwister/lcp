@@ -677,11 +677,17 @@ class ProviderEndpoints:
                 except Exception:
                     err_body = ""
 
-            # Detect Cloudflare-specific signatures
+            # Detect Cloudflare-specific signatures. Real-world bodies vary:
+            #   - "error code: 1010\n"           (minimal — what commandcode returns)
+            #   - full HTML challenge page with "Ray ID: ..." and "cloudflare"
+            #   - JSON-ish or plain "error 1010"
             body_lower = err_body.lower()
             is_cloudflare = (
                 "cloudflare" in body_lower
                 or "error 1010" in body_lower
+                or "error code: 1010" in body_lower
+                or "error code 1010" in body_lower
+                or "error code=1010" in body_lower
                 or "ray id:" in body_lower
             )
             ray_id = ""
