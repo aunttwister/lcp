@@ -29,6 +29,11 @@ class CircuitBreaker:
     def __init__(self, config):
         self._config = config
         self._health: dict = {}
+        self._engine = None  # optional DB engine for failover event persistence
+
+    def attach_engine(self, engine) -> None:
+        """Attach a SQLAlchemy engine so failover events can be persisted."""
+        self._engine = engine
 
     def _key(self, provider: str, base_url: str, profile: str) -> tuple:
         return (provider, base_url, profile)
@@ -44,6 +49,7 @@ class CircuitBreaker:
                 "last_success": None,
                 "status": "healthy",
                 "tripped_until": None,
+                "manual_override": None,  # None | 'degraded' | 'dead'
             }
         return self._health[key]
 
@@ -94,6 +100,7 @@ class CircuitBreaker:
         h["last_success"] = datetime.now(timezone.utc).isoformat()
         h["tripped_until"] = None
         h["last_failure_reason"] = None
+        h["manual_override"] = None
         if old_status != "healthy":
             logger.info(
                 "circuit_breaker_recovered",
@@ -164,12 +171,79 @@ class CircuitBreaker:
         h["last_failure"] = None
         h["last_failure_reason"] = None
         h["tripped_until"] = None
+        h["manual_override"] = None
         logger.info(
             "circuit_breaker_reset",
             provider=provider,
             base_url=base_url,
             profile=profile,
         )
+
+    def force_status(self, provider: str, base_url: str, profile: str,
+                     action: str) -> str:
+        """Manually force a provider into a circuit-breaker state.
+
+        ``action`` is one of:
+          - 'degrade' — force degraded with the configured degraded cooldown
+          - 'kill'    — force dead indefinitely (manual resume required)
+          - 'resume'  — force back to healthy, clear failures + cooldown
+
+        Returns the resulting status string.
+        """
+        h = self.get_health(provider, base_url, profile)
+        cb_cfg = self._config.circuit_breaker
+        if action == "degrade":
+            h["status"] = "degraded"
+            h["tripped_until"] = time.time() + cb_cfg["degraded_cooldown_seconds"]
+            h["manual_override"] = "degraded"
+            logger.info("circuit_breaker_manual_degrade",
+                        provider=provider, base_url=base_url, profile=profile,
+                        cooldown_seconds=cb_cfg["degraded_cooldown_seconds"])
+        elif action == "kill":
+            h["status"] = "dead"
+            h["tripped_until"] = None  # indefinite — no auto-promotion
+            h["manual_override"] = "dead"
+            logger.info("circuit_breaker_manual_kill",
+                        provider=provider, base_url=base_url, profile=profile)
+        elif action == "resume":
+            h["status"] = "healthy"
+            h["consecutive_failures"] = 0
+            h["last_failure"] = None
+            h["last_failure_reason"] = None
+            h["tripped_until"] = None
+            h["manual_override"] = None
+            logger.info("circuit_breaker_manual_resume",
+                        provider=provider, base_url=base_url, profile=profile)
+        else:
+            raise ValueError(f"unknown circuit breaker action: {action}")
+        return h["status"]
+
+    def record_failover(self, profile: str, from_provider: str, to_provider: str,
+                        reason: str, error_message: str | None = None,
+                        request_id: int | None = None) -> None:
+        """Persist a failover event (chain fallback) to the database.
+
+        Best-effort: failures to persist are logged, never raised, so a DB
+        problem can't break request handling.
+        """
+        if self._engine is None:
+            return
+        try:
+            from .models import FailoverEvent, get_session
+            with get_session(self._engine) as session:
+                session.add(FailoverEvent(
+                    profile=profile,
+                    from_provider=from_provider,
+                    to_provider=to_provider,
+                    reason=reason,
+                    error_message=error_message,
+                    request_id=request_id,
+                ))
+                session.commit()
+        except Exception as exc:
+            logger.warning("failover_persist_failed",
+                           profile=profile, from_provider=from_provider,
+                           to_provider=to_provider, error=str(exc))
 
     @property
     def stats(self) -> dict:

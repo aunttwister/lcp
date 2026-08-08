@@ -576,6 +576,14 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
                               error_type=type(e).__name__,
                               error_reason=str(e))
             errors.append(f"{provider_name}: {e}")
+            # Log a failover event when a next provider exists in the chain
+            if i + 1 < chain_len:
+                next_provider = profile_cfg["chain"][i + 1]["provider"]
+                cb.record_failover(
+                    profile_name, provider_name, next_provider,
+                    reason=type(e).__name__,
+                    error_message=str(e),
+                )
             logger.warning(
                 "chain_fallback",
                 profile=profile_name,
@@ -593,6 +601,13 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
                               error_type="ConfigError",
                               error_reason=str(e))
             errors.append(f"{provider_name}: {e}")
+            if i + 1 < chain_len:
+                next_provider = profile_cfg["chain"][i + 1]["provider"]
+                cb.record_failover(
+                    profile_name, provider_name, next_provider,
+                    reason="ConfigError",
+                    error_message=str(e),
+                )
             logger.error(
                 "chain_config_error",
                 profile=profile_name,

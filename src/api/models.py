@@ -121,6 +121,22 @@ class Alert(Base):
     resolved_at = Column(String, nullable=True)
 
 
+# ── Provider Health / Failover Tracking ────────────────────────────────────
+
+class FailoverEvent(Base):
+    """Records a chain fallback: provider A failed → provider B took over."""
+    __tablename__ = "failover_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+    profile = Column(String, nullable=False)
+    from_provider = Column(String, nullable=False)
+    to_provider = Column(String, nullable=False)
+    reason = Column(String, nullable=False)  # error_type from the failing provider
+    error_message = Column(Text, nullable=True)
+    request_id = Column(Integer, ForeignKey("requests.id"), nullable=True)
+
+
 # ── Engine + session factory ───────────────────────────────────────────────
 
 def get_engine(db_path: str):

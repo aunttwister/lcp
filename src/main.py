@@ -62,6 +62,11 @@ def main():
     t0 = _startup_step("alert_manager_init", t0)
     logger.info("alert_manager_initialized")
 
+    # Attach engine to circuit breaker so failover events persist to DB
+    get_circuit_breaker().attach_engine(engine)
+    t0 = _startup_step("circuit_breaker_engine", t0)
+    logger.info("circuit_breaker_engine_attached")
+
     data_dir = os.path.dirname(db_path) if os.path.dirname(db_path) else "data"
 
     port = int(os.environ.get("LISTEN_PORT", str(cfg.get("port", 8734))))

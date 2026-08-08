@@ -298,6 +298,106 @@ class TestReset:
         cb.reset("p", "https://x", "l2")
         assert cb.status_of("p", "https://x", "l2") == "healthy"
 
+
+class TestForceStatus:
+    """Manual circuit-breaker overrides: degrade / kill / resume."""
+
+    def test_degrade_forces_degraded_with_cooldown(self, cb):
+        status = cb.force_status("p", "https://x", "l2", "degrade")
+        assert status == "degraded"
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["manual_override"] == "degraded"
+        assert h["tripped_until"] is not None
+
+    def test_degrade_makes_provider_unavailable_until_cooldown(self, cb):
+        cb.force_status("p", "https://x", "l2", "degrade")
+        assert cb.is_available("p", "https://x", "l2") is False
+        # Past cooldown → half-open promotes back to healthy
+        real_now = time.time()
+        with patch("time.time", return_value=real_now + 10):
+            assert cb.is_available("p", "https://x", "l2") is True
+
+    def test_kill_forces_dead_indefinitely(self, cb):
+        status = cb.force_status("p", "https://x", "l2", "kill")
+        assert status == "dead"
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["manual_override"] == "dead"
+        # Killed providers stay unavailable even after a long wait
+        real_now = time.time()
+        with patch("time.time", return_value=real_now + 100000):
+            assert cb.is_available("p", "https://x", "l2") is False
+
+    def test_resume_after_kill_recovers(self, cb):
+        cb.force_status("p", "https://x", "l2", "kill")
+        assert cb.status_of("p", "https://x", "l2") == "dead"
+        status = cb.force_status("p", "https://x", "l2", "resume")
+        assert status == "healthy"
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["manual_override"] is None
+        assert h["consecutive_failures"] == 0
+        assert cb.is_available("p", "https://x", "l2") is True
+
+    def test_resume_clears_manual_override(self, cb):
+        cb.force_status("p", "https://x", "l2", "degrade")
+        cb.force_status("p", "https://x", "l2", "resume")
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["manual_override"] is None
+        assert h["status"] == "healthy"
+
+    def test_invalid_action_raises(self, cb):
+        with pytest.raises(ValueError, match="unknown circuit breaker action"):
+            cb.force_status("p", "https://x", "l2", "nonsense")
+
+    def test_record_success_clears_manual_override(self, cb):
+        cb.force_status("p", "https://x", "l2", "degrade")
+        cb.record_success("p", "https://x", "l2")
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["manual_override"] is None
+        assert h["status"] == "healthy"
+
+    def test_reset_clears_manual_override(self, cb):
+        cb.force_status("p", "https://x", "l2", "kill")
+        cb.reset("p", "https://x", "l2")
+        h = cb.get_health("p", "https://x", "l2")
+        assert h["manual_override"] is None
+
+
+class TestRecordFailover:
+    """Persisting failover events to the database."""
+
+    def test_no_engine_is_noop(self, cb):
+        # No engine attached — should not raise
+        cb.record_failover("l2", "opencode", "deepseek", "ProviderTimeoutError")
+        assert cb._engine is None
+
+    def test_persists_failover_event(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        cb.record_failover("l2", "opencode", "deepseek", "ProviderTimeoutError",
+                           error_message="HTTP 504 Gateway Timeout")
+        from src.api.models import FailoverEvent, get_session
+        with get_session(engine) as session:
+            rows = session.query(FailoverEvent).all()
+        assert len(rows) == 1
+        assert rows[0].profile == "l2"
+        assert rows[0].from_provider == "opencode"
+        assert rows[0].to_provider == "deepseek"
+        assert rows[0].reason == "ProviderTimeoutError"
+        assert rows[0].error_message == "HTTP 504 Gateway Timeout"
+
+    def test_db_failure_is_logged_not_raised(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        with patch("src.api.models.get_session", side_effect=RuntimeError("db down")):
+            cb.record_failover("l2", "opencode", "deepseek", "ProviderInternalError")
+        # No exception raised — nothing to assert beyond it not blowing up
+        assert True
+
+    def test_attach_engine_stores_reference(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        assert cb._engine is engine
+
     def test_reset_degraded_provider(self, cb):
         for _ in range(3):
             cb.record_failure("p", "https://x", "l2")

@@ -236,6 +236,14 @@ class LCPHandler(
             self._serve_providers_list()
         elif self.path == "/api/providers/presets":
             self._serve_provider_presets()
+        elif self.path == "/api/providers/health" or self.path.startswith("/api/providers/health?"):
+            self._serve_providers_health_api()
+        elif self.path == "/api/providers/failovers" or self.path.startswith("/api/providers/failovers?"):
+            self._serve_providers_failovers_api()
+        elif self.path.split("?")[0].startswith("/api/providers/") and self.path.split("?")[0].endswith("/failures"):
+            # GET /api/providers/{name}/failures?window=...
+            provider_name = self.path.split("?")[0].split("/")[3]
+            self._serve_provider_failures_api(provider_name)
         elif self.path == "/api/profiles":
             self._serve_profiles_list()
         elif self.path.startswith("/api/profiles/") and self.path.endswith("/budget"):
@@ -328,6 +336,11 @@ class LCPHandler(
             return
         elif self.path == "/api/circuit-breaker/reset":
             self._serve_circuit_breaker_reset()
+            return
+        elif self.path.startswith("/api/providers/") and self.path.endswith("/toggle"):
+            # POST /api/providers/{name}/toggle
+            provider_name = self.path.split("/")[3]
+            self._serve_provider_toggle(provider_name)
             return
         elif self.path.startswith("/api/cost-plugins/cookie/") and len(self.path.split("/")) == 5:
             # POST /api/cost-plugins/cookie/{provider}

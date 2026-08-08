@@ -16,7 +16,7 @@ from ..api.key_manager import get_key_manager
 from ..api.credential_store import get_credential_store
 from ..api.alert_manager import get_alert_manager
 from ..api.cost_plugins import get_registry
-from ..api.models import get_session, Request as RequestModel, Budget, ApiKey
+from ..api.models import get_session, Request as RequestModel, Budget, ApiKey, FailoverEvent
 from ..api.prompt_cache import get_prompt_cache
 from ..api.token_verifier import get_token_verifier
 from ..ui.dashboard import render_dashboard
@@ -101,6 +101,224 @@ class HealthEndpoints:
         cb = get_circuit_breaker()
         cb.reset(provider, base_url, profile)
         self._send_json({"ok": True, "provider": provider, "profile": profile})
+
+    # ── Provider health / failover / failure endpoints ────────────────────
+
+    def _uptime_for(self, provider: str, profile: str, window_hours: int) -> float:
+        """Return uptime % for a provider+profile over a rolling window.
+
+        Computed from the persisted ``requests`` table: successes / total.
+        Returns 100.0 when there are no requests in the window.
+        """
+        from sqlalchemy import func, case
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+        try:
+            with get_session(self.engine) as session:
+                total = session.query(func.count(RequestModel.id)).filter(
+                    RequestModel.provider == provider,
+                    RequestModel.profile == profile,
+                    RequestModel.timestamp >= cutoff,
+                ).scalar() or 0
+                ok = session.query(func.count(RequestModel.id)).filter(
+                    RequestModel.provider == provider,
+                    RequestModel.profile == profile,
+                    RequestModel.timestamp >= cutoff,
+                    RequestModel.success == 1,
+                ).scalar() or 0
+        except Exception:
+            return 100.0
+        if total == 0:
+            return 100.0
+        return round(ok / total * 100, 2)
+
+    def _failure_breakdown(self, provider: str, profile: str,
+                           window_hours: int) -> dict:
+        """Return failure counts grouped by error_type over a rolling window."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+        from sqlalchemy import func
+        try:
+            with get_session(self.engine) as session:
+                rows = session.query(
+                    RequestModel.error_type,
+                    func.count(RequestModel.id),
+                ).filter(
+                    RequestModel.provider == provider,
+                    RequestModel.profile == profile,
+                    RequestModel.timestamp >= cutoff,
+                    RequestModel.success == 0,
+                ).group_by(RequestModel.error_type).all()
+        except Exception:
+            return {}
+        return {r[0] or "unknown": int(r[1]) for r in rows}
+
+    def _serve_providers_health_api(self):
+        """GET /api/providers/health — all provider health with uptime + failures."""
+        cb = get_circuit_breaker()
+        summary = {"total": 0, "healthy": 0, "degraded": 0, "dead": 0}
+        providers_out: dict[str, dict] = {}
+
+        for key, h in cb.get_all_health().items():
+            provider, url, profile = key
+            status = h["status"]
+            summary["total"] += 1
+            if status == "healthy":
+                summary["healthy"] += 1
+            elif status == "degraded":
+                summary["degraded"] += 1
+            elif status == "dead":
+                summary["dead"] += 1
+            tripped_until = None
+            if h.get("tripped_until"):
+                tripped_until = datetime.fromtimestamp(
+                    h["tripped_until"], tz=timezone.utc
+                ).isoformat()
+            providers_out[f"{provider}/{profile}"] = {
+                "provider": provider,
+                "profile": profile,
+                "base_url": url,
+                "status": status,
+                "manual_override": h.get("manual_override"),
+                "failures": h["consecutive_failures"],
+                "last_success": h["last_success"],
+                "last_failure": h["last_failure"],
+                "last_failure_reason": h.get("last_failure_reason"),
+                "tripped_until": tripped_until,
+                "uptime_24h": self._uptime_for(provider, profile, 24),
+                "uptime_7d": self._uptime_for(provider, profile, 24 * 7),
+                "uptime_30d": self._uptime_for(provider, profile, 24 * 30),
+                "failures_24h": self._failure_breakdown(provider, profile, 24),
+            }
+
+        self._send_json({"summary": summary, "providers": providers_out})
+
+    def _serve_provider_failures_api(self, name: str):
+        """GET /api/providers/{name}/failures?window=24h|7d|30d — breakdown by error_type."""
+        qs = parse_qs(urlparse(self.path).query)
+        window = qs.get("window", ["24h"])[0]
+        window_hours = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}.get(window, 24)
+        profile = qs.get("profile", [None])[0]
+
+        from sqlalchemy import func
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+        try:
+            with get_session(self.engine) as session:
+                q = session.query(
+                    RequestModel.error_type,
+                    func.count(RequestModel.id),
+                ).filter(
+                    RequestModel.provider == name,
+                    RequestModel.timestamp >= cutoff,
+                    RequestModel.success == 0,
+                )
+                if profile:
+                    q = q.filter(RequestModel.profile == profile)
+                rows = q.group_by(RequestModel.error_type).all()
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+            return
+
+        breakdown = {r[0] or "unknown": int(r[1]) for r in rows}
+        total = sum(breakdown.values())
+        # Normalized buckets for the chart (matches spec: timeout/5xx/rate_limit/auth).
+        # Accept both exception-class names ("ProviderTimeoutError") and short
+        # legacy names ("timeout") so seeded/older data also groups correctly.
+        def _bucket(et: str) -> str:
+            e = (et or "").lower()
+            if "timeout" in e:
+                return "timeout"
+            if "rate" in e or "429" in e:
+                return "rate_limit"
+            if "auth" in e or "401" in e or "403" in e:
+                return "auth"
+            if "bad" in e or "400" in e or "invalid" in e:
+                return "bad_request"
+            if "internal" in e or "5" in e or "server" in e:
+                return "internal_error"
+            return "other"
+
+        buckets = {"timeout": 0, "internal_error": 0, "rate_limit": 0,
+                   "auth": 0, "bad_request": 0, "other": 0}
+        for et, n in breakdown.items():
+            buckets[_bucket(et)] += n
+        self._send_json({
+            "provider": name,
+            "window": window,
+            "breakdown": breakdown,
+            "buckets": buckets,
+            "total": total,
+        })
+
+    def _serve_providers_failovers_api(self):
+        """GET /api/providers/failovers?profile=&from=&to=&limit= — failover event log."""
+        qs = parse_qs(urlparse(self.path).query)
+        profile = qs.get("profile", [None])[0]
+        from_provider = qs.get("from", [None])[0]
+        to_provider = qs.get("to", [None])[0]
+        try:
+            limit = int(qs.get("limit", ["20"])[0])
+        except ValueError:
+            limit = 20
+        limit = max(1, min(limit, 200))
+
+        try:
+            with get_session(self.engine) as session:
+                q = session.query(FailoverEvent)
+                if profile:
+                    q = q.filter(FailoverEvent.profile == profile)
+                if from_provider:
+                    q = q.filter(FailoverEvent.from_provider == from_provider)
+                if to_provider:
+                    q = q.filter(FailoverEvent.to_provider == to_provider)
+                rows = q.order_by(FailoverEvent.id.desc()).limit(limit).all()
+                failovers = [
+                    {
+                        "id": r.id,
+                        "timestamp": r.timestamp,
+                        "profile": r.profile,
+                        "from_provider": r.from_provider,
+                        "to_provider": r.to_provider,
+                        "reason": r.reason,
+                        "error_message": r.error_message,
+                    }
+                    for r in rows
+                ]
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+            return
+        self._send_json({"failovers": failovers})
+
+    def _serve_provider_toggle(self, name: str):
+        """POST /api/providers/{name}/toggle — body {profile, action: degrade|resume|kill}."""
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        profile = body.get("profile")
+        action = body.get("action")
+        if not profile or not action:
+            self._send_json({"error": "missing 'profile' or 'action' field"}, 400)
+            return
+        if action not in ("degrade", "resume", "kill"):
+            self._send_json({"error": "action must be 'degrade', 'resume', or 'kill'"}, 400)
+            return
+
+        # Resolve the provider's base_url for this profile
+        base_url = None
+        pcfg = self.config.profiles.get(profile, {})
+        for step in pcfg.get("chain", []):
+            if step.get("provider") == name:
+                base_url = step.get("base_url") or \
+                    self.config.providers.get(name, {}).get("api_base", "")
+                break
+
+        cb = get_circuit_breaker()
+        if base_url:
+            status = cb.force_status(name, base_url, profile, action)
+            self._send_json({"ok": True, "provider": name, "profile": profile,
+                             "action": action, "status": status})
+        else:
+            self._send_json({"error": f"provider '{name}' not found in profile '{profile}'"}, 404)
 
     def _serve_models(self, profile: str | None = None):
         # Collect all providers per model: {model_id: [provider_names]}
