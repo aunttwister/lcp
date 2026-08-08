@@ -401,6 +401,26 @@ class TestProviderTest:
         req = mock_open.call_args[0][0]
         assert req.headers["Authorization"] == "Bearer cred-key"
 
+    def test_sends_browser_headers(self, temp_db):
+        """Provider test sends browser-like headers to avoid Cloudflare 1010."""
+        body = {"api_base": "https://api.commandcode.ai/v1", "api_key": "sk-test", "model": "m", "provider": "commandcode"}
+        h = self._body_handler(temp_db, body)
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"model": "m"}'
+        mock_resp.__enter__.return_value = mock_resp
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            h.do_POST()
+        req = mock_open.call_args[0][0]
+        # urllib normalises header casing (User-Agent -> User-agent); compare case-insensitively
+        hdrs = {k.lower(): v for k, v in req.headers.items()}
+        ua = hdrs.get("user-agent", "")
+        assert "Chrome" in ua
+        assert "Python-urllib" not in ua
+        assert hdrs.get("origin") == "https://api.commandcode.ai"
+        assert hdrs.get("referer") == "https://api.commandcode.ai/"
+        assert hdrs.get("authorization") == "Bearer sk-test"
+
     def test_cloudflare_block_1010(self, temp_db):
         """Cloudflare 1010 error body is detected and surfaced with a clear message."""
         import urllib.error

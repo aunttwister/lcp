@@ -49,6 +49,35 @@ def _savings_for_model(config, model: str, hit_tokens: int) -> float:
     return 0.0
 
 
+# ── Shared outbound request helpers ─────────────────────────────────────────
+def _browser_headers(api_base: str, extra: dict | None = None) -> dict:
+    """Build request headers that look like a real browser session.
+
+    Cloudflare flags Python's default ``Python-urllib/x.y`` User-Agent as a bot
+    and answers with HTTP 403 / "error code: 1010" (verified against
+    api.commandcode.ai). Sending a Chrome User-Agent plus Origin/Referer derived
+    from the target host avoids the block — same urllib transport, no TLS change.
+    """
+    from urllib.parse import urlparse
+    parsed = urlparse(api_base)
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else ""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/143.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+    }
+    if origin:
+        headers["Origin"] = origin
+        headers["Referer"] = origin + "/"
+    if extra:
+        headers.update(extra)
+    return headers
+
+
 # ── Health / Monitoring Endpoints ────────────────────────────────────────────
 
 class HealthEndpoints:
@@ -649,10 +678,10 @@ class ProviderEndpoints:
         )
 
         start_ts = time.monotonic()
-        req = urllib.request.Request(url, data=test_body, headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        })
+        req = urllib.request.Request(
+            url, data=test_body,
+            headers=_browser_headers(api_base, {"Authorization": f"Bearer {api_key}"}),
+        )
         try:
             ctx = ssl.create_default_context()
             with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
@@ -773,10 +802,7 @@ class ProviderEndpoints:
 
         # Generic HTTP fallback
         api_key = body.get("api_key", "")
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-        }
+        headers = _browser_headers(api_base)
         if provider and not api_key:
             store = get_credential_store(self.engine)
             if store is not None:
