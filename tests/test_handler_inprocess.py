@@ -645,6 +645,92 @@ class TestAuthFailures:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Missing pricing fallback (e.g. commandcode not in gateway.yaml pricing)
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestPricingFallback:
+    """A missing config pricing entry must NOT 500; it falls back to the
+    plugin registry (or default rates) so the request proceeds to the chain."""
+
+    def _handler_with_missing_pricing(self, temp_db):
+        body = {"messages": [{"role": "user", "content": "hi"}]}
+        body_bytes = json.dumps(body).encode()
+        h = _TestHandler("/coder/chat/completions", method="POST", engine=temp_db)
+        h.rfile.read = MagicMock(return_value=body_bytes)
+        h.headers = {"Content-Length": str(len(body_bytes))}
+
+        LCPHandler.config = MagicMock()
+        LCPHandler.config.profiles = {"coder": {"chain": [], "forbidden_tools": []}}
+        LCPHandler.config.get_profile = MagicMock(return_value={
+            "chain": [{"provider": "commandcode", "model": "deepseek-v4-pro",
+                       "base_url": "https://api.commandcode.ai/provider/v1"}],
+            "forbidden_tools": [],
+            "auth_required": False,
+        })
+        # Config has NO commandcode pricing -> get_pricing raises ConfigError,
+        # exactly the "No pricing found for commandcode/deepseek-v4-pro" case.
+        from src.api.exceptions import ConfigError
+        LCPHandler.config.get_pricing = MagicMock(side_effect=ConfigError(
+            "No pricing found for commandcode/deepseek-v4-pro"))
+        LCPHandler.config.providers = {
+            "commandcode": {"api_base": "https://api.commandcode.ai/provider/v1"}}
+        return h
+
+    def test_missing_pricing_does_not_500_and_reaches_chain(self, temp_db):
+        """When config pricing is missing, the request proceeds (no 500)."""
+        h = self._handler_with_missing_pricing(temp_db)
+        resp = {"choices": [{"message": {"content": "ok"}}], "usage": {
+            "prompt_tokens": 10, "completion_tokens": 5,
+            "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 10,
+        }}
+        # Patch BOTH registry import sites so the plugin consistently supplies
+        # pricing/cost (otherwise calculate_cost falls back to config.get_pricing
+        # and re-raises the ConfigError → 500 in full-suite runs).
+        reg = MagicMock()
+        reg.get_pricing.return_value = {"cache_hit": 0.01, "cache_miss": 0.5, "output": 1.0}
+        reg.calculate_cost.return_value = 0.001
+        with patch("src.api.cost_plugins.get_registry", return_value=reg), \
+             patch("src.api.request_pipeline.get_registry", return_value=reg):
+            with patch("src.server.handler.get_prompt_cache") as mock_cache:
+                mock_cache.return_value.get.return_value = None
+                with patch("src.server.handler.try_chain",
+                           return_value=(resp, 200, "commandcode", "deepseek-v4-pro")) as mock_chain:
+                    with patch("src.server.handler.record_cost"):
+                        with patch("src.server.handler.get_alert_manager"):
+                            with patch("src.server.handler.get_token_verifier") as mock_tv:
+                                mock_tv.return_value.verify.return_value = {"suspicious": False}
+                                h.do_POST()
+
+        assert h.send_response.call_args[0][0] == 200, "must not 500 on missing pricing"
+        mock_chain.assert_called_once()
+
+    def test_resolve_pricing_plugin_fallback(self):
+        """_resolve_pricing falls back to the plugin registry when config pricing is missing."""
+        from src.server.handler import _resolve_pricing
+        from src.api.exceptions import ConfigError
+        cfg = MagicMock()
+        cfg.get_pricing = MagicMock(side_effect=ConfigError("No pricing found"))
+        reg = MagicMock()
+        reg.get_pricing.return_value = {"cache_hit": 0.01, "cache_miss": 0.5, "output": 1.0}
+        with patch("src.api.cost_plugins.get_registry", return_value=reg):
+            result = _resolve_pricing(cfg, "commandcode", "deepseek-v4-pro")
+        assert result == {"cache_hit": 0.01, "cache_miss": 0.5, "output": 1.0}
+        reg.get_pricing.assert_called_once_with("commandcode", "deepseek-v4-pro")
+
+    def test_resolve_pricing_default_when_nothing_found(self):
+        """_resolve_pricing returns None (default rates) when neither config nor plugin has pricing."""
+        from src.server.handler import _resolve_pricing
+        from src.api.exceptions import ConfigError
+        cfg = MagicMock()
+        cfg.get_pricing = MagicMock(side_effect=ConfigError("No pricing found"))
+        reg = MagicMock()
+        reg.get_pricing.return_value = None
+        with patch("src.api.cost_plugins.get_registry", return_value=reg):
+            result = _resolve_pricing(cfg, "unknown", "unknown-model")
+        assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Non-streaming chat completion path
 # ═══════════════════════════════════════════════════════════════════════
 

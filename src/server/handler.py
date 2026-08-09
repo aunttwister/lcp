@@ -71,6 +71,36 @@ def _sanitize_message(msg: str) -> str:
     return msg
 
 
+def _resolve_pricing(config, provider: str, model: str) -> dict | None:
+    """Resolve pricing for cost estimation without hard-failing.
+
+    Order: config (gateway.yaml) → cost-plugin registry (e.g. Command Code's
+    built-in pricing) → None (``estimate_from_request`` then uses default rates).
+
+    Returns ``None`` instead of raising so a missing pricing entry (e.g.
+    commandcode not in gateway.yaml's ``pricing:`` section) does NOT turn a
+    request into a 500 before it ever reaches the provider chain.
+    """
+    try:
+        return config.get_pricing(provider, model)
+    except Exception:
+        pass
+    try:
+        from ..api.cost_plugins import get_registry
+        p = get_registry().get_pricing(provider, model)
+        if p is not None:
+            return p
+    except Exception:
+        pass
+    logger.warning(
+        "pricing_resolved_fallback",
+        provider=provider,
+        model=model,
+        reason="no config or plugin pricing — using default estimate rates",
+    )
+    return None
+
+
 class LCPHandler(
     HealthEndpoints,
     ProviderEndpoints,
@@ -449,12 +479,14 @@ class LCPHandler(
             # Tool stripping
             body, blocked_tools = strip_forbidden_tools(body, profile_cfg.get("forbidden_tools"))
 
-            # Pre-request cost estimation
-            pricing = self.config.get_pricing(
-                profile_cfg["chain"][0]["provider"], profile_cfg["chain"][0]["model"]
+            # Pre-request cost estimation (pricing falls back to the plugin
+            # registry or default rates instead of hard-failing → 500)
+            primary_step = profile_cfg["chain"][0]
+            pricing = _resolve_pricing(
+                self.config, primary_step["provider"], primary_step["model"]
             )
             estimation = estimate_from_request(
-                profile_cfg["chain"][0]["model"],
+                primary_step["model"],
                 body.get("messages", []),
                 body.get("tools"),
                 body.get("max_tokens", 1024),
