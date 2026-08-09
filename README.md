@@ -185,8 +185,11 @@ picker with their full context windows and capabilities.**
 
 ## Configuration
 
-Everything lives in `config/gateway.yaml`. Hot-reloaded — edit while the server is running, no
-restart needed.
+Your local configuration lives in `config/gateway.yaml` — it is **not** tracked by git, so it
+never causes merge conflicts on pull. The tracked template is `config/gateway.example.yaml`; on a
+fresh machine copy it over (`cp config/gateway.example.yaml config/gateway.yaml`). Set
+`LCP_CONFIG` to point at a different path if you prefer. The config is hot-reloaded — edit while
+the server is running, no restart needed.
 
 ```yaml
 profiles:

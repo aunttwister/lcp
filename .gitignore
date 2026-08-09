@@ -1,6 +1,11 @@
 # Environment secrets
 .env
 
+# Local gateway config — the tracked template is config/gateway.example.yaml.
+# Copy it to config/gateway.yaml on a fresh machine; it's local-only here so it
+# never conflicts on pull.
+config/gateway.yaml
+
 # Python
 __pycache__/
 *.pyc

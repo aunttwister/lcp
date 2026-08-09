@@ -1,3 +1,16 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LCP gateway configuration — EXAMPLE / TEMPLATE
+#
+# This file is the tracked template. Your REAL config is `config/gateway.yaml`,
+# which is NOT tracked by git (see .gitignore) so it never causes merge
+# conflicts. To start from scratch on a fresh machine:
+#
+#     cp config/gateway.example.yaml config/gateway.yaml
+#
+# The container mounts ./config/gateway.yaml as a volume, and the server
+# hot-reloads it (or set LCP_CONFIG to point anywhere else).
+# ─────────────────────────────────────────────────────────────────────────────
+
 server:
   port: 8734
   default_profile: l2
