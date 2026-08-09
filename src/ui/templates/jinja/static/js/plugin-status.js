@@ -46,6 +46,13 @@ function loadPluginStatus() {
           if (sub && sub.monthly_pct != null) {
             detailLine = '<span class="sb-provider-detail">monthly: ' + sub.monthly_pct.toFixed(0) + '%</span>';
           }
+        } else if (prov === 'commandcode') {
+          var ccsub = subscriptions[prov];
+          if (ccsub && ccsub.monthly_credits_remaining != null) {
+            detailLine = '<span class="sb-provider-detail">credits: $' + ccsub.monthly_credits_remaining.toFixed(2) + '</span>';
+          } else if (ccsub && ccsub.five_hour_pct != null) {
+            detailLine = '<span class="sb-provider-detail">5h: ' + ccsub.five_hour_pct.toFixed(0) + '%</span>';
+          }
         } else if (prov === 'deepseek' && sum && sum.balance) {
           detailLine = '<span class="sb-provider-detail">available balance: $' + sum.balance.available.toFixed(2) + '</span>';
         } else if (bal && bal.balance !== null && bal.balance !== undefined) {

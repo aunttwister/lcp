@@ -1101,6 +1101,43 @@ loadProvBadges();
     if (hpUsage) hpUsage.style.display = 'none';
   }
 
+  // Command Code: compact bar = max of rolling(5h)/weekly; popover shows both + monthly credits.
+  function renderCommandCodeHeaderUsage(ccSub) {
+    var hpUsage = document.getElementById('hpUsage');
+    var hpFill = document.getElementById('hpUsageFill');
+    var hpLabel = document.getElementById('hpUsageLabel');
+    var hpPop = document.getElementById('hpUsagePopover');
+    if (!hpUsage) return;
+    if (!ccSub || ccSub._error || ccSub.five_hour_pct == null) { hpUsage.style.display = 'none'; return; }
+    var windows = [
+      { name: 'Rolling (5h)', pct: ccSub.five_hour_pct, reset: ccSub.five_hour_reset_sec },
+      { name: 'Weekly',       pct: ccSub.weekly_pct,  reset: ccSub.weekly_reset_sec }
+    ];
+    var top = windows.reduce(function(a, b) { return (b.pct > a.pct) ? b : a; });
+    hpFill.style.width = Math.min(top.pct, 100) + '%';
+    hpFill.className = 'hp-usage-fill ' + barColor(top.pct);
+    hpLabel.textContent = top.name + ' ' + top.pct.toFixed(0) + '%';
+    var rows = '';
+    windows.forEach(function(w) {
+      if (w.pct == null) return;
+      rows += '<div class="hp-usage-popover-row">' +
+        '<div class="hp-usage-pop-row-head">' +
+          '<span class="hp-usage-pop-name">' + w.name + '</span>' +
+          '<span class="hp-usage-pop-pct">' + w.pct.toFixed(0) + '%</span>' +
+        '</div>' +
+        '<div class="hp-usage-pop-track"><div class="hp-usage-pop-fill ' + barColor(w.pct) + '" style="width:' + Math.min(w.pct, 100) + '%"></div></div>' +
+        '<div class="hp-usage-pop-sub"><span>reset ' + fmtCountdown(w.reset) + '</span><span>' + fmtResetAt(w.reset) + '</span></div>' +
+      '</div>';
+    });
+    if (ccSub.monthly_credits_remaining != null) {
+      rows += '<div class="hp-usage-popover-row"><div class="hp-usage-pop-row-head">' +
+        '<span class="hp-usage-pop-name">Monthly credits</span>' +
+        '<span class="hp-usage-pop-pct">$' + ccSub.monthly_credits_remaining.toFixed(2) + '</span></div></div>';
+    }
+    hpPop.innerHTML = rows;
+    hpUsage.style.display = 'flex';
+  }
+
   function loadHeaderStatus() {
     Promise.all([
       fetch('/api/cost-plugins/usage').then(function(r){return r.json()}).catch(function(){return {}}),

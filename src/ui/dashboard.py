@@ -472,6 +472,8 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         "    hdrLabel += ' \\u00b7 ' + cur + ' ' + sum.balance.available.toFixed(2) + ' available';\n"
         "  } else if (latestProvider === 'opencode') {\n"
         "    renderOpencodeHeaderUsage(subscriptions['opencode']);\n"
+        "  } else if (latestProvider === 'commandcode') {\n"
+        "    renderCommandCodeHeaderUsage(subscriptions['commandcode']);\n"
         "  } else if (latestProvider === 'llamacpp') {\n"
         "    hideOpencodeHeaderUsage();\n"
         "    var mt = (monthly[latestProvider] || {}).tokens || 0;\n"
