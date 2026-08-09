@@ -213,6 +213,11 @@ class TestPageRenderers:
         assert "LCP — Usage" in html
         # Usage page loads Chart.js
         assert "chart.js" in html.lower()
+        # Command Code credentials card (cookie input) renders in the Usage tab
+        assert "ccCookieInput" in html
+        assert "saveCcCookie" in html
+        assert "toggleCcCreds" in html
+        assert "commandcode" in html.lower()
 
     def test_all_four_pages_return_different_content(self, mock_config):
         from src.ui.pages import (

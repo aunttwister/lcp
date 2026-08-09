@@ -256,6 +256,59 @@ function clearOcWsId() {
     });
 }
 
+// ── Credentials (collapsible card in commandcode tab) ──
+var _ccCookieSet = false;
+
+function loadCcCredStatus() {
+    fetch('/api/cost-plugins/cookie/commandcode').then(function(r){return r.json()}).then(function(res){
+        _ccCookieSet = res.has_cookie;
+        updateCcCredSummary();
+    });
+}
+
+function updateCcCredSummary() {
+    var el = document.getElementById('ccCredSummary');
+    if (!el) return;
+    if (_ccCookieSet) {
+        el.innerHTML = '<span class="badge badge-success">STORED</span>';
+    } else {
+        el.innerHTML = '<span class="badge" style="background:hsl(var(--secondary));color:hsl(var(--muted-foreground))">not set</span>';
+    }
+}
+
+function toggleCcCreds() {
+    var body = document.getElementById('ccCredBody');
+    var card = body.parentElement;
+    var shown = body.style.display !== 'none';
+    body.style.display = shown ? 'none' : 'block';
+    if (shown) card.classList.remove('open'); else card.classList.add('open');
+}
+
+function saveCcCookie() {
+    var val = (document.getElementById('ccCookieInput').value || '').trim();
+    if (!val) { alert('Paste the session cookie first.'); return; }
+    fetch('/api/cost-plugins/cookie/commandcode', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({cookie: val})
+    }).then(function(r) { return r.json(); }).then(function(d) {
+        if (d.ok) { document.getElementById('ccCookieInput').value = ''; loadCcCredStatus(); loadPage(); }
+        else alert('Error: ' + (d.error || 'unknown'));
+    });
+}
+
+function clearCcCookie() {
+    if (!confirm('Clear the stored Command Code cookie?')) return;
+    fetch('/api/cost-plugins/cookie/commandcode', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({cookie: ''})
+    }).then(function(r) { return r.json(); }).then(function(d) {
+        if (d.ok) { loadCcCredStatus(); loadPage(); }
+        else alert('Error: ' + (d.error || 'unknown'));
+    });
+}
+
 function loadPage() {
     var providers = configuredProviders || [];
     return buildPage(providers).catch(function(e) { console.error(e); });
@@ -270,6 +323,29 @@ function buildPage(providers) {
         var statsList = results[0];
         var summaries = results[1];
         var subscriptions = results[2];
+
+        // Shared helpers for subscription usage bars (opencode + commandcode)
+        function barColor(pct) { return pct >= 90 ? 'red' : pct >= 70 ? 'orange' : pct >= 40 ? 'yellow' : 'green'; }
+        function fmtCountdown(sec) {
+            if (!sec || sec <= 0) return '';
+            var d = Math.floor(sec / 86400);
+            var h = Math.floor((sec % 86400) / 3600);
+            var m = Math.floor((sec % 3600) / 60);
+            var parts = [];
+            if (d > 0) parts.push(d + 'd');
+            if (h > 0) parts.push(h + 'h');
+            if (m > 0 || parts.length === 0) parts.push(m + 'm');
+            return parts.join(' ');
+        }
+        function fmtResetAt(sec) {
+            if (!sec || sec <= 0) return '';
+            var resetDate = new Date(Date.now() + sec * 1000);
+            var mon = monthNames[resetDate.getMonth()];
+            var day = resetDate.getDate();
+            var h = String(resetDate.getHours()).padStart(2, '0');
+            var min = String(resetDate.getMinutes()).padStart(2, '0');
+            return mon + ' ' + day + ' ' + h + ':' + min;
+        }
 
         var tabBar = document.getElementById('providerTabs');
         var panelsDiv = document.getElementById('providerPanels');
@@ -335,27 +411,6 @@ function buildPage(providers) {
                         : 'OpenCode subscription API error: ' + (sub.detail || 'unknown');
                     panelsHtml += '<div class="stat-card" style="border-left:3px solid #f97316;margin-bottom:1rem"><div class="label" style="color:#f97316">⚠ Subscription Status</div><div class="value" style="font-size:0.85rem;font-weight:400">' + errMsg + '</div></div>';
                 }
-                function barColor(pct) { return pct >= 90 ? 'red' : pct >= 70 ? 'orange' : pct >= 40 ? 'yellow' : 'green'; }
-                function fmtCountdown(sec) {
-                    if (!sec || sec <= 0) return '';
-                    var d = Math.floor(sec / 86400);
-                    var h = Math.floor((sec % 86400) / 3600);
-                    var m = Math.floor((sec % 3600) / 60);
-                    var parts = [];
-                    if (d > 0) parts.push(d + 'd');
-                    if (h > 0) parts.push(h + 'h');
-                    if (m > 0 || parts.length === 0) parts.push(m + 'm');
-                    return parts.join(' ');
-                }
-                function fmtResetAt(sec) {
-                    if (!sec || sec <= 0) return '';
-                    var resetDate = new Date(Date.now() + sec * 1000);
-                    var mon = monthNames[resetDate.getMonth()];
-                    var day = resetDate.getDate();
-                    var h = String(resetDate.getHours()).padStart(2, '0');
-                    var min = String(resetDate.getMinutes()).padStart(2, '0');
-                    return mon + ' ' + day + ' ' + h + ':' + min;
-                }
 
                 var barsHtml = '';
                 if (sub.rolling_pct != null) {
@@ -369,6 +424,50 @@ function buildPage(providers) {
                 }
                 if (barsHtml) {
                     panelsHtml += '<div class="usage-bars">' + barsHtml + '</div>';
+                }
+            } else if (prov === 'commandcode') {
+                var ccsub = subscriptions['commandcode'] || {};
+                // ── Collapsible credentials card (cookie only) ──
+                panelsHtml += '<div class="stat-card ov-collapse-card" style="margin-bottom:1rem">' +
+                    '<div class="label ov-collapse-trigger" onclick="toggleCcCreds()" style="display:flex;justify-content:space-between;align-items:center">Credentials' +
+                    '<span style="display:flex;align-items:center;gap:0.5rem;font-weight:400">' +
+                    '<span id="ccCredSummary" style="font-size:0.65rem">…</span>' +
+                    '<span class="ov-collapse-chevron" id="ccCredChevron">▾</span>' +
+                    '</span></div>' +
+                    '<div class="ov-collapse-body" id="ccCredBody" style="display:none;margin-top:0.75rem;border-top:1px solid hsl(var(--card-border));padding-top:0.75rem">' +
+                    '<div class="oc-cred-row"><label>Cookie</label>' +
+                    '<input type="password" id="ccCookieInput" placeholder="session cookie from a logged-in commandcode.ai session" autocomplete="off" style="flex:1;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">' +
+                    '<button class="btn-sm btn-primary" onclick="saveCcCookie()">Save</button>' +
+                    '<button class="btn-sm" onclick="clearCcCookie()">Clear</button>' +
+                    '</div>' +
+                    '<div style="font-size:0.625rem;color:hsl(var(--muted-foreground));margin-top:0.5rem">Stored encrypted. The cookie enables credits + usage tracking from api.commandcode.ai.</div>' +
+                    '</div>' +
+                    '</div>';
+                if (ccsub._error) {
+                    var ccErrMsg = ccsub._error === 'auth_failed'
+                        ? 'Command Code credits unavailable — cookie missing or invalid. Paste the session cookie above to enable usage tracking.'
+                        : 'Command Code credits API error: ' + (ccsub.detail || 'unknown');
+                    panelsHtml += '<div class="stat-card" style="border-left:3px solid #f97316;margin-bottom:1rem"><div class="label" style="color:#f97316">⚠ Subscription Status</div><div class="value" style="font-size:0.85rem;font-weight:400">' + ccErrMsg + '</div></div>';
+                } else if (ccsub.monthly_credits_remaining != null) {
+                    var ccPlanCard = '';
+                    if (ccsub.plan_id) {
+                        ccPlanCard = '<div class="stat-card"><div class="label">Plan</div><div class="value" style="font-size:1.1rem">' + ccsub.plan_id + '</div><div class="sub">' + (ccsub.plan_status || '') + '</div></div>';
+                    }
+                    panelsHtml += '<div class="stat-cards">' +
+                        '<div class="stat-card"><div class="label">Monthly Credits</div><div class="value">$' + ccsub.monthly_credits_remaining.toFixed(2) + '</div><div class="sub">remaining this month</div></div>' +
+                        '<div class="stat-card"><div class="label">Purchased</div><div class="value">$' + ccsub.purchased_credits.toFixed(2) + '</div><div class="sub">top-up / pay-as-you-go</div></div>' +
+                        ccPlanCard +
+                        '</div>';
+                    var ccBars = '';
+                    if (ccsub.five_hour_pct != null) {
+                        ccBars += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Rolling (5h)</span><span class="bar-pct">' + ccsub.five_hour_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(ccsub.five_hour_pct) + '" style="width:' + ccsub.five_hour_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(ccsub.five_hour_reset_sec) + '</span><span>' + fmtResetAt(ccsub.five_hour_reset_sec) + '</span></div></div>';
+                    }
+                    if (ccsub.weekly_pct != null) {
+                        ccBars += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Weekly</span><span class="bar-pct">' + ccsub.weekly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(ccsub.weekly_pct) + '" style="width:' + ccsub.weekly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(ccsub.weekly_reset_sec) + '</span><span>' + fmtResetAt(ccsub.weekly_reset_sec) + '</span></div></div>';
+                    }
+                    if (ccBars) {
+                        panelsHtml += '<div class="usage-bars">' + ccBars + '</div>';
+                    }
                 }
             } else {
                 panelsHtml += '<div class="stat-cards">' +
@@ -408,6 +507,7 @@ function buildPage(providers) {
             renderBreakdownTable('table-profile-' + prov, stats.by_profile, 'Profile');
         });
         if (typeof loadOcCredStatus === 'function') loadOcCredStatus();
+        if (typeof loadCcCredStatus === 'function') loadCcCredStatus();
     });
 }
 
