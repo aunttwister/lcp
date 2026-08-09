@@ -151,7 +151,7 @@ function discoverModels(){
     refreshTestModelOptions();
   })}
 
-// Populate the "Test with model" dropdown from selected + discovered models.
+// Populate the "Test with model" dropdown from the SELECTED models only.
 function refreshTestModelOptions(){
   var sel=document.getElementById('provTestModel');
   if(!sel) return;
@@ -159,7 +159,6 @@ function refreshTestModelOptions(){
   var seen={};var opts=[];
   function add(id){if(!id||seen[id])return;seen[id]=1;opts.push(id)}
   _selectedModels.forEach(add);
-  (_allDiscovered||[]).forEach(function(m){add(typeof m==='string'?m:m.id)});
   var html=opts.length? '':'<option value="">—</option>';
   opts.forEach(function(m){html+='<option value="'+m.replace(/"/g,'&quot;')+'">'+esc(m)+'</option>'});
   sel.innerHTML=html;
