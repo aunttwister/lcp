@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-906%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-926%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -273,13 +273,13 @@ Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 906 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), and the plugin system |
+| `pytest` | Test runner — 926 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**93% overall** — 3,948 of 4,232 statements covered (906 tests, 0 integration tests).
+**93% overall** — 4,071 of 4,401 statements covered (926 tests, 0 integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 
@@ -289,9 +289,9 @@ Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 | `src/api/circuit_breaker.py` | 100% |
 | `src/api/cost_estimator.py` | 100% |
 | `src/api/cost_plugins/opencode_api.py` | 100% |
-| `src/api/cost_plugins/base.py` | 100% |
+| `src/api/cost_plugins/base.py` | 99% |
 | `src/api/cost_plugins/commandcode_api.py` | 96% |
-| `src/api/cost_plugins/commandcode.py` | 87% |
+| `src/api/cost_plugins/commandcode.py` | 73% |
 | `src/api/reasoning_store.py` | 92% |
 | `src/api/credential_store.py` | 97% |
 | `src/api/crypto.py` | 93% |
