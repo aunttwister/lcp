@@ -512,6 +512,56 @@ class TestProviderTest:
         assert "internal explosion" in result["error"]
         assert "Cloudflare" not in result["error"]
 
+    def test_commandcode_model_not_in_plan(self, temp_db):
+        """Command Code MODEL_NOT_IN_PLAN error surfaces with a plan hint."""
+        import urllib.error
+        body = {"api_base": "https://api.commandcode.ai/provider/v1", "api_key": "sk-test", "model": "gpt-5.6-sol", "provider": "commandcode"}
+        h = self._body_handler(temp_db, body)
+        err = urllib.error.HTTPError("url", 403, "Forbidden", {}, None)
+        err.read = MagicMock(return_value=b'{"error":{"message":"MODEL_NOT_IN_PLAN: GPT-5.6 Sol available in Pro and above plans or extra on demand usage","type":"permission_error","code":"FORBIDDEN"}}')
+        with patch("urllib.request.urlopen", side_effect=err):
+            h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is False
+        assert result["status"] == 403
+        assert "current plan" in result["error"].lower()
+        assert result.get("code") in ("MODEL_NOT_IN_PLAN", "FORBIDDEN")
+        assert result.get("type") == "permission_error"
+
+    def test_commandcode_unsupported_model_anthropic(self, temp_db):
+        """Command Code unsupported_model (Anthropic shape) surfaces a clear hint."""
+        import urllib.error
+        body = {"api_base": "https://api.commandcode.ai/provider/v1", "api_key": "sk-test", "model": "claude-sonnet-4-6", "provider": "commandcode"}
+        h = self._body_handler(temp_db, body)
+        err = urllib.error.HTTPError("url", 400, "Bad Request", {}, None)
+        err.read = MagicMock(return_value=b'{"error":{"message":"Model \\"claude-sonnet-4-6\\" must be called via /provider/v1/messages (Anthropic Messages shape).","type":"invalid_request_error","param":"model","code":"unsupported_model"}}')
+        with patch("urllib.request.urlopen", side_effect=err):
+            h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is False
+        assert result["status"] == 400
+        assert "Anthropic" in result["error"]
+        assert "/provider/v1/messages" in result["error"]
+        assert result.get("code") == "unsupported_model"
+
+    def test_commandcode_auth_error(self, temp_db):
+        """Command Code 401 surfaces an authentication message."""
+        import urllib.error
+        body = {"api_base": "https://api.commandcode.ai/provider/v1", "api_key": "bad-key", "model": "deepseek-v4-flash", "provider": "commandcode"}
+        h = self._body_handler(temp_db, body)
+        err = urllib.error.HTTPError("url", 401, "Unauthorized", {}, None)
+        err.read = MagicMock(return_value=b'{"error":{"message":"Invalid API key","type":"authentication_error","code":"authentication_error"}}')
+        with patch("urllib.request.urlopen", side_effect=err):
+            h.do_POST()
+        assert _status(h) == 200
+        result = _json_body(h)
+        assert result["ok"] is False
+        assert result["status"] == 401
+        assert "API key" in result["error"]
+        assert result.get("code") == "authentication_error"
+
 
 # ── Plugin endpoints ──────────────────────────────────────────────────────
 
@@ -695,6 +745,34 @@ class TestProviderDiscoverDetails:
         result = _json_body(h)
         assert result["ok"] is True
         assert result["models"][0]["id"] == "m1"
+
+    @patch("urllib.request.urlopen")
+    def test_commandcode_plan_enrichment(self, mock_urlopen, temp_db):
+        """Discover for commandcode includes plan info from the billing API."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"data": [{"id": "deepseek-v4-flash"}]}).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        plugin = MagicMock()
+        plugin.discover_models.return_value = None  # fall through to generic HTTP
+        plugin.fetch_subscription.return_value = {
+            "plan_id": "goat", "plan_status": "active",
+        }
+        with patch("src.server.endpoints.get_registry") as mock_reg:
+            mock_reg.return_value.for_provider.return_value = plugin
+            body = json.dumps({"api_base": "https://api.commandcode.ai/provider/v1",
+                               "provider": "commandcode", "api_key": "sk"})
+            h = TestHandler(path="/api/providers/discover", method="POST",
+                            engine=temp_db, body=body)
+            h.do_POST()
+
+        result = _json_body(h)
+        assert result["ok"] is True
+        assert result["plan_id"] == "goat"
+        assert result["plan_status"] == "active"
+        assert result["models"][0]["id"] == "deepseek-v4-flash"
 
 
 # ── Chain reorder branches ─────────────────────────────────────────────────

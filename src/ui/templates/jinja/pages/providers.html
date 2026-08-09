@@ -83,6 +83,12 @@
     </div>
     <button class="btn-sm" onclick="hideAddProvForm()">Cancel</button>
   </div>
+  <div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.5rem">
+    <label style="font-size:0.6875rem;color:hsl(var(--muted-foreground));white-space:nowrap">Test with model:</label>
+    <select id="provTestModel" onchange="document.getElementById('testResult').style.display='none'" style="flex:1;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+      <option value="">—</option>
+    </select>
+  </div>
   <div id="testResult" class="test-result" style="display:none"></div>
   <div id="discoveryResult" style="display:none;margin-top:0.5rem"></div>
 </div>
@@ -100,6 +106,7 @@
 
 {% block scripts %}<script>{% raw %}
 var _selectedModels=[];
+var _discoverPlan=null; // {id, status, error} from /api/providers/discover for commandcode
 
 function switchProvTab(tab, btn){
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active')});
@@ -110,9 +117,9 @@ function switchProvTab(tab, btn){
 
 function loadPresets(){api('GET','/api/providers/presets').then(function(d){var s=document.getElementById('provPreset');Object.keys(d.presets||{}).forEach(function(k){s.innerHTML+='<option value="'+k+'">'+k+'</option>'})})}
 
-function loadPreset(){var k=document.getElementById('provPreset').value;if(!k)return;showAddProvForm();api('GET','/api/providers/presets').then(function(d){var p=(d.presets||{})[k];if(!p)return;document.getElementById('provName').value=k;document.getElementById('provUrl').value=p.api_base||'';_selectedModels=[];renderSelected();document.getElementById('provSaveBtn').disabled=false})}
+function loadPreset(){var k=document.getElementById('provPreset').value;if(!k)return;showAddProvForm();api('GET','/api/providers/presets').then(function(d){var p=(d.presets||{})[k];if(!p)return;document.getElementById('provName').value=k;document.getElementById('provUrl').value=p.api_base||'';_selectedModels=[];renderSelected();refreshTestModelOptions();document.getElementById('provSaveBtn').disabled=false})}
 
-function showAddProvForm(){document.getElementById('provForm').style.display='block';document.getElementById('provName').value='';document.getElementById('provUrl').value='';document.getElementById('provKeyVal').value='';_selectedModels=[];_allDiscovered=[];_discFilter='';_discoverPage=0;renderSelected();document.getElementById('testResult').style.display='none';document.getElementById('discoveryResult').style.display='none';document.getElementById('provSaveBtn').disabled=true}
+function showAddProvForm(){document.getElementById('provForm').style.display='block';document.getElementById('provName').value='';document.getElementById('provUrl').value='';document.getElementById('provKeyVal').value='';_selectedModels=[];_allDiscovered=[];_discFilter='';_discoverPage=0;_discoverPlan=null;renderSelected();refreshTestModelOptions();document.getElementById('testResult').style.display='none';document.getElementById('discoveryResult').style.display='none';document.getElementById('provSaveBtn').disabled=true}
 
 function hideAddProvForm(){document.getElementById('provForm').style.display='none'}
 
@@ -138,9 +145,27 @@ function discoverModels(){
   api('POST','/api/providers/discover',{api_base:base,provider:name}).then(function(d){
     if(!d.ok){el.innerHTML='<div style="font-size:0.75rem;color:hsl(var(--red-fg))">Failed: '+(d.error||'HTTP '+d.status)+'</div>';return}
     _allDiscovered = d.models || [];
+    _discoverPlan = {id:d.plan_id||null, status:d.plan_status||null, error:d.plan_error||null};
     _discoverPage = 0; _discFilter = '';
     renderDiscoverResults();
+    refreshTestModelOptions();
   })}
+
+// Populate the "Test with model" dropdown from selected + discovered models.
+function refreshTestModelOptions(){
+  var sel=document.getElementById('provTestModel');
+  if(!sel) return;
+  var prev=sel.value;
+  var seen={};var opts=[];
+  function add(id){if(!id||seen[id])return;seen[id]=1;opts.push(id)}
+  _selectedModels.forEach(add);
+  (_allDiscovered||[]).forEach(function(m){add(typeof m==='string'?m:m.id)});
+  var html=opts.length? '':'<option value="">—</option>';
+  opts.forEach(function(m){html+='<option value="'+m.replace(/"/g,'&quot;')+'">'+esc(m)+'</option>'});
+  sel.innerHTML=html;
+  if(prev&&seen[prev])sel.value=prev;
+  else if(opts.length)sel.value=opts[0];
+}
 
 function renderDiscoverResults(){
   var el = document.getElementById('discoveryResult');
@@ -153,7 +178,14 @@ function renderDiscoverResults(){
   var start = _discoverPage * _PAGE;
   var pageModels = filtered.slice(start, start + _PAGE);
 
-  el.innerHTML = '<input type="text" id="modelSearch" placeholder="Filter '+total+' of '+_allDiscovered.length+' models..." oninput="filterDiscovered()" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem;margin-bottom:0.5rem">';
+  var planHtml='';
+  if(_discoverPlan && _discoverPlan.id){
+    planHtml = '<div style="font-size:0.6875rem;color:hsl(var(--muted-foreground));margin-bottom:0.375rem">Your plan: <b style="color:hsl(var(--foreground))">'+esc(String(_discoverPlan.id))+'</b>'+( _discoverPlan.status?' &middot; '+esc(String(_discoverPlan.status)):'')+'<span style="margin-left:0.5rem;opacity:0.8">some models need a higher plan or the Anthropic /messages endpoint</span></div>';
+  } else if(_discoverPlan && _discoverPlan.error){
+    planHtml = '<div style="font-size:0.6875rem;color:hsl(var(--amber-fg));margin-bottom:0.375rem">Plan unknown &mdash; '+esc(String(_discoverPlan.error))+'</div>';
+  }
+
+  el.innerHTML = '<input type="text" id="modelSearch" placeholder="Filter '+total+' of '+_allDiscovered.length+' models..." oninput="filterDiscovered()" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem;margin-bottom:0.5rem">' + planHtml;
 
   if (total === 0) { el.innerHTML+='<div class="empty" style="padding:0.75rem;font-size:0.75rem">No models match filter</div>'; return; }
 
@@ -186,9 +218,9 @@ function filterDiscovered(){ _discFilter = (document.getElementById('modelSearch
 
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
-function testProvider(){var r=document.getElementById('testResult');r.style.display='block';r.textContent='Testing...';r.style.color='hsl(var(--amber-fg))';var name=document.getElementById('provName').value.trim();api('POST','/api/providers/test',{api_base:document.getElementById('provUrl').value,provider:name,model:(_selectedModels[0]||'default')}).then(function(d){if(d.ok){r.textContent='Connected — model: '+d.model;r.style.color='hsl(var(--green-fg))';document.getElementById('provSaveBtn').disabled=false}else{r.textContent='Failed: '+(d.error||'unknown');r.style.color='hsl(var(--red-fg))'}})}
+function testProvider(){var r=document.getElementById('testResult');r.style.display='block';r.textContent='Testing...';r.style.color='hsl(var(--amber-fg))';var name=document.getElementById('provName').value.trim();var msel=document.getElementById('provTestModel');var model=msel&&msel.value?msel.value:(_selectedModels[0]||'default');api('POST','/api/providers/test',{api_base:document.getElementById('provUrl').value,provider:name,model:model}).then(function(d){if(d.ok){r.textContent='Connected — model: '+d.model;r.style.color='hsl(var(--green-fg))';document.getElementById('provSaveBtn').disabled=false}else{var msg=d.error||('HTTP '+(d.status||'?')+' failed');var hint='';if(d.code==='MODEL_NOT_IN_PLAN'||d.code==='permission_error'){hint='<div style="margin-top:0.25rem;font-size:0.6875rem;color:hsl(var(--muted-foreground))">This model isn\u2019t covered by your current plan \u2014 pick another model, upgrade, or use extra on-demand usage.</div>'}else if(d.code==='unsupported_model'){hint='<div style="margin-top:0.25rem;font-size:0.6875rem;color:hsl(var(--muted-foreground))">This model uses the Anthropic /provider/v1/messages shape \u2014 it can\u2019t be reached via /chat/completions.</div>'}r.innerHTML=msg+hint;r.style.color='hsl(var(--red-fg))'}})}
 
-function editProvider(name){api('GET','/api/providers').then(function(d){var p=(d.providers||{})[name];if(!p)return;showAddProvForm();document.getElementById('provName').value=name;document.getElementById('provUrl').value=p.api_base||'';document.getElementById('provKeyVal').value='';_selectedModels=(p.models||[]).slice();_allDiscovered=[];_discFilter='';_discoverPage=0;renderSelected();document.getElementById('provSaveBtn').disabled=false})}
+function editProvider(name){api('GET','/api/providers').then(function(d){var p=(d.providers||{})[name];if(!p)return;showAddProvForm();document.getElementById('provName').value=name;document.getElementById('provUrl').value=p.api_base||'';document.getElementById('provKeyVal').value='';_selectedModels=(p.models||[]).slice();_allDiscovered=[];_discFilter='';_discoverPage=0;_discoverPlan=null;renderSelected();refreshTestModelOptions();document.getElementById('provSaveBtn').disabled=false})}
 
 function saveProvider(){var name=document.getElementById('provName').value.trim();if(!name){alert('Provider name is required');return}var payload={name:name,api_base:document.getElementById('provUrl').value.trim(),models:_selectedModels};var kv=document.getElementById('provKeyVal').value.trim();if(kv)payload.api_key=kv;api('POST','/api/providers',payload).then(function(d){if(d.ok){location.reload()}else{alert('Error: '+(d.error||'unknown'))}})}
 

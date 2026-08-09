@@ -78,6 +78,71 @@ def _browser_headers(api_base: str, extra: dict | None = None) -> dict:
     return headers
 
 
+def _friendly_provider_error(provider: str, status: int, body: str) -> tuple[str, str, str]:
+    """Map a provider's raw error response to a human-friendly message.
+
+    Command Code returns an OpenAI-style envelope::
+
+        {"error": {"message": ..., "type": ..., "code": ..., "param": ...}}
+
+    Common Command Code cases:
+      - ``unsupported_model`` + "Anthropic" -> must go via /provider/v1/messages
+      - ``MODEL_NOT_IN_PLAN`` / ``permission_error`` -> plan-gated model
+      - ``authentication_error`` (401)        -> bad key
+      - ``upgrade_required`` (403)            -> needs Provider plan or higher
+      - ``rate_limit_error`` (429)            -> rate limited
+
+    Returns ``(friendly_message, error_code, error_type)``. Falls back to the
+    raw body when the response isn't a recognized envelope.
+    """
+    code = ""
+    etype = ""
+    message = body[:300]
+    try:
+        data = json.loads(body)
+        err = data.get("error") or {}
+        if isinstance(err, dict):
+            message = err.get("message") or message
+            code = str(err.get("code") or "")
+            etype = str(err.get("type") or "")
+    except Exception:
+        pass
+
+    if not code and status == 401:
+        code, etype = "authentication_error", "authentication_error"
+    if not code and status == 403:
+        code, etype = "upgrade_required", "permission_error"
+
+    low = message.lower()
+    if (code == "unsupported_model"
+            or "must be called via /provider/v1/messages" in low
+            or ("anthropic" in low and "messages" in low)):
+        return (
+            f"{message} — this model uses the Anthropic /provider/v1/messages "
+            f"shape, not /chat/completions.",
+            code or "unsupported_model", etype or "invalid_request_error",
+        )
+    if code in ("MODEL_NOT_IN_PLAN", "permission_error") \
+            or "model_not_in_plan" in low or "not in plan" in low:
+        return (
+            f"Model not available on your current plan: {message}. "
+            f"Pick another model, upgrade your plan, or use extra on-demand usage.",
+            code or "MODEL_NOT_IN_PLAN", etype or "permission_error",
+        )
+    if code == "authentication_error" or "authentication_error" in low \
+            or "invalid api key" in low:
+        return ("Authentication failed — check your API key.",
+                "authentication_error", etype or "authentication_error")
+    if code == "upgrade_required" or "upgrade_required" in low \
+            or "provider plan" in low:
+        return ("API access requires the Command Code Provider plan or higher.",
+                "upgrade_required", etype or "permission_error")
+    if code == "rate_limit_error" or "rate_limit_error" in low or status == 429:
+        return ("Rate limited by the provider — retry in a moment.",
+                "rate_limit_error", etype or "rate_limit_error")
+    return (message, code, etype)
+
+
 # ── Health / Monitoring Endpoints ────────────────────────────────────────────
 
 class HealthEndpoints:
@@ -761,7 +826,12 @@ class ProviderEndpoints:
                 if ray_id:
                     response["cf_ray"] = ray_id
             else:
-                response["error"] = err_body[:300]
+                msg, code, etype = _friendly_provider_error(provider, e.code, err_body)
+                response["error"] = msg
+                if code:
+                    response["code"] = code
+                if etype:
+                    response["type"] = etype
             self._send_json(response)
         except Exception as e:
             duration_ms = round((time.monotonic() - start_ts) * 1000)
@@ -887,7 +957,25 @@ class ProviderEndpoints:
                 entry["pricing"] = m["pricing"]
             models.append(entry)
         has_meta = any(len(m) > 1 for m in models)
-        self._send_json({"ok": True, "models": models, "has_metadata": has_meta, "count": len(models)})
+
+        payload = {"ok": True, "models": models, "has_metadata": has_meta, "count": len(models)}
+        # Enrich Command Code discover with the current plan from the billing API
+        # (best-effort — Command Code does not expose per-plan model availability).
+        if provider == "commandcode":
+            try:
+                plugin = get_registry().for_provider("commandcode")
+                if plugin is not None:
+                    sub = plugin.fetch_subscription() or {}
+                    if sub.get("plan_id"):
+                        payload["plan_id"] = sub["plan_id"]
+                        payload["plan_status"] = sub.get("plan_status") or ""
+                    if sub.get("_error"):
+                        payload["plan_error"] = (
+                            sub.get("detail") or sub.get("_error")
+                        )
+            except Exception:
+                pass
+        self._send_json(payload)
 
     def _serve_chain_reorder(self, profile: str):
         try:
