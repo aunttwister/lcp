@@ -649,8 +649,21 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
             errors.append(f"{provider_name}: degraded (healthy alternative available)")
             continue
 
-        # Set model in body
+        # Set model in body — translate the gateway model name to the
+        # provider's API model ID when the provider's plugin overrides
+        # get_api_model() (e.g. Command Code's prefixed catalog IDs).
         body["model"] = model
+        plugin = get_registry().for_provider(provider_name)
+        if plugin is not None:
+            api_model = plugin.get_api_model(model)
+            if api_model != model:
+                logger.info(
+                    "model_translated_for_provider",
+                    provider=provider_name,
+                    logical_model=model,
+                    api_model=api_model,
+                )
+                body["model"] = api_model
 
         # Normalize for prefix caching — deterministic message/tool ordering
         # so repeated logical prompts hit the provider's KV-cache.

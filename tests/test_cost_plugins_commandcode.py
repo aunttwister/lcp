@@ -93,6 +93,55 @@ class TestCommandCodeIdentity:
     def test_get_pricing_unknown(self, plugin):
         assert plugin.get_pricing("nonexistent-model") is None
 
+    def test_get_api_model_prefixed(self, plugin):
+        """Bare names resolve to prefixed API IDs via the live catalog."""
+        import src.api.cost_plugins.commandcode as cc
+        fake_catalog = {
+            "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
+            "deepseek-v4-flash": "deepseek/deepseek-v4-flash",
+            "kimi-k3": "moonshotai/Kimi-K3",
+            "minimax-m3": "MiniMaxAI/MiniMax-M3",
+            "qwen3.8-max": "Qwen/Qwen3.8-Max",
+        }
+        with patch.object(cc, "_load_catalog", return_value=fake_catalog):
+            assert plugin.get_api_model("deepseek-v4-pro") == "deepseek/deepseek-v4-pro"
+            assert plugin.get_api_model("deepseek-v4-flash") == "deepseek/deepseek-v4-flash"
+            assert plugin.get_api_model("kimi-k3") == "moonshotai/Kimi-K3"
+            assert plugin.get_api_model("minimax-m3") == "MiniMaxAI/MiniMax-M3"
+            assert plugin.get_api_model("qwen3.8-max") == "Qwen/Qwen3.8-Max"
+
+    def test_get_api_model_unprefixed(self, plugin):
+        """Claude/GPT names are already correct (unprefixed) in the catalog."""
+        import src.api.cost_plugins.commandcode as cc
+        with patch.object(cc, "_load_catalog", return_value={}):
+            assert plugin.get_api_model("claude-sonnet-5") == "claude-sonnet-5"
+            assert plugin.get_api_model("gpt-5.6-luna") == "gpt-5.6-luna"
+
+    def test_get_api_model_unknown_passthrough(self, plugin):
+        """Unknown models pass through unchanged — the API returns a clear error."""
+        import src.api.cost_plugins.commandcode as cc
+        with patch.object(cc, "_load_catalog", return_value={}):
+            assert plugin.get_api_model("some-future-model") == "some-future-model"
+
+    def test_get_api_model_already_prefixed_passthrough(self, plugin):
+        """An already-prefixed API ID passes through unchanged."""
+        import src.api.cost_plugins.commandcode as cc
+        with patch.object(cc, "_load_catalog", return_value={}):
+            assert plugin.get_api_model("deepseek/deepseek-v4-pro") == "deepseek/deepseek-v4-pro"
+
+    def test_get_pricing_accepts_api_id(self, plugin):
+        """get_pricing accepts API catalog IDs too (maps back via last segment)."""
+        assert plugin.get_pricing("deepseek/deepseek-v4-pro") == _COMMANDCODE_PRICING["deepseek-v4-pro"]
+        assert plugin.get_pricing("moonshotai/Kimi-K3") == _COMMANDCODE_PRICING["kimi-k3"]
+        assert plugin.get_pricing("MiniMaxAI/MiniMax-M3") == _COMMANDCODE_PRICING["minimax-m3"]
+
+    def test_calculate_cost_accepts_api_id(self, plugin):
+        usage = {"prompt_tokens": 1000, "completion_tokens": 500,
+                 "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 1000}
+        cost = plugin.calculate_cost("deepseek/deepseek-v4-flash", usage)
+        expected = (1000 / 1_000_000) * 0.14 + (500 / 1_000_000) * 0.28
+        assert cost == pytest.approx(expected)
+
     def test_calculate_cost(self, plugin):
         usage = {"prompt_tokens": 1000, "completion_tokens": 500,
                  "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 1000}

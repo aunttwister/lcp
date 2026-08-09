@@ -43,6 +43,15 @@ class CostPlugin(ABC):
         """
         return None
 
+    def get_api_model(self, model: str) -> str:
+        """Translate a gateway model name to the provider's API model ID.
+
+        Most providers accept the same name the gateway uses, so the default is
+        a passthrough. Providers whose API uses a different model-ID scheme
+        (e.g. Command Code's prefixed catalog IDs) override this.
+        """
+        return model
+
     # ── Pricing ────────────────────────────────────────────────────────────
 
     def get_pricing(self, model: str) -> Optional[dict]:

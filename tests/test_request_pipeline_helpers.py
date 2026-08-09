@@ -736,3 +736,46 @@ class TestTryChainErrorPaths:
                 "l2", chain_config.profiles["l2"], self._body(), chain_config)
         assert provider == "second"
         assert status == 200
+
+    def test_commandcode_model_translated_before_forward(self, chain_config):
+        """Command Code's bare model names are translated to prefixed API IDs
+        (e.g. deepseek-v4-pro → deepseek/deepseek-v4-pro) before forwarding."""
+        from src.api.cost_plugins.base import get_registry
+        from src.api.cost_plugins.commandcode import CommandCodeCostPlugin
+        good_resp = MagicMock()
+        good_resp.status = 200
+        good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
+        captured = {}
+
+        def fake_forward(provider_cfg, body, config):
+            captured["model"] = body.get("model")
+            return json.loads(good_resp.read()), 200
+
+        # Single-step chain: commandcode/deepseek-v4-pro
+        cfg = MagicMock()
+        cfg.circuit_breaker = chain_config.circuit_breaker
+        cfg.profiles = {"l2": {"chain": [
+            {"provider": "commandcode", "base_url": "https://api.commandcode.ai/provider/v1",
+             "model": "deepseek-v4-pro"},
+        ], "forbidden_tools": []}}
+        cfg.providers = {"commandcode": {"base_url": "https://api.commandcode.ai/provider/v1"}}
+        cfg.model_limits = {}
+
+        # Other tests reset the registry singleton, so register commandcode here
+        # (idempotently) rather than relying on import-time auto-registration.
+        # Snapshot + restore so we don't pollute the shared singleton for
+        # tests that expect init_plugins() to seed all built-ins.
+        reg = get_registry()
+        snapshot = dict(reg._plugins)
+        if reg.for_provider("commandcode") is None:
+            reg.register(CommandCodeCostPlugin())
+        try:
+            # Patch the live catalog so translation doesn't hit the network.
+            import src.api.cost_plugins.commandcode as cc
+            fake_catalog = {"deepseek-v4-pro": "deepseek/deepseek-v4-pro"}
+            with patch.object(cc, "_load_catalog", return_value=fake_catalog):
+                with patch("src.api.request_pipeline.forward_request", side_effect=fake_forward):
+                    try_chain("l2", cfg.profiles["l2"], self._body(), cfg)
+        finally:
+            reg._plugins = snapshot
+        assert captured["model"] == "deepseek/deepseek-v4-pro"

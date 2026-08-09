@@ -110,6 +110,99 @@ _COMMANDCODE_PRICING: dict[str, dict[str, float]] = {
     },
 }
 
+# ── Model-ID resolution (live catalog, no hardcoding) ───────────────────────
+# Command Code's Provider API expects full catalog IDs (e.g.
+# ``deepseek/deepseek-v4-pro``, ``moonshotai/Kimi-K3``), NOT the bare names
+# used elsewhere in the gateway for pricing/aggregation. Instead of a
+# hardcoded 50+ entry table (Command Code adds models often), we derive the
+# mapping from the live public GET /provider/v1/models catalog, cached with a
+# short TTL. The generic rule "last path segment, lowercased" maps both ways:
+#
+#   deepseek/deepseek-v4-pro -> deepseek-v4-pro
+#   moonshotai/Kimi-K3       -> kimi-k3
+#   MiniMaxAI/MiniMax-M3     -> minimax-m3
+#   claude-sonnet-5          -> claude-sonnet-5
+#
+# Unknown models pass through unchanged (the API returns a clear error).
+_CATALOG_TTL_SECONDS = 600        # how long a successful catalog fetch is cached
+_CATALOG_FAIL_COOLDOWN = 60       # don't retry a failed fetch for this long
+_catalog_cache: dict = {
+    "by_last_seg": {},            # {lowercased last segment: catalog id}
+    "loaded_ts": 0.0,
+    "failed_ts": 0.0,
+}
+
+
+def _load_catalog() -> dict[str, str]:
+    """Fetch and cache the live Command Code model catalog.
+
+    Returns ``{lowercased last segment: full catalog id}`` (e.g.
+    ``{"deepseek-v4-flash": "deepseek/deepseek-v4-flash"}``). On failure or
+    timeout, returns the last cached index (possibly empty) and backs off —
+    request forwarding never blocks or breaks because of this.
+    """
+    import time as _time
+    now = _time.time()
+    if now - _catalog_cache["loaded_ts"] < _CATALOG_TTL_SECONDS:
+        return _catalog_cache["by_last_seg"]
+    if now - _catalog_cache["failed_ts"] < _CATALOG_FAIL_COOLDOWN:
+        return _catalog_cache["by_last_seg"]
+
+    try:
+        import json
+        import urllib.request
+        req = urllib.request.Request(
+            _COMMANDCODE_BASE.rstrip("/") + "/models",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/143.0.0.0 Safari/537.36"
+                ),
+            },
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(raw)
+        raw_models = data.get("data") if isinstance(data, dict) else data
+        idx: dict[str, str] = {}
+        for m in raw_models or []:
+            mid = m.get("id") if isinstance(m, dict) else m
+            if isinstance(mid, str) and mid:
+                key = mid.split("/")[-1].strip().lower()
+                idx.setdefault(key, mid)  # first id wins on last-segment collisions
+        _catalog_cache["by_last_seg"] = idx
+        _catalog_cache["loaded_ts"] = now
+        return idx
+    except Exception:
+        _catalog_cache["failed_ts"] = now
+        return _catalog_cache["by_last_seg"]
+
+
+def _logical_model(model: str) -> str:
+    """Derive the bare logical pricing name from any model ID.
+
+    - Bare name → lowercased as-is.
+    - Catalog ID (contains ``/``) → last path segment, lowercased.
+
+    e.g. ``moonshotai/Kimi-K3`` → ``kimi-k3`` (matches _COMMANDCODE_PRICING).
+    """
+    if not model:
+        return model
+    return model.split("/")[-1].strip().lower()
+
+
+def _api_model(model: str) -> str:
+    """Resolve a bare logical name to its live Command Code catalog ID.
+
+    Catalog IDs (containing ``/``) pass through unchanged. Bare names are
+    looked up in the cached live catalog; unknown ones pass through unchanged.
+    """
+    if not model or "/" in model:
+        return model
+    return _load_catalog().get(model.strip().lower(), model)
+
 
 class CommandCodeCostPlugin(CostPlugin):
     """Cost tracking for Command Code.
@@ -142,13 +235,23 @@ class CommandCodeCostPlugin(CostPlugin):
     def get_supported_models(self) -> list[str]:
         return list(_COMMANDCODE_PRICING.keys())
 
+    def get_api_model(self, model: str) -> str:
+        """Translate a bare logical model name to the Provider API catalog ID.
+
+        This is what gets sent upstream as ``body['model']``. Bare names like
+        ``deepseek-v4-pro`` become ``deepseek/deepseek-v4-pro``; already-prefixed
+        IDs pass through unchanged.
+        """
+        return _api_model(model)
+
     # ── Pricing ────────────────────────────────────────────────────────────
 
     def get_pricing(self, model: str) -> Optional[dict]:
-        return _COMMANDCODE_PRICING.get(model)
+        # Accept both bare logical names and API catalog IDs.
+        return _COMMANDCODE_PRICING.get(_logical_model(model))
 
     def calculate_cost(self, model: str, usage: dict) -> Optional[float]:
-        pricing = _COMMANDCODE_PRICING.get(model)
+        pricing = _COMMANDCODE_PRICING.get(_logical_model(model))
         if pricing is None:
             return None
 
