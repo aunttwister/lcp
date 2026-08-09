@@ -182,6 +182,12 @@ picker with their full context windows and capabilities.**
   LCP automatically recovers the real reasoning content it saw in earlier responses and
   re-attaches it. See [Thinking-Mode Reasoning Recovery](features/thinking-mode-recovery.md)
   for the architecture.
+- **Command Code "This operation was aborted"?** Command Code models (especially `deepseek-v4-pro`
+  via `commandcode`) can take over 60s on complex agentic tasks, exceeding the extension's default
+  HTTP timeout. Set **Request Timeout** to `120000` (2 minutes) and raise **Default Max Output
+  Tokens** to `32000` so the model has room for both reasoning and a full response:
+  - `github.copilot.llm-gateway.requestTimeout`: `120000`
+  - `github.copilot.llm-gateway.defaultMaxOutputTokens`: `32000`
 
 ## Configuration
 
