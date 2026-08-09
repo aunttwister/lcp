@@ -1,7 +1,8 @@
 """Cost tracking plugin for Command Code (commandcode.ai).
 
 Command Code is a coding-agent platform that provides access to numerous
-LLM providers through a single API endpoint (``https://api.commandcode.ai/v1``).
+LLM providers through a single API endpoint
+(``https://api.commandcode.ai/provider/v1``).
 
 Usage tracking has two sources:
   - ``fetch_subscription`` — Command Code's internal billing API
@@ -31,7 +32,10 @@ from .base import CostPlugin, get_registry
 logger = get_logger("lcp.cost.commandcode")
 
 # ── API endpoint ────────────────────────────────────────────────────────────
-_COMMANDCODE_BASE = "https://api.commandcode.ai/v1"
+# Command Code Provider API (Provider plan or higher):
+#   https://commandcode.ai/docs/provider
+# Chat Completions: POST /provider/v1/chat/completions (Bearer <CMD_API_KEY>)
+_COMMANDCODE_BASE = "https://api.commandcode.ai/provider/v1"
 
 # ── Pre-known model pricing (per 1M tokens, USD) ────────────────────────────
 # Sourced from commandcode.ai/docs/resources/pricing-limits (August 2026).

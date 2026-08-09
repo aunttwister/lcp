@@ -110,7 +110,7 @@ function switchProvTab(tab, btn){
 
 function loadPresets(){api('GET','/api/providers/presets').then(function(d){var s=document.getElementById('provPreset');Object.keys(d.presets||{}).forEach(function(k){s.innerHTML+='<option value="'+k+'">'+k+'</option>'})})}
 
-function loadPreset(){var k=document.getElementById('provPreset').value;if(!k)return;showAddProvForm();api('GET','/api/providers/presets').then(function(d){var p=(d.presets||{})[k];if(!p)return;document.getElementById('provName').value=k;document.getElementById('provUrl').value=p.api_base||'';_selectedModels=(p.models||[]).slice();renderSelected();document.getElementById('provSaveBtn').disabled=false})}
+function loadPreset(){var k=document.getElementById('provPreset').value;if(!k)return;showAddProvForm();api('GET','/api/providers/presets').then(function(d){var p=(d.presets||{})[k];if(!p)return;document.getElementById('provName').value=k;document.getElementById('provUrl').value=p.api_base||'';_selectedModels=[];renderSelected();document.getElementById('provSaveBtn').disabled=false})}
 
 function showAddProvForm(){document.getElementById('provForm').style.display='block';document.getElementById('provName').value='';document.getElementById('provUrl').value='';document.getElementById('provKeyVal').value='';_selectedModels=[];_allDiscovered=[];_discFilter='';_discoverPage=0;renderSelected();document.getElementById('testResult').style.display='none';document.getElementById('discoveryResult').style.display='none';document.getElementById('provSaveBtn').disabled=true}
 

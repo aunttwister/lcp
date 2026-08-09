@@ -90,7 +90,7 @@ providers:
       savings: cost
       hit_field: prompt_cache_hit_tokens
   commandcode:
-    api_base: https://api.commandcode.ai/v1
+    api_base: https://api.commandcode.ai/provider/v1
     models:
     - deepseek-v4-pro
     - deepseek-v4-flash

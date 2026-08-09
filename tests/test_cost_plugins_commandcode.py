@@ -82,7 +82,7 @@ class TestCommandCodeIdentity:
 
     def test_preset(self, plugin):
         preset = plugin.preset
-        assert preset["api_base"] == "https://api.commandcode.ai/v1"
+        assert preset["api_base"] == "https://api.commandcode.ai/provider/v1"
         assert "deepseek-v4-pro" in preset["models"]
 
     def test_get_pricing_known(self, plugin):
@@ -282,4 +282,4 @@ class TestRegistration:
         registry = self._fresh_registry_with_commandcode()
         presets = registry.presets
         assert "commandcode" in presets
-        assert presets["commandcode"]["api_base"] == "https://api.commandcode.ai/v1"
+        assert presets["commandcode"]["api_base"] == "https://api.commandcode.ai/provider/v1"
