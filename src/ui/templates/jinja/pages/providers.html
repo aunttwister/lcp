@@ -119,7 +119,7 @@ function loadPresets(){api('GET','/api/providers/presets').then(function(d){var 
 
 function loadPreset(){var k=document.getElementById('provPreset').value;if(!k)return;showAddProvForm();api('GET','/api/providers/presets').then(function(d){var p=(d.presets||{})[k];if(!p)return;document.getElementById('provName').value=k;document.getElementById('provUrl').value=p.api_base||'';_selectedModels=[];renderSelected();refreshTestModelOptions();document.getElementById('provSaveBtn').disabled=false})}
 
-function showAddProvForm(){document.getElementById('provForm').style.display='block';document.getElementById('provName').value='';document.getElementById('provUrl').value='';document.getElementById('provKeyVal').value='';_selectedModels=[];_allDiscovered=[];_discFilter='';_discoverPage=0;_discoverPlan=null;renderSelected();refreshTestModelOptions();document.getElementById('testResult').style.display='none';document.getElementById('discoveryResult').style.display='none';document.getElementById('provSaveBtn').disabled=true}
+function showAddProvForm(){document.getElementById('provForm').style.display='block';document.getElementById('provName').value='';document.getElementById('provUrl').value='';document.getElementById('provKeyVal').value='';_selectedModels=[];_allDiscovered=[];_discFilter='';_discoverPage=0;_discoverPlan=null;_focusSearch=false;renderSelected();refreshTestModelOptions();document.getElementById('testResult').style.display='none';document.getElementById('discoveryResult').style.display='none';document.getElementById('provSaveBtn').disabled=true}
 
 function hideAddProvForm(){document.getElementById('provForm').style.display='none'}
 
@@ -135,6 +135,7 @@ var _allDiscovered = [];
 var _discoverPage = 0;
 var _PAGE = 20;
 var _discFilter = '';
+var _focusSearch = false; // set when re-render was caused by typing in the filter
 
 function discoverModels(){
   var base=document.getElementById('provUrl').value.trim();
@@ -146,7 +147,7 @@ function discoverModels(){
     if(!d.ok){el.innerHTML='<div style="font-size:0.75rem;color:hsl(var(--red-fg))">Failed: '+(d.error||'HTTP '+d.status)+'</div>';return}
     _allDiscovered = d.models || [];
     _discoverPlan = {id:d.plan_id||null, status:d.plan_status||null, error:d.plan_error||null};
-    _discoverPage = 0; _discFilter = '';
+    _discoverPage = 0; _discFilter = ''; _focusSearch = false;
     renderDiscoverResults();
     refreshTestModelOptions();
   })}
@@ -208,12 +209,21 @@ function renderDiscoverResults(){
   inner += '</div>';
   el.innerHTML += inner;
   var fi = document.getElementById('modelSearch');
-  if (fi) fi.value = _discFilter;
+  if (fi) {
+    fi.value = _discFilter;
+    // Re-focus the search box when the re-render was caused by typing, so
+    // the user can keep typing without clicking back into the field.
+    if (_focusSearch) {
+      fi.focus();
+      try { fi.setSelectionRange(fi.value.length, fi.value.length); } catch (e) {}
+    }
+  }
+  _focusSearch = false;
 }
 
 function changePage(delta){ _discoverPage += delta; renderDiscoverResults() }
 function changePageSize(n){ _PAGE = parseInt(n); _discoverPage = 0; renderDiscoverResults() }
-function filterDiscovered(){ _discFilter = (document.getElementById('modelSearch')||{}).value||''; _discoverPage = 0; renderDiscoverResults() }
+function filterDiscovered(){ _discFilter = (document.getElementById('modelSearch')||{}).value||''; _discoverPage = 0; _focusSearch = true; renderDiscoverResults() }
 
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
