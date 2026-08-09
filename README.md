@@ -187,7 +187,7 @@ picker with their full context windows and capabilities.**
   HTTP timeout. Set **Request Timeout** to `120000` (2 minutes) and raise **Default Max Output
   Tokens** to `32000` so the model has room for both reasoning and a full response:
   - `github.copilot.llm-gateway.requestTimeout`: `120000`
-  - `github.copilot.llm-gateway.defaultMaxOutputTokens`: `32000`
+  - `github.copilot.llm-gateway.defaultMaxOutputTokens`: `32768`
 
 ## Configuration
 
