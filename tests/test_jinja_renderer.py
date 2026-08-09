@@ -218,6 +218,10 @@ class TestPageRenderers:
         assert "saveCcCookie" in html
         assert "toggleCcCreds" in html
         assert "commandcode" in html.lower()
+        # Cookie help note (full name=value) + bare-value validation in both cards
+        assert "name=value" in html
+        assert "bare token value" in html
+        assert "__Secure-commandcode_prod_.session_token" in html
 
     def test_all_four_pages_return_different_content(self, mock_config):
         from src.ui.pages import (
