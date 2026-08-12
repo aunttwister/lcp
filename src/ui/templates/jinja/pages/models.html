@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}Models — Capability Matrix — LCP{% endblock %}
+{% block page %}
+<h2>Model Capability Matrix</h2>
+<p class="subtitle">
+  Per-task scores from <a href="https://livebench.ai/" target="_blank" rel="noopener">LiveBench 2026-06-25</a>
+  and <a href="https://lmarena.ai/" target="_blank" rel="noopener">Chatbot Arena</a>.
+  Scores from LiveBench are objective (correct/incorrect); Arena scores are human preference Elo.
+</p>
+
+<!-- Controls -->
+<div class="models-toolbar">
+  <label>
+    Filter: <input type="text" id="capabilityFilter" placeholder="e.g. deepseek, code_generation" class="capability-filter">
+  </label>
+  <label>
+    Source:
+    <select id="capabilitySource">
+      <option value="all">All</option>
+      <option value="livebench">LiveBench (current)</option>
+      <option value="arena">Arena (legacy)</option>
+      <option value="gateway_yaml">Config override</option>
+      <option value="lcp_benchmark">LCP benchmark</option>
+    </select>
+  </label>
+  <label class="models-toggle-label">
+    <input type="checkbox" id="modelsShowTable"> Table view
+  </label>
+</div>
+
+<!-- Card view: per-task top models -->
+<div id="capabilityCards"></div>
+
+<!-- Table view (hidden by default) -->
+<div id="capabilityTable" style="display:none;">
+  <table class="capability-table">
+    <thead><tr><th>Model</th><th>Task</th><th>Score</th><th>Source</th><th>Benchmark Category</th></tr></thead>
+    <tbody id="capabilityTableBody"></tbody>
+  </table>
+</div>
+
+<div class="models-footer">
+  <button id="seedLivebenchBtn" class="btn btn-outline">Re-seed from LiveBench</button>
+  <span id="seedStatus" class="seed-status"></span>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const API = {
+  async matrix(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    const r = await fetch('/api/models/capability' + (qs ? '?' + qs : ''));
+    return r.json();
+  },
+  async seed(source) {
+    const r = await fetch('/api/models/capability/seed', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({source})
+    });
+    return r.json();
+  }
+};
+
+async function loadCapability() {
+  const source = document.getElementById('capabilitySource').value;
+  const data = await API.matrix({source: source === 'all' ? '' : source});
+  renderCards(data);
+  renderTable(data);
+}
+
+function renderCards(data) {
+  const container = document.getElementById('capabilityCards');
+  const tasks = data.tasks || {};
+  if (!Object.keys(tasks).length) {
+    container.innerHTML = '<p class="empty">No capability data found. <button onclick="seedLivebench()">Seed from LiveBench</button></p>';
+    return;
+  }
+
+  let html = '<div class="capability-grid">';
+  for (const [task, models] of Object.entries(tasks)) {
+    const top = Object.entries(models).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    html += `<div class="capability-card">
+      <h4>${task.replace(/_/g, ' ')}</h4>
+      <ul>`;
+    for (const [model, score] of top) {
+      const cls = score >= 0.8 ? 'high' : score >= 0.6 ? 'mid' : 'low';
+      html += `<li><span class="model-name">${model}</span>
+        <span class="cap-score ${cls}">${(score * 100).toFixed(1)}%</span></li>`;
+    }
+    html += '</ul></div>';
+  }
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+function renderTable(data) {
+  const tbody = document.getElementById('capabilityTableBody');
+  const tasks = data.tasks || {};
+  if (!Object.keys(tasks).length) { tbody.innerHTML = ''; return; }
+
+  const rows = [];
+  for (const [task, models] of Object.entries(tasks)) {
+    for (const [model, score] of Object.entries(models)) {
+      rows.push({task, model, score});
+    }
+  }
+
+  const filter = document.getElementById('capabilityFilter').value.toLowerCase();
+  const filtered = filter ? rows.filter(r =>
+    r.model.toLowerCase().includes(filter) || r.task.toLowerCase().includes(filter)
+  ) : rows;
+  filtered.sort((a, b) => b.score - a.score);
+
+  tbody.innerHTML = filtered.map(r => `<tr>
+    <td>${r.model}</td><td>${r.task}</td>
+    <td>${(r.score * 100).toFixed(1)}%</td>
+    <td>${data.sources?.[r.task]?.[r.model] || '—'}</td>
+    <td>${data.benchmark_categories?.[r.task]?.[r.model] || '—'}</td>
+  </tr>`).join('');
+}
+
+async function seedLivebench() {
+  const btn = document.getElementById('seedLivebenchBtn');
+  const status = document.getElementById('seedStatus');
+  btn.disabled = true;
+  status.textContent = 'Seeding...';
+  try {
+    const result = await API.seed('livebench');
+    status.textContent = `Done: ${result.seeded || result.count || '?'} rows`;
+    await loadCapability();
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+  btn.disabled = false;
+}
+
+document.getElementById('capabilitySource').addEventListener('change', loadCapability);
+document.getElementById('capabilityFilter').addEventListener('input', () => {
+  renderTable(window._capData || {});
+});
+document.getElementById('modelsShowTable').addEventListener('change', function() {
+  document.getElementById('capabilityCards').style.display = this.checked ? 'none' : 'block';
+  document.getElementById('capabilityTable').style.display = this.checked ? 'block' : 'none';
+});
+document.getElementById('seedLivebenchBtn').addEventListener('click', seedLivebench);
+
+// Initial load
+loadCapability();
+</script>
+{% endblock %}

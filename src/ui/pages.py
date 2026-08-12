@@ -55,3 +55,9 @@ def render_alerts_page(config, engine=None) -> str:
     """Render the Alerts page (Jinja2)."""
     from .render import render_page
     return render_page("pages/alerts.html", config, engine, active_page="alerts")
+
+
+def render_models_page(config, engine=None) -> str:
+    """Render the Models capability matrix page (Jinja2)."""
+    from .render import render_page
+    return render_page("pages/models.html", config, engine, active_page="models")

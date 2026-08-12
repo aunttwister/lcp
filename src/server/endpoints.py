@@ -1800,6 +1800,66 @@ class DashboardEndpoints:
         self.end_headers()
         self.wfile.write(html.encode("utf-8"))
 
+    def _serve_models_page(self):
+        """Server-rendered Models capability matrix page."""
+        from ..ui.pages import render_models_page
+        html = render_models_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_capability_api(self):
+        """GET /api/models/capability — return the capability matrix as JSON."""
+        from urllib.parse import parse_qs, urlparse
+        from ..api.models import ModelCapability, get_session as _gs
+
+        qs = parse_qs(urlparse(self.path).query)
+        source_filter = qs.get("source", [None])[0]
+
+        try:
+            with _gs(self.engine) as session:
+                q = session.query(ModelCapability)
+                if source_filter:
+                    q = q.filter(ModelCapability.source == source_filter)
+                rows = q.all()
+
+            tasks: dict[str, dict[str, float]] = {}
+            sources: dict[str, dict[str, str]] = {}
+            benchmarks: dict[str, dict[str, str]] = {}
+
+            for r in rows:
+                tasks.setdefault(r.task_type, {})[r.model] = r.score
+                sources.setdefault(r.task_type, {})[r.model] = r.source
+                if r.benchmark_category:
+                    benchmarks.setdefault(r.task_type, {})[r.model] = r.benchmark_category
+
+            self._send_json({
+                "tasks": tasks,
+                "sources": sources,
+                "benchmark_categories": benchmarks,
+                "count": len(rows),
+            })
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_capability_seed_api(self):
+        """POST /api/models/capability/seed — re-seed from LiveBench or Arena."""
+        try:
+            body = self._read_body()
+        except Exception:
+            body = {}
+        source = body.get("source", "livebench")
+        try:
+            from ..api.seed_capabilities import seed_livebench, seed_arena
+            if source == "arena":
+                count = seed_arena("data/costs.db")
+            else:
+                count = seed_livebench("data/costs.db")
+            self._send_json({"ok": True, "seeded": count, "source": source})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _serve_daily_costs_api(self):
         """API endpoint: daily costs as JSON."""
         from sqlalchemy import func

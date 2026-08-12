@@ -105,49 +105,113 @@ TASK_TYPES = [
 ]
 ```
 
-### Capability Matrix (Step 2)
+### Capability Matrix (Step 2) — Data-Driven, Not Hand-Curated
 
-**Model-independent by design.** Models are discovered from config (`providers.*.models`)
-and the matrix maps `task_type → {model_name: fitness_score}`.
+The capability matrix maps `task_type → {model_name: score}`. Instead of
+guessing which model is "best for coding," we derive this from **real benchmark
+data**. Two data sources are available:
+
+#### Source 1: LiveBench (✅ has DeepSeek, per-category scores)
+
+**Website:** <https://livebench.ai> | **Data:** <https://huggingface.co/livebench>
+
+Contamination-free benchmark with 23 tasks across 7 categories, refreshed every
+6 months. **DeepSeek V4 Pro, V4 Flash, and V4 Flash 0731 are all on the
+leaderboard.** The data is available on HuggingFace (`livebench/model_answer`,
+`livebench/model_judgment`).
+
+LiveBench categories map naturally to LCP task types:
+
+| LiveBench Category | LCP Task Type | DeepSeek V4 Pro | V4 Flash 0731 | V4 Flash |
+|---|---|---|---|---|
+| Coding | `code_generation` | 70.0 | 75.0 | 69.2 |
+| Agentic Coding | `agentic_multi_step` | 42.6 | 46.8 | 37.6 |
+| Reasoning | `reasoning_chain` | 82.7 | 86.6 | 70.6 |
+| Mathematics | `reasoning_chain` | 90.7 | 86.8 | 79.6 |
+| Data Analysis | `research_deep` | 74.5 | 79.3 | 68.0 |
+| Language | `casual_chat` | 78.1 | 79.2 | 70.1 |
+| Instruction Following | `planning` | 62.4 | 65.5 | 63.1 |
+
+**Cost per task** (USD, lower is better): V4 Flash $0.016, V4 Pro $0.050, V4 Flash 0731 $0.060.
+
+These are exactly the signals we need: per-task quality scores + per-task cost.
+The capability matrix becomes `normalize(LiveBench_score) + cost_bias`.
+
+#### Source 2: LMSYS Chatbot Arena (❌ no DeepSeek, but human preference data)
+
+The Arena dataset (`lmsys-arena-human-preference-55k`, 55k rows) contains
+real human side-by-side comparisons — but was frozen in 2024, before DeepSeek
+models existed. It's useful for understanding the **relative ranking of older
+models** (GPT-4, Claude, Llama, Mixtral) but can't tell us anything about
+DeepSeek V4.
+
+**PoC built** (`src/api/arena_capability.py`): computes per-task Elo from Arena
+data. For 10k rows:
+- `code_generation`: gpt-4-1106-preview (0.741) > claude-1 (0.612)
+- `debugging`: gpt-4-1106-preview (0.661) > claude-1 (0.564)
+- `research_deep`: gpt-4-0314 (0.722) > gpt-4-1106-preview (0.691)
+
+Useful for cross-validation but not sufficient alone.
+
+#### How LCP builds the matrix
+
+1. **Primary:** Download LiveBench model answers from HuggingFace
+2. **Normalize** each category score to 0-1 (divide by max in category)
+3. **Merge** with config-based overrides from `gateway.yaml`
+4. **Cache** the matrix locally (`data/capability_matrix.json`), refresh when
+   LiveBench releases a new version (every 6 months)
 
 ```yaml
 # config/gateway.yaml (new section)
 dynamic_routing:
   enabled: true
-  # Optional: override the default cost multiplier for flash-bias
+  capability_source: livebench  # or: config, arena
   cost_bias_strength: 0.15
 
-  capability_matrix:
-    agentic_multi_step:
-      deepseek-v4-pro: 1.0
-      deepseek-v4-flash: 0.4
+  # Override specific models if LiveBench doesn't have them
+  capability_overrides:
     code_generation:
-      deepseek-v4-pro: 1.0
-      deepseek-v4-flash: 0.7
-    debugging:
-      deepseek-v4-pro: 0.9
-      deepseek-v4-flash: 0.8
-    research_deep:
-      deepseek-v4-pro: 1.0
-      deepseek-v4-flash: 0.5
-    long_document:
-      deepseek-v4-pro: 0.9
-      deepseek-v4-flash: 0.3
-    reasoning_chain:
-      deepseek-v4-pro: 1.0
-      deepseek-v4-flash: 0.6
-    casual_chat:
-      deepseek-v4-pro: 0.5  # Overkill — flash is plenty
-      deepseek-v4-flash: 1.0
-    planning:
-      deepseek-v4-pro: 1.0
-      deepseek-v4-flash: 0.6
-
-  # Cost multipliers (from pricing config, but normalized for comparison)
-  # flash is ~5-10x cheaper than pro; this is already in gateway.yaml pricing
+      custom-model: 0.85
+```
+```
+Arena data (55k battles)  →  classify each prompt into task type
+                          →  compute Elo ratings per model per task
+                          →  normalize to 0-1 capability scores
+                          →  export JSON  →  load by router at runtime
 ```
 
-Scores are **0.0–1.0** where 1.0 = best-in-class fit. Unknown models default to
+**PoC results (from 10k Arena rows, min 5 battles per model):**
+
+| Task | #1 Model | Score | #2 | #3 |
+|------|----------|-------|----|----|
+| `code_generation` | gpt-4-1106-preview | 0.741 | claude-1: 0.612 | gpt-4-0613: 0.595 |
+| `debugging` | gpt-4-1106-preview | 0.661 | claude-1: 0.564 | claude-instant-1: 0.554 |
+| `research_deep` | gpt-4-0314 | 0.722 | gpt-4-1106-preview: 0.691 | gpt-4-0613: 0.644 |
+| `reasoning_chain` | claude-2.0 | 0.623 | gpt-4-1106-preview: 0.603 | gpt-4-0314: 0.589 |
+| `planning` | gpt-4-1106-preview | 0.710 | claude-instant-1: 0.628 | gpt-4-0125-preview: 0.605 |
+| `casual_chat` | gpt-4-1106-preview | 0.768 | gpt-4-0314: 0.752 | claude-1: 0.735 |
+
+**Cross-pair generalization** (from RouteLLM paper): Routers trained on GPT-4 vs
+Mixtral generalize well to other strong/weak pairs. So an Arena-derived matrix
+works even if your exact models aren't in the dataset — LCP interpolates by
+model tier (pro-level, flash-level, etc.).
+
+**Global Elo** (all tasks, min 20 battles): gpt-4-1106-preview (0.791) > claude-1
+(0.728) > gpt-4-0314 (0.703) — exactly what you'd expect from state-of-the-art.
+
+#### Approach B: Hand-curated (fallback / override)
+
+For models not well-represented in Arena (e.g., DeepSeek V4, which is newer than
+the dataset), you can hand-tune per-model scores in `gateway.yaml`. The router
+merges: Arena JSON is loaded first, then YAML overrides take priority.
+
+```yaml
+dynamic_routing:
+  capability_matrix:
+    code_generation:
+      deepseek-v4-pro: 0.95    # Hand-tuned override
+      deepseek-v4-flash: 0.65
+```
 config-based pricing (already in `gateway.yaml`). Unknown tasks default to `pro`
 (safe fallback — same as current behavior).
 

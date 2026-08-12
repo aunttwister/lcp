@@ -31,6 +31,7 @@ from .exceptions import (
 from .logging_config import get_logger
 from .models import get_session, Request as RequestModel
 from .prompt_cache import get_prompt_cache
+from .router import get_dynamic_router
 from .token_verifier import get_token_verifier
 
 logger = get_logger("lcp.pipeline")
@@ -600,6 +601,26 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
     cb = get_circuit_breaker()
     errors = []
     chain_len = len(profile_cfg["chain"])
+
+    # ── Dynamic router: override model in first chain step if smarter ──────
+    router = get_dynamic_router()
+    if router.enabled and chain_len > 0:
+        router_model = router.select_model(
+            messages=body.get("messages", []),
+            tools=body.get("tools"),
+            max_tokens=body.get("max_tokens", 1024),
+            available_models=[step["model"] for step in profile_cfg["chain"]],
+        )
+        if router_model:
+            # Override the model in the first chain step
+            profile_cfg["chain"][0]["model"] = router_model
+            logger.info(
+                "router_model_override",
+                profile=profile_name,
+                original=profile_cfg["chain"][0].get("model", "?"),
+                selected=router_model,
+            )
+
     for i, step in enumerate(profile_cfg["chain"]):
         provider_name = step["provider"]
         base_url = step.get("base_url") or config.providers.get(provider_name, {}).get("api_base", "")

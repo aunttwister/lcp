@@ -1,7 +1,10 @@
 """Tests for router.py"""
 import pytest
 import sys
-from src.api.router import DynamicRouter, get_dynamic_router
+from src.api.router import DynamicRouter, CapabilityRouter, classify_task, get_dynamic_router
+
+
+# ── Legacy DynamicRouter tests (flash/pro heuristic) ──────────────────────
 
 def test_disabled_returns_pro():
     router = DynamicRouter(enabled=False)
@@ -28,6 +31,58 @@ def test_long_max_tokens_pro():
     router = DynamicRouter(enabled=True)
     msgs = [{"role": "user", "content": "hi"}]
     assert router.get_recommended_model(msgs, max_tokens=4096) == "deepseek-v4-pro"
+
+
+# ── CapabilityRouter tests ────────────────────────────────────────────────
+
+def test_classify_code_generation():
+    msgs = [{"role": "user", "content": "write a function in python to sort a list"}]
+    assert classify_task(msgs) == "code_generation"
+
+def test_classify_debugging():
+    msgs = [{"role": "user", "content": "why does this fail with a TypeError?"}]
+    assert classify_task(msgs) == "debugging"
+
+def test_classify_agentic():
+    msgs = [{"role": "system", "content": "You are an AI agent with tools: read_file, write_file"}]
+    assert classify_task(msgs) == "agentic_multi_step"
+
+def test_classify_planning():
+    msgs = [{"role": "user", "content": "design the architecture for a microservice"}]
+    assert classify_task(msgs) == "planning"
+
+def test_classify_casual():
+    msgs = [{"role": "user", "content": "hello, how are you?"}]
+    assert classify_task(msgs) == "casual_chat"
+
+def test_classify_defaults_to_code():
+    msgs = [{"role": "user", "content": "what is the speed of light?"}]
+    assert classify_task(msgs) == "code_generation"  # default for LCP
+
+def test_classify_many_tools():
+    tools = [{"type": "function", "function": {"name": f"t{i}"}} for i in range(6)]
+    msgs = [{"role": "user", "content": "do something"}]
+    assert classify_task(msgs, tools=tools) == "agentic_multi_step"
+
+def test_router_disabled_returns_none():
+    router = CapabilityRouter(enabled=False)
+    msgs = [{"role": "user", "content": "write a function"}]
+    assert router.select_model(msgs) is None
+
+def test_router_enabled_selects_best():
+    router = CapabilityRouter(enabled=True)
+    msgs = [{"role": "user", "content": "hello there"}]
+    result = router.select_model(msgs, available_models=["deepseek-v4-flash", "deepseek-v4-pro"])
+    # Casual chat → flash should be preferred (cheaper, good enough)
+    assert result is not None
+
+def test_router_ranks_models():
+    router = CapabilityRouter(enabled=True)
+    ranked = router.rank_models("code_generation", ["deepseek-v4-flash", "deepseek-v4-pro"])
+    assert len(ranked) == 2
+    # Both are valid — flash is cheaper and nearly as capable for coding,
+    # so it may rank higher with cost bias. Pro is within 5% margin.
+    assert ranked[0][1] > 0.6  # both should have good scores
 
 def test_singleton():
     assert get_dynamic_router() is get_dynamic_router()

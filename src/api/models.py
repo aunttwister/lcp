@@ -137,6 +137,24 @@ class FailoverEvent(Base):
     request_id = Column(Integer, ForeignKey("requests.id"), nullable=True)
 
 
+class ModelCapability(Base):
+    """Per-task capability scores for model routing.
+
+    Populated from public benchmarks (LiveBench, Arena) and optionally
+    refreshed by running benchmarks through LCP's own provider routes.
+    """
+    __tablename__ = "model_capabilities"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    model = Column(String, nullable=False, index=True)
+    task_type = Column(String, nullable=False, index=True)
+    score = Column(Float, nullable=False)  # 0.0–1.0 normalized
+    source = Column(String, nullable=False, default="livebench")  # livebench, arena, gateway_yaml, lcp_benchmark
+    benchmark_category = Column(String, nullable=True)  # raw LiveBench category (coding, math, etc.)
+    raw_score = Column(Float, nullable=True)  # original score before normalization (e.g. 70.0 out of 100)
+    updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
 # ── Engine + session factory ───────────────────────────────────────────────
 
 def get_engine(db_path: str):

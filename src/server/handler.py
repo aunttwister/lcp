@@ -325,6 +325,10 @@ class LCPHandler(
             self._serve_logs_page()
         elif self.path == "/alerts":
             self._serve_alerts_page()
+        elif self.path == "/models":
+            self._serve_models_page()
+        elif self.path == "/api/models/capability" or self.path.startswith("/api/models/capability?"):
+            self._serve_capability_api()
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -368,6 +372,9 @@ class LCPHandler(
             return
         elif self.path == "/api/circuit-breaker/reset":
             self._serve_circuit_breaker_reset()
+            return
+        elif self.path == "/api/models/capability/seed":
+            self._serve_capability_seed_api()
             return
         elif self.path.startswith("/api/providers/") and self.path.endswith("/toggle"):
             # POST /api/providers/{name}/toggle
