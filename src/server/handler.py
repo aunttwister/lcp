@@ -241,6 +241,8 @@ class LCPHandler(
                 self._serve_dashboard()
         elif self.path == "/health":
             self._serve_health()
+        elif self.path == "/models":
+            self._serve_models_page()
         elif self.path in self._models_paths:
             self._serve_models()
         elif any(self.path.endswith("/" + p.lstrip("/")) for p in self._models_paths):
@@ -325,8 +327,6 @@ class LCPHandler(
             self._serve_logs_page()
         elif self.path == "/alerts":
             self._serve_alerts_page()
-        elif self.path == "/models":
-            self._serve_models_page()
         elif self.path == "/api/models/capability" or self.path.startswith("/api/models/capability?"):
             self._serve_capability_api()
         else:
