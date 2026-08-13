@@ -1,14 +1,18 @@
 """Seed the model_capabilities table from public benchmark data.
 
 Sources (in priority order):
-  1. LiveBench 2026-06-25 leaderboard (livebench.ai) — objective per-category scores
-  2. LMSYS Chatbot Arena 55k (HF) — human preference Elo for legacy models
-  3. gateway.yaml dynamic_routing.capability_overrides — admin hand-tuned
+  1. LiveBench HF dataset (livebench/model_judgment) — canonical automated source
+  2. LiveBench hand-typed leaderboard snapshot (LIVEBENCH_DATA) — covers newer
+     models the HF split hasn't caught up to yet
+  3. LMSYS Chatbot Arena 55k (HF) — human preference Elo for legacy models
+  4. model_registry — logical name ↔ benchmark key ↔ provider aliases
 
 Usage:
-    python -m src.api.seed_capabilities              # seed from LiveBench + Arena
-    python -m src.api.seed_capabilities --source livebench  # LiveBench only
-    python -m src.api.seed_capabilities --source arena      # Arena only
+    python -m src.api.seed_capabilities                     # seed everything
+    python -m src.api.seed_capabilities --source livebench    # hand-typed snapshot
+    python -m src.api.seed_capabilities --source livebench-hf # canonical HF data
+    python -m src.api.seed_capabilities --source arena        # Arena Elo only
+    python -m src.api.seed_capabilities --source registry     # model registry only
 """
 
 from __future__ import annotations
@@ -141,6 +145,102 @@ def seed_livebench(db_path: str) -> int:
     session.commit()
     session.close()
     print(f"Seeded {count} LiveBench capability rows for {len(LIVEBENCH_DATA)} models")
+    return count
+
+
+def aggregate_judgments(rows) -> dict[tuple[str, str], list[int]]:
+    """Aggregate LiveBench judgment rows into per-(model, category) correctness.
+
+    Each row: {model, question_id, category, score (0/1), tstamp}. Re-runs of a
+    question by the same model are deduped by keeping the latest ``tstamp``.
+
+    Returns ``{(model, category): [correct, total]}``.
+    """
+    latest: dict[tuple[str, str], tuple[float, str, float]] = {}
+    for row in rows:
+        model = (row.get("model") or "").strip().lower()
+        question_id = str(row.get("question_id") or "")
+        category = (row.get("category") or "").strip().lower()
+        score = row.get("score")
+        if not model or not question_id or not category or score is None:
+            continue
+        try:
+            tstamp = float(row.get("tstamp") or 0.0)
+            score_f = float(score)
+        except (TypeError, ValueError):
+            continue
+        key = (model, question_id)
+        if key not in latest or tstamp >= latest[key][0]:
+            latest[key] = (tstamp, category, score_f)
+
+    agg: dict[tuple[str, str], list[int]] = {}
+    for (_model, _qid), (_ts, category, score) in latest.items():
+        entry = agg.setdefault((_model, category), [0, 0])
+        entry[1] += 1
+        if score > 0:
+            entry[0] += 1
+    return agg
+
+
+def seed_livebench_hf(db_path: str) -> int:
+    """Seed model_capabilities from the canonical LiveBench HF dataset.
+
+    Streams ``livebench/model_judgment`` (split ``leaderboard``) — the same
+    structured data behind the livebench.ai leaderboard — and aggregates
+    per-question correctness into per-category accuracy, then upserts with
+    ``source="livebench"``.
+
+    This is the automated replacement for the hand-typed ``LIVEBENCH_DATA``
+    dict. It only upserts models it actually finds (the HF leaderboard split
+    lags the website, so hand-typed rows for newer models are preserved),
+    and it never deletes rows.
+    """
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        print("Skipping LiveBench HF: datasets not installed. Run: pip install datasets")
+        return 0
+
+    from src.api.models import ModelCapability
+
+    print("Loading LiveBench HF model_judgment (leaderboard split)...")
+    ds = load_dataset("livebench/model_judgment", split="leaderboard", streaming=True)
+    agg = aggregate_judgments(ds)
+
+    session = _get_session(db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    count = 0
+    for (model, lb_cat), (correct, total) in agg.items():
+        task_type = LB_TO_LCP.get(lb_cat)
+        if task_type is None:
+            continue
+        raw = round(correct / total * 100.0, 2) if total else 0.0
+        normalized = round(raw / 100.0, 4)
+
+        existing = session.query(ModelCapability).filter_by(
+            model=model, task_type=task_type, source="livebench"
+        ).first()
+        if existing is not None:
+            existing.score = normalized
+            existing.raw_score = raw
+            existing.benchmark_category = lb_cat
+            existing.updated_at = now
+        else:
+            session.add(ModelCapability(
+                model=model,
+                task_type=task_type,
+                score=normalized,
+                source="livebench",
+                benchmark_category=lb_cat,
+                raw_score=raw,
+                updated_at=now,
+            ))
+        count += 1
+
+    session.commit()
+    session.close()
+    n_models = len({m for m, _ in agg})
+    print(f"Seeded {count} LiveBench-HF capability rows for {n_models} models")
     return count
 
 
@@ -382,7 +482,11 @@ def load_model_registry(db_path: str) -> dict[str, dict]:
 
 def main():
     parser = argparse.ArgumentParser(description="Seed model capability scores")
-    parser.add_argument("--source", choices=["livebench", "arena", "registry", "all"], default="all")
+    parser.add_argument(
+        "--source",
+        choices=["livebench", "livebench-hf", "arena", "registry", "all"],
+        default="all",
+    )
     parser.add_argument("--db-path", default="data/costs.db")
     parser.add_argument("--arena-rows", type=int, default=10000)
     args = parser.parse_args()
@@ -392,6 +496,8 @@ def main():
     total = 0
     if args.source in ("livebench", "all"):
         total += seed_livebench(args.db_path)
+    if args.source in ("livebench-hf", "all"):
+        total += seed_livebench_hf(args.db_path)
     if args.source in ("arena", "all"):
         total += seed_arena(args.db_path, max_rows=args.arena_rows)
     if args.source in ("registry", "all"):
