@@ -1964,6 +1964,70 @@ class DashboardEndpoints:
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
+    def _serve_benchmark_list_api(self):
+        """GET /api/models/benchmark — list benchmark runs."""
+        from ..api.benchmark import list_runs
+        try:
+            self._send_json({"runs": list_runs(self.engine)})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_benchmark_detail_api(self, run_id: str):
+        """GET /api/models/benchmark/{id} — one benchmark run."""
+        from ..api.benchmark import get_run
+        try:
+            rid = int(run_id)
+        except ValueError:
+            self._send_json({"error": "invalid run id"}, 400)
+            return
+        run = get_run(self.engine, rid)
+        if run:
+            self._send_json({"run": run})
+        else:
+            self._send_json({"error": "run not found"}, 404)
+
+    def _serve_benchmark_create_api(self):
+        """POST /api/models/benchmark — queue a LiveBench run.
+
+        Body: {"provider": ..., "model": ..., "categories": [...] (optional)}
+        The benchmark runs direct-to-provider (not through LCP), so it scores
+        the raw model without tripping the dynamic router.
+        """
+        from ..api.benchmark import queue_benchmark
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+
+        provider = (body.get("provider") or "").strip()
+        model = (body.get("model") or "").strip()
+        if not provider or not model:
+            self._send_json({"error": "missing 'provider' and/or 'model'"}, 400)
+            return
+
+        categories = body.get("categories")
+        if categories is not None and (
+            not isinstance(categories, list)
+            or not all(isinstance(c, str) for c in categories)
+        ):
+            self._send_json({"error": "'categories' must be a list of strings"}, 400)
+            return
+
+        try:
+            run = queue_benchmark(
+                self.engine,
+                self.config,
+                target_kind="provider",
+                target={"provider": provider, "model": model},
+                categories=categories or None,
+            )
+            self._send_json({"ok": True, "run": run})
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 400)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _serve_daily_costs_api(self):
         """API endpoint: daily costs as JSON."""
         from sqlalchemy import func

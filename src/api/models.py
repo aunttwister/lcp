@@ -175,6 +175,30 @@ class ModelRegistryEntry(Base):
     updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
 
 
+class BenchmarkRun(Base):
+    """A LiveBench benchmark execution, tracked as a background job.
+
+    ``target_kind`` is ``provider`` (benchmark the raw model directly against
+    its provider) or ``profile`` (future: route the benchmark through an LCP
+    profile to measure council / dynamic-routed profiles end-to-end).
+
+    ``target_json`` holds the target spec — ``{"provider": ..., "model": ...}``
+    for provider-kind, ``{"profile": ...}`` for profile-kind.
+    """
+    __tablename__ = "benchmark_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    target_kind = Column(String, nullable=False, default="provider")  # provider | profile
+    target_json = Column(Text, nullable=False)  # JSON object
+    categories_json = Column(Text, nullable=True)  # JSON array, or null = all categories
+    status = Column(String, nullable=False, default="queued")  # queued | running | done | failed
+    started_at = Column(String, nullable=True)
+    finished_at = Column(String, nullable=True)
+    result_json = Column(Text, nullable=True)  # per-category scores + raw output
+    error = Column(Text, nullable=True)
+    created_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
 # ── Engine + session factory ───────────────────────────────────────────────
 
 def get_engine(db_path: str):

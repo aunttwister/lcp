@@ -331,6 +331,11 @@ class LCPHandler(
             self._serve_capability_api()
         elif self.path == "/api/models/registry" or self.path.startswith("/api/models/registry?"):
             self._serve_registry_api()
+        elif self.path == "/api/models/benchmark" or self.path.startswith("/api/models/benchmark?"):
+            self._serve_benchmark_list_api()
+        elif self.path.startswith("/api/models/benchmark/") and len(self.path.split("/")) == 5:
+            run_id = self.path.split("/")[4]
+            self._serve_benchmark_detail_api(run_id)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -380,6 +385,9 @@ class LCPHandler(
             return
         elif self.path == "/api/models/registry":
             self._serve_registry_upsert_api()
+            return
+        elif self.path == "/api/models/benchmark":
+            self._serve_benchmark_create_api()
             return
         elif self.path.startswith("/api/providers/") and self.path.endswith("/toggle"):
             # POST /api/providers/{name}/toggle

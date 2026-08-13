@@ -8,10 +8,11 @@
   Scores from LiveBench are objective (correct/incorrect); Arena scores are human preference Elo.
 </p>
 
-<!-- Tabs: Matrix | Registry -->
+<!-- Tabs: Matrix | Registry | Benchmarks -->
 <div class="tab-bar">
   <button class="tab-btn active" data-tab="matrix">Capability Matrix</button>
   <button class="tab-btn" data-tab="registry">Model Registry</button>
+  <button class="tab-btn" data-tab="benchmarks">Benchmarks</button>
 </div>
 
 <!-- Matrix tab -->
@@ -63,6 +64,27 @@
     <table class="capability-table">
       <thead><tr><th>Logical Name</th><th>Benchmark Key</th><th>Provider Aliases</th><th></th></tr></thead>
       <tbody id="registryTableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Benchmarks tab -->
+<div class="tab-panel" id="tab-benchmarks">
+  <p class="subtitle">
+    Run LiveBench against a model <strong>directly at its provider</strong>
+    (not through LCP's router), so the scores are uncontaminated. Requires a
+    LiveBench checkout (<code>LCP_LIVEBENCH_DIR</code>) and Docker for agentic coding.
+  </p>
+  <div class="models-toolbar">
+    <input type="text" id="benchProvider" placeholder="provider (e.g. deepseek)" class="capability-filter" style="width:180px">
+    <input type="text" id="benchModel" placeholder="model (e.g. deepseek-v4-pro)" class="capability-filter" style="width:200px">
+    <button id="benchRunBtn" class="btn btn-outline">Run Full Benchmark</button>
+    <span id="benchStatus" class="seed-status"></span>
+  </div>
+  <div class="table-wrap" style="margin-top: 0.75rem;">
+    <table class="capability-table">
+      <thead><tr><th>ID</th><th>Target</th><th>Categories</th><th>Status</th><th>Started</th><th>Result</th></tr></thead>
+      <tbody id="benchmarkTableBody"></tbody>
     </table>
   </div>
 </div>
@@ -240,6 +262,63 @@ function deleteRegistry(logical) {
   });
 }
 
+// ── Benchmarks tab ──────────────────────────────────────────────────────────
+
+async function loadBenchmarks() {
+  const r = await fetch('/api/models/benchmark');
+  const data = await r.json();
+  const tbody = document.getElementById('benchmarkTableBody');
+  const runs = data.runs || [];
+  if (!runs.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">No benchmark runs yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = runs.map(run => {
+    const target = run.target || {};
+    const tgt = run.target_kind === 'profile'
+      ? (target.profile || '?')
+      : `${target.provider}/${target.model}`;
+    const cats = run.categories ? run.categories.join(', ') : 'all';
+    const result = run.status === 'done' && run.result
+      ? Object.entries(run.result.categories || {}).map(([c, s]) => `${c}: ${(s).toFixed(1)}`).join(', ')
+      : (run.error || '—');
+    return `<tr>
+      <td class="mono">${run.id}</td>
+      <td class="mono">${tgt}</td>
+      <td>${cats}</td>
+      <td><span class="badge badge-${run.status === 'done' ? 'success' : run.status === 'failed' ? 'error' : run.status === 'running' ? 'fallback' : 'cache'}">${run.status}</span></td>
+      <td class="mono">${(run.started_at || '—').replace('T', ' ').slice(0, 19)}</td>
+      <td style="max-width:300px; word-break:break-all;">${result}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function runBenchmark() {
+  const provider = document.getElementById('benchProvider').value.trim();
+  const model = document.getElementById('benchModel').value.trim();
+  const status = document.getElementById('benchStatus');
+  if (!provider || !model) {
+    status.textContent = 'Enter provider and model first.';
+    return;
+  }
+  const btn = document.getElementById('benchRunBtn');
+  btn.disabled = true;
+  status.textContent = 'Queueing...';
+  try {
+    const r = await fetch('/api/models/benchmark', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({provider, model})
+    });
+    const data = await r.json();
+    if (data.error) { status.textContent = 'Error: ' + data.error; }
+    else { status.textContent = `Queued run #${data.run.id} (full benchmark).`; loadBenchmarks(); }
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+  btn.disabled = false;
+}
+
 // ── Tab switching ───────────────────────────────────────────────────────────
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -250,6 +329,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     document.getElementById('tab-' + tab).classList.add('active');
     if (tab === 'registry') loadRegistry();
+    if (tab === 'benchmarks') loadBenchmarks();
   });
 });
 
@@ -263,6 +343,7 @@ document.getElementById('modelsShowTable').addEventListener('change', function()
 });
 document.getElementById('seedLivebenchBtn').addEventListener('click', seedLivebench);
 document.getElementById('addRegistryBtn').addEventListener('click', addRegistry);
+document.getElementById('benchRunBtn').addEventListener('click', runBenchmark);
 
 // Initial load
 loadCapability();
