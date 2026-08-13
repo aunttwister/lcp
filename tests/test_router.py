@@ -3,8 +3,9 @@ import pytest
 import sys
 from src.api.router import (
     DynamicRouter, CapabilityRouter, classify_task, get_dynamic_router,
-    resolve_latest_variant, _dated_variant_key,
+    logical_model_name, benchmark_model_name,
 )
+from src.api.seed_capabilities import DEFAULT_MODEL_REGISTRY
 
 
 # ── Legacy DynamicRouter tests (flash/pro heuristic) ──────────────────────
@@ -91,41 +92,48 @@ def test_singleton():
     assert get_dynamic_router() is get_dynamic_router()
 
 
-# ── Dated variant alias resolution tests ──────────────────────────────────
+# ── Model registry tests (explicit alias → logical → benchmark) ───────────
 
-def test_dated_variant_key_split():
-    assert _dated_variant_key("deepseek-v4-flash-0731") == ("deepseek-v4-flash", 731)
-    assert _dated_variant_key("deepseek-v4-flash") == ("deepseek-v4-flash", 0)
-    assert _dated_variant_key("deepseek-v4-pro") == ("deepseek-v4-pro", 0)
+def test_logical_model_name_maps_provider_alias():
+    assert logical_model_name("deepseek/deepseek-v4-pro") == "deepseek-v4-pro"
+    assert logical_model_name("moonshotai/Kimi-K3") == "kimi-k3"
+    assert logical_model_name("Qwen/Qwen3.8-Max") == "qwen3.8-max"
+    assert logical_model_name("google/gemini-3.6-flash") == "gemini-3.6-flash"
 
-def test_dated_variant_key_ignores_non_date_suffix():
-    # "pro" is not 4 digits, so no split
-    assert _dated_variant_key("deepseek-v4-pro") == ("deepseek-v4-pro", 0)
-    # 3-digit suffix is not a date
-    assert _dated_variant_key("model-123") == ("model-123", 0)
+def test_logical_model_name_passthrough_unknown():
+    assert logical_model_name("some-brand-new-model") == "some-brand-new-model"
 
-def test_resolve_bare_alias_to_latest_variant():
-    scores = {
-        "deepseek-v4-flash": 0.655,
-        "deepseek-v4-flash-0731": 0.742,
-    }
-    assert resolve_latest_variant("deepseek-v4-flash", scores) == "deepseek-v4-flash-0731"
+def test_logical_model_name_case_insensitive():
+    assert logical_model_name("DeepSeek-V4-Pro") == "deepseek-v4-pro"
 
-def test_resolve_explicit_dated_variant_unchanged():
-    scores = {
-        "deepseek-v4-flash": 0.655,
-        "deepseek-v4-flash-0731": 0.742,
-    }
-    assert resolve_latest_variant("deepseek-v4-flash-0731", scores) == "deepseek-v4-flash-0731"
+def test_benchmark_model_name_resolves_rolling_alias():
+    # Rolling 'deepseek-v4-flash' alias scores as the latest benchmarked
+    # snapshot (0731), not the stale bare name.
+    assert benchmark_model_name("deepseek-v4-flash") == "deepseek-v4-flash-0731"
 
-def test_resolve_picks_newest_dated_variant():
-    scores = {
-        "deepseek-v4-flash": 0.655,
-        "deepseek-v4-flash-0731": 0.742,
-        "deepseek-v4-flash-0813": 0.800,
-    }
-    assert resolve_latest_variant("deepseek-v4-flash", scores) == "deepseek-v4-flash-0813"
+def test_benchmark_model_name_passthrough_without_pin():
+    # deepseek-v4-pro has no dated snapshot in the registry
+    assert benchmark_model_name("deepseek-v4-pro") == "deepseek-v4-pro"
 
-def test_resolve_no_dated_variant_returns_self():
-    scores = {"deepseek-v4-pro": 0.716}
-    assert resolve_latest_variant("deepseek-v4-pro", scores) == "deepseek-v4-pro"
+def test_registry_aliases_are_unique():
+    seen = {}
+    for entry in DEFAULT_MODEL_REGISTRY:
+        for alias in entry["aliases"]:
+            key = alias.lower()
+            assert key not in seen, f"alias {alias!r} duplicated in registry"
+            seen[key] = entry["logical_name"]
+
+def test_registry_benchmark_keys_exist_in_livebench():
+    # The benchmark snapshot keys must match what the seeder writes.
+    # Models not in LiveBench (e.g. claude-sonnet-5) legitimately fall back
+    # to default capability — only validate keys that ARE meant to be seeded.
+    from src.api.seed_capabilities import LIVEBENCH_DATA
+    for entry in DEFAULT_MODEL_REGISTRY:
+        benchmark = entry["benchmark_key"]
+        if benchmark in LIVEBENCH_DATA:
+            continue
+        # Dated variant: base name must be in LIVEBENCH_DATA (e.g. -0731)
+        base, sep, suffix = benchmark.rpartition("-")
+        if sep and suffix.isdigit() and len(suffix) == 4:
+            assert base in LIVEBENCH_DATA, f"benchmark {benchmark!r} not in seed data"
+        # Otherwise it's intentionally not in LiveBench — nothing to check.

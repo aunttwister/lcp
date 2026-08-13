@@ -1843,6 +1843,110 @@ class DashboardEndpoints:
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
+    def _serve_registry_api(self):
+        """GET /api/models/registry — return the model registry as JSON."""
+        import json
+        from ..api.models import ModelRegistryEntry, get_session as _gs
+
+        try:
+            with _gs(self.engine) as session:
+                rows = session.query(ModelRegistryEntry).order_by(
+                    ModelRegistryEntry.logical_name
+                ).all()
+            entries = []
+            for r in rows:
+                try:
+                    aliases = json.loads(r.aliases_json or "[]")
+                except json.JSONDecodeError:
+                    aliases = []
+                entries.append({
+                    "logical_name": r.logical_name,
+                    "benchmark_key": r.benchmark_key,
+                    "aliases": aliases,
+                    "updated_at": r.updated_at,
+                })
+            self._send_json({"registry": entries, "count": len(entries)})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_registry_upsert_api(self):
+        """POST /api/models/registry — create or update a registry entry.
+
+        Body: {logical_name, benchmark_key, aliases: [..]}
+        """
+        import json
+        from datetime import datetime, timezone
+        from ..api.models import ModelRegistryEntry, get_session as _gs
+        from ..api.router import invalidate_registry_cache
+
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+
+        logical = (body.get("logical_name") or "").strip().lower()
+        benchmark = (body.get("benchmark_key") or "").strip().lower()
+        aliases = body.get("aliases") or []
+        if not logical:
+            self._send_json({"error": "missing 'logical_name'"}, 400)
+            return
+        if not benchmark:
+            self._send_json({"error": "missing 'benchmark_key'"}, 400)
+            return
+        if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
+            self._send_json({"error": "'aliases' must be a list of strings"}, 400)
+            return
+
+        # Ensure logical_name is always one of its own aliases
+        if logical not in [a.lower() for a in aliases]:
+            aliases = [logical] + aliases
+
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            with _gs(self.engine) as session:
+                entry = session.query(ModelRegistryEntry).filter_by(
+                    logical_name=logical
+                ).first()
+                if entry:
+                    entry.benchmark_key = benchmark
+                    entry.aliases_json = json.dumps(aliases)
+                    entry.updated_at = now
+                    action = "updated"
+                else:
+                    session.add(ModelRegistryEntry(
+                        logical_name=logical,
+                        benchmark_key=benchmark,
+                        aliases_json=json.dumps(aliases),
+                        updated_at=now,
+                    ))
+                    action = "created"
+                session.commit()
+            invalidate_registry_cache()
+            self._send_json({"ok": True, "action": action, "logical_name": logical})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_registry_delete_api(self, logical: str):
+        """DELETE /api/models/registry/{logical} — remove a registry entry."""
+        from ..api.models import ModelRegistryEntry, get_session as _gs
+        from ..api.router import invalidate_registry_cache
+
+        try:
+            with _gs(self.engine) as session:
+                entry = session.query(ModelRegistryEntry).filter_by(
+                    logical_name=logical
+                ).first()
+                if not entry:
+                    self._send_json({"error": "entry not found"}, 404)
+                    return
+                session.delete(entry)
+                session.commit()
+            invalidate_registry_cache()
+            self._send_json({"ok": True, "deleted": logical})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _serve_capability_seed_api(self):
         """POST /api/models/capability/seed — re-seed from LiveBench or Arena."""
         try:

@@ -155,6 +155,26 @@ class ModelCapability(Base):
     updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
 
 
+class ModelRegistryEntry(Base):
+    """Explicit model registry: canonical logical model ↔ provider aliases ↔ benchmark key.
+
+    Providers use different model-ID conventions (Command Code prefixes
+    ``deepseek/...``, OpenCode uses bare names) and benchmarks publish dated
+    snapshots (``deepseek-v4-flash-0731``). This table pins those relationships
+    explicitly so the router never has to guess from string patterns.
+
+    Each logical model has exactly one row. Its provider aliases are stored as
+    a JSON array, and its benchmark key names the snapshot to score against.
+    """
+    __tablename__ = "model_registry"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    logical_name = Column(String, unique=True, nullable=False, index=True)
+    benchmark_key = Column(String, nullable=False)  # key in model_capabilities
+    aliases_json = Column(Text, nullable=False, default="[]")  # JSON array of provider-side IDs
+    updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
 # ── Engine + session factory ───────────────────────────────────────────────
 
 def get_engine(db_path: str):

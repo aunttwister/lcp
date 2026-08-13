@@ -12,6 +12,7 @@ reasoning, planning, chat), and scores all available models to pick the best fit
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Optional
 
@@ -141,62 +142,83 @@ DEFAULT_COST_BIAS = 0.15
 _MODEL_PRICES: dict[str, float] = {
     "deepseek-v4-pro": 0.87,
     "deepseek-v4-flash": 0.27,
-    "deepseek-v4-flash-0731": 0.27,
 }
 
 
-def _dated_variant_key(name: str) -> tuple[str, int]:
-    """Split a model name into (base, date) if it has a dated suffix.
+# ── Model registry — DB-backed, explicit, no runtime name parsing ────────────
+#
+# Each provider uses its own model-ID convention, and each benchmark publishes
+# its own (often dated) names. Instead of guessing from string patterns, we
+# keep ONE explicit registry (persisted in the ``model_registry`` table) that
+# maps every alias back to a logical name and pins that logical name to the
+# benchmark snapshot it should be scored by.
+#
+#   logical_name:  the canonical gateway name (also the key in _MODEL_PRICES
+#                  and pricing configs — used for pricing and aggregation).
+#   benchmark_key: the model key inside the seeded capability matrix
+#                  (LiveBench / Arena data).
+#   aliases:       every provider-side ID that means the same logical model.
+#
+# The curated defaults live in seed_capabilities.DEFAULT_MODEL_REGISTRY and are
+# seeded into the DB on first run. After seeding, the DB is the source of truth
+# and is editable via the /models page — no code changes required when a
+# provider rolls a new dated snapshot.
 
-    e.g. ``deepseek-v4-flash-0731`` → (``deepseek-v4-flash``, 731)
-         ``deepseek-v4-flash``      → (``deepseek-v4-flash``, 0)
 
-    A date suffix is a trailing ``-`` followed by exactly 4 digits (e.g.
-    ``-0731`` for July 31, or ``-0813``). Models without a dated suffix have
-    date 0 (a rolling alias that should resolve to the latest dated variant).
+_registry_cache: Optional[dict[str, dict]] = None
+_registry_db_path: Optional[str] = None
+
+
+def get_model_registry(db_path: str = "data/costs.db") -> dict[str, dict]:
+    """Return the model registry (cached), loading/seeding from DB as needed."""
+    global _registry_cache, _registry_db_path
+    if _registry_cache is not None and _registry_db_path == db_path:
+        return _registry_cache
+    from .seed_capabilities import load_model_registry, seed_model_registry
+    registry = load_model_registry(db_path)
+    if not registry:
+        seed_model_registry(db_path)
+        registry = load_model_registry(db_path)
+    _registry_cache = registry
+    _registry_db_path = db_path
+    return _registry_cache
+
+
+def invalidate_registry_cache() -> None:
+    """Clear the cached registry so the next lookup re-reads the DB."""
+    global _registry_cache, _registry_db_path
+    _registry_cache = None
+    _registry_db_path = None
+
+
+def _alias_to_logical(registry: dict[str, dict]) -> dict[str, str]:
+    """Build reverse index: alias (lowercased) → logical name."""
+    return {
+        alias.lower(): logical
+        for logical, entry in registry.items()
+        for alias in entry.get("aliases", [])
+    }
+
+
+def logical_model_name(model: str, db_path: str = "data/costs.db") -> str:
+    """Map any model ID to its logical gateway name via the DB registry.
+
+    Unknown names pass through unchanged (lowercased) so the router still
+    works for models not yet listed in the registry.
     """
-    parts = name.rsplit("-", 1)
-    if len(parts) == 2 and parts[1].isdigit() and len(parts[1]) == 4:
-        return parts[0].lower(), int(parts[1])
-    return name.lower(), 0
-
-
-def resolve_latest_variant(
-    model: str,
-    task_scores: dict[str, float],
-) -> str:
-    """Resolve a model name to its newest dated variant for scoring.
-
-    Providers expose rolling aliases (``deepseek-v4-flash`` = "latest") while
-    benchmarks publish dated snapshots (``deepseek-v4-flash-0731``). The bare
-    alias always points at the newest snapshot, so:
-
-      - A bare name with dated variants resolves to the newest dated variant.
-      - An explicit dated name (``-0731``) is used as-is.
-      - A bare name with no dated variants falls back to its own score.
-
-    This avoids under-rating the rolling alias with a stale benchmark score
-    (e.g. ``deepseek-v4-flash`` at 65.5 when the provider is actually serving
-    the 0731 snapshot that scores 74.2).
-    """
-    base, date = _dated_variant_key(model)
-
-    # Explicit dated variant → use directly (fall through to caller default).
-    if date > 0:
+    if not model:
         return model
+    registry = get_model_registry(db_path)
+    return _alias_to_logical(registry).get(model.strip().lower(), model.strip().lower())
 
-    # Bare rolling alias → find the newest dated variant of the same base.
-    best_model = model
-    best_date = 0
-    for candidate in task_scores:
-        c_base, c_date = _dated_variant_key(candidate)
-        if c_base == base and c_date > best_date:
-            best_model = candidate
-            best_date = c_date
 
-    # Only resolve if a dated variant was actually found — otherwise keep the
-    # bare name (its own score, if present, still applies).
-    return best_model if best_date > 0 else model
+def benchmark_model_name(logical: str, db_path: str = "data/costs.db") -> str:
+    """Return the benchmark snapshot key for a logical model name."""
+    registry = get_model_registry(db_path)
+    entry = registry.get(logical)
+    if entry:
+        return entry["benchmark_key"]
+    return logical
 
 
 class CapabilityRouter:
@@ -229,21 +251,26 @@ class CapabilityRouter:
     def get_model_score(self, model: str, task: str) -> float:
         """Get capability score for a model on a task (0.0–1.0).
 
-        Resolves rolling aliases to the latest dated variant: if the exact
-        model has no score, the newest dated snapshot of the same base name
-        is used (e.g. ``deepseek-v4-flash`` → ``deepseek-v4-flash-0731``).
+        Resolves the model ID through the explicit registry: alias → logical
+        name → benchmark snapshot, then looks up the score. Unknown models
+        fall back to a default.
         """
         matrix = self.load_matrix()
         task_scores = matrix.get(task, {})
-        resolved = resolve_latest_variant(model, task_scores)
-        if resolved != model:
+
+        logical = logical_model_name(model, self.db_path)
+        benchmark = benchmark_model_name(logical, self.db_path)
+
+        if benchmark != model or logical != model:
             logger.debug(
-                "capability_alias_resolved",
+                "capability_resolved",
                 model=model,
-                resolved=resolved,
+                logical=logical,
+                benchmark=benchmark,
                 task=task,
             )
-        return task_scores.get(resolved, DEFAULT_CAPABILITY.get(model, 0.5))
+
+        return task_scores.get(benchmark, DEFAULT_CAPABILITY.get(logical, 0.5))
 
     def rank_models(
         self,

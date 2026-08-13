@@ -8,40 +8,63 @@
   Scores from LiveBench are objective (correct/incorrect); Arena scores are human preference Elo.
 </p>
 
-<!-- Controls -->
-<div class="models-toolbar">
-  <label>
-    Filter: <input type="text" id="capabilityFilter" placeholder="e.g. deepseek, code_generation" class="capability-filter">
-  </label>
-  <label>
-    Source:
-    <select id="capabilitySource">
-      <option value="all">All</option>
-      <option value="livebench">LiveBench (current)</option>
-      <option value="arena">Arena (legacy)</option>
-      <option value="gateway_yaml">Config override</option>
-      <option value="lcp_benchmark">LCP benchmark</option>
-    </select>
-  </label>
-  <label class="models-toggle-label">
-    <input type="checkbox" id="modelsShowTable"> Table view
-  </label>
+<!-- Tabs: Matrix | Registry -->
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="matrix">Capability Matrix</button>
+  <button class="tab-btn" data-tab="registry">Model Registry</button>
 </div>
 
-<!-- Card view: per-task top models -->
-<div id="capabilityCards"></div>
+<!-- Matrix tab -->
+<div class="tab-panel active" id="tab-matrix">
+  <div class="models-toolbar">
+    <label>
+      Filter: <input type="text" id="capabilityFilter" placeholder="e.g. deepseek, code_generation" class="capability-filter">
+    </label>
+    <label>
+      Source:
+      <select id="capabilitySource">
+        <option value="all">All</option>
+        <option value="livebench">LiveBench (current)</option>
+        <option value="arena">Arena (legacy)</option>
+        <option value="gateway_yaml">Config override</option>
+        <option value="lcp_benchmark">LCP benchmark</option>
+      </select>
+    </label>
+    <label class="models-toggle-label">
+      <input type="checkbox" id="modelsShowTable"> Table view
+    </label>
+  </div>
 
-<!-- Table view (hidden by default) -->
-<div id="capabilityTable" style="display:none;">
-  <table class="capability-table">
-    <thead><tr><th>Model</th><th>Task</th><th>Score</th><th>Source</th><th>Benchmark Category</th></tr></thead>
-    <tbody id="capabilityTableBody"></tbody>
-  </table>
+  <!-- Card view: per-task top models -->
+  <div id="capabilityCards"></div>
+
+  <!-- Table view (hidden by default) -->
+  <div id="capabilityTable" style="display:none;">
+    <table class="capability-table">
+      <thead><tr><th>Model</th><th>Task</th><th>Score</th><th>Source</th><th>Benchmark Category</th></tr></thead>
+      <tbody id="capabilityTableBody"></tbody>
+    </table>
+  </div>
+
+  <div class="models-footer">
+    <button id="seedLivebenchBtn" class="btn btn-outline">Re-seed from LiveBench</button>
+    <span id="seedStatus" class="seed-status"></span>
+  </div>
 </div>
 
-<div class="models-footer">
-  <button id="seedLivebenchBtn" class="btn btn-outline">Re-seed from LiveBench</button>
-  <span id="seedStatus" class="seed-status"></span>
+<!-- Registry tab -->
+<div class="tab-panel" id="tab-registry">
+  <p class="subtitle">
+    Maps each logical model to its provider-side aliases and the benchmark snapshot
+    it is scored against. Editable — changes take effect on the next request.
+  </p>
+  <button id="addRegistryBtn" class="btn btn-outline">+ Add Model</button>
+  <div class="table-wrap" style="margin-top: 0.75rem;">
+    <table class="capability-table">
+      <thead><tr><th>Logical Name</th><th>Benchmark Key</th><th>Provider Aliases</th><th></th></tr></thead>
+      <tbody id="registryTableBody"></tbody>
+    </table>
+  </div>
 </div>
 {% endblock %}
 
@@ -58,6 +81,24 @@ const API = {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({source})
+    });
+    return r.json();
+  },
+  async registry() {
+    const r = await fetch('/api/models/registry');
+    return r.json();
+  },
+  async upsertRegistry(entry) {
+    const r = await fetch('/api/models/registry', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(entry)
+    });
+    return r.json();
+  },
+  async deleteRegistry(logical) {
+    const r = await fetch('/api/models/registry/' + encodeURIComponent(logical), {
+      method: 'DELETE'
     });
     return r.json();
   }
@@ -136,6 +177,82 @@ async function seedLivebench() {
   btn.disabled = false;
 }
 
+// ── Registry tab ────────────────────────────────────────────────────────────
+
+async function loadRegistry() {
+  const data = await API.registry();
+  const tbody = document.getElementById('registryTableBody');
+  const entries = data.registry || [];
+  if (!entries.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">No registry entries.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = entries.map(e => `<tr>
+    <td class="mono">${e.logical_name}</td>
+    <td class="mono">${e.benchmark_key}</td>
+    <td class="mono" style="max-width:300px; word-break:break-all;">${e.aliases.join(', ')}</td>
+    <td><button class="btn-sm" onclick="editRegistry('${e.logical_name}', '${e.benchmark_key}', ${JSON.stringify(e.aliases).replace(/"/g, '&quot;')})">Edit</button>
+        <button class="btn-sm btn-danger" onclick="deleteRegistry('${e.logical_name}')">Delete</button></td>
+  </tr>`).join('');
+}
+
+function editRegistry(logical, benchmark, aliases) {
+  const newLogical = prompt('Logical name:', logical);
+  if (newLogical === null) return;
+  const newBenchmark = prompt('Benchmark key:', benchmark);
+  if (newBenchmark === null) return;
+  const newAliases = prompt('Aliases (comma-separated):', aliases.join(', '));
+  if (newAliases === null) return;
+
+  API.upsertRegistry({
+    logical_name: newLogical.trim(),
+    benchmark_key: newBenchmark.trim(),
+    aliases: newAliases.split(',').map(a => a.trim()).filter(Boolean)
+  }).then(r => {
+    if (r.error) { alert('Error: ' + r.error); return; }
+    loadRegistry();
+  });
+}
+
+function addRegistry() {
+  const logical = prompt('Logical name (e.g. deepseek-v4-pro):');
+  if (!logical) return;
+  const benchmark = prompt('Benchmark key (e.g. deepseek-v4-pro):');
+  if (!benchmark) return;
+  const aliases = prompt('Aliases (comma-separated):', logical);
+  if (aliases === null) return;
+
+  API.upsertRegistry({
+    logical_name: logical.trim(),
+    benchmark_key: benchmark.trim(),
+    aliases: aliases.split(',').map(a => a.trim()).filter(Boolean)
+  }).then(r => {
+    if (r.error) { alert('Error: ' + r.error); return; }
+    loadRegistry();
+  });
+}
+
+function deleteRegistry(logical) {
+  if (!confirm('Delete registry entry "' + logical + '"?')) return;
+  API.deleteRegistry(logical).then(r => {
+    if (r.error) { alert('Error: ' + r.error); return; }
+    loadRegistry();
+  });
+}
+
+// ── Tab switching ───────────────────────────────────────────────────────────
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    this.classList.add('active');
+    const tab = this.dataset.tab;
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    if (tab === 'registry') loadRegistry();
+  });
+});
+
 document.getElementById('capabilitySource').addEventListener('change', loadCapability);
 document.getElementById('capabilityFilter').addEventListener('input', () => {
   renderTable(window._capData || {});
@@ -145,6 +262,7 @@ document.getElementById('modelsShowTable').addEventListener('change', function()
   document.getElementById('capabilityTable').style.display = this.checked ? 'block' : 'none';
 });
 document.getElementById('seedLivebenchBtn').addEventListener('click', seedLivebench);
+document.getElementById('addRegistryBtn').addEventListener('click', addRegistry);
 
 // Initial load
 loadCapability();
