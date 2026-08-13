@@ -145,6 +145,60 @@ _MODEL_PRICES: dict[str, float] = {
 }
 
 
+def _dated_variant_key(name: str) -> tuple[str, int]:
+    """Split a model name into (base, date) if it has a dated suffix.
+
+    e.g. ``deepseek-v4-flash-0731`` → (``deepseek-v4-flash``, 731)
+         ``deepseek-v4-flash``      → (``deepseek-v4-flash``, 0)
+
+    A date suffix is a trailing ``-`` followed by exactly 4 digits (e.g.
+    ``-0731`` for July 31, or ``-0813``). Models without a dated suffix have
+    date 0 (a rolling alias that should resolve to the latest dated variant).
+    """
+    parts = name.rsplit("-", 1)
+    if len(parts) == 2 and parts[1].isdigit() and len(parts[1]) == 4:
+        return parts[0].lower(), int(parts[1])
+    return name.lower(), 0
+
+
+def resolve_latest_variant(
+    model: str,
+    task_scores: dict[str, float],
+) -> str:
+    """Resolve a model name to its newest dated variant for scoring.
+
+    Providers expose rolling aliases (``deepseek-v4-flash`` = "latest") while
+    benchmarks publish dated snapshots (``deepseek-v4-flash-0731``). The bare
+    alias always points at the newest snapshot, so:
+
+      - A bare name with dated variants resolves to the newest dated variant.
+      - An explicit dated name (``-0731``) is used as-is.
+      - A bare name with no dated variants falls back to its own score.
+
+    This avoids under-rating the rolling alias with a stale benchmark score
+    (e.g. ``deepseek-v4-flash`` at 65.5 when the provider is actually serving
+    the 0731 snapshot that scores 74.2).
+    """
+    base, date = _dated_variant_key(model)
+
+    # Explicit dated variant → use directly (fall through to caller default).
+    if date > 0:
+        return model
+
+    # Bare rolling alias → find the newest dated variant of the same base.
+    best_model = model
+    best_date = 0
+    for candidate in task_scores:
+        c_base, c_date = _dated_variant_key(candidate)
+        if c_base == base and c_date > best_date:
+            best_model = candidate
+            best_date = c_date
+
+    # Only resolve if a dated variant was actually found — otherwise keep the
+    # bare name (its own score, if present, still applies).
+    return best_model if best_date > 0 else model
+
+
 class CapabilityRouter:
     """Routes to the best available model using capability scores + cost awareness."""
 
@@ -173,9 +227,23 @@ class CapabilityRouter:
         return self._matrix
 
     def get_model_score(self, model: str, task: str) -> float:
-        """Get capability score for a model on a task (0.0–1.0)."""
+        """Get capability score for a model on a task (0.0–1.0).
+
+        Resolves rolling aliases to the latest dated variant: if the exact
+        model has no score, the newest dated snapshot of the same base name
+        is used (e.g. ``deepseek-v4-flash`` → ``deepseek-v4-flash-0731``).
+        """
         matrix = self.load_matrix()
-        return matrix.get(task, {}).get(model, DEFAULT_CAPABILITY.get(model, 0.5))
+        task_scores = matrix.get(task, {})
+        resolved = resolve_latest_variant(model, task_scores)
+        if resolved != model:
+            logger.debug(
+                "capability_alias_resolved",
+                model=model,
+                resolved=resolved,
+                task=task,
+            )
+        return task_scores.get(resolved, DEFAULT_CAPABILITY.get(model, 0.5))
 
     def rank_models(
         self,

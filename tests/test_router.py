@@ -1,7 +1,10 @@
 """Tests for router.py"""
 import pytest
 import sys
-from src.api.router import DynamicRouter, CapabilityRouter, classify_task, get_dynamic_router
+from src.api.router import (
+    DynamicRouter, CapabilityRouter, classify_task, get_dynamic_router,
+    resolve_latest_variant, _dated_variant_key,
+)
 
 
 # ── Legacy DynamicRouter tests (flash/pro heuristic) ──────────────────────
@@ -86,3 +89,43 @@ def test_router_ranks_models():
 
 def test_singleton():
     assert get_dynamic_router() is get_dynamic_router()
+
+
+# ── Dated variant alias resolution tests ──────────────────────────────────
+
+def test_dated_variant_key_split():
+    assert _dated_variant_key("deepseek-v4-flash-0731") == ("deepseek-v4-flash", 731)
+    assert _dated_variant_key("deepseek-v4-flash") == ("deepseek-v4-flash", 0)
+    assert _dated_variant_key("deepseek-v4-pro") == ("deepseek-v4-pro", 0)
+
+def test_dated_variant_key_ignores_non_date_suffix():
+    # "pro" is not 4 digits, so no split
+    assert _dated_variant_key("deepseek-v4-pro") == ("deepseek-v4-pro", 0)
+    # 3-digit suffix is not a date
+    assert _dated_variant_key("model-123") == ("model-123", 0)
+
+def test_resolve_bare_alias_to_latest_variant():
+    scores = {
+        "deepseek-v4-flash": 0.655,
+        "deepseek-v4-flash-0731": 0.742,
+    }
+    assert resolve_latest_variant("deepseek-v4-flash", scores) == "deepseek-v4-flash-0731"
+
+def test_resolve_explicit_dated_variant_unchanged():
+    scores = {
+        "deepseek-v4-flash": 0.655,
+        "deepseek-v4-flash-0731": 0.742,
+    }
+    assert resolve_latest_variant("deepseek-v4-flash-0731", scores) == "deepseek-v4-flash-0731"
+
+def test_resolve_picks_newest_dated_variant():
+    scores = {
+        "deepseek-v4-flash": 0.655,
+        "deepseek-v4-flash-0731": 0.742,
+        "deepseek-v4-flash-0813": 0.800,
+    }
+    assert resolve_latest_variant("deepseek-v4-flash", scores) == "deepseek-v4-flash-0813"
+
+def test_resolve_no_dated_variant_returns_self():
+    scores = {"deepseek-v4-pro": 0.716}
+    assert resolve_latest_variant("deepseek-v4-pro", scores) == "deepseek-v4-pro"
