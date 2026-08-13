@@ -1,91 +1,31 @@
 {% extends "base.html" %}
-{% block title %}Models — Capability Matrix — LCP{% endblock %}
+{% block title %}Models — LCP{% endblock %}
 {% block content %}
-<h2>Model Capability Matrix</h2>
+<h2>Models</h2>
 <p class="subtitle">
-  Per-task scores from <a href="https://livebench.ai/" target="_blank" rel="noopener">LiveBench 2026-06-25</a>
+  One page per model: its provider aliases, the benchmark snapshot it's scored against,
+  its per-task capability scores, and its benchmark history — all in one place.
+  Scores come from <a href="https://livebench.ai/" target="_blank" rel="noopener">LiveBench</a>
   and <a href="https://lmarena.ai/" target="_blank" rel="noopener">Chatbot Arena</a>.
-  Scores from LiveBench are objective (correct/incorrect); Arena scores are human preference Elo.
 </p>
 
-<!-- Tabs: Matrix | Registry | Benchmarks -->
-<div class="tab-bar">
-  <button class="tab-btn active" data-tab="matrix">Capability Matrix</button>
-  <button class="tab-btn" data-tab="registry">Model Registry</button>
-  <button class="tab-btn" data-tab="benchmarks">Benchmarks</button>
-</div>
-
-<!-- Matrix tab -->
-<div class="tab-panel active" id="tab-matrix">
-  <div class="models-toolbar">
-    <label>
-      Filter: <input type="text" id="capabilityFilter" placeholder="e.g. deepseek, code_generation" class="capability-filter">
-    </label>
-    <label>
-      Source:
-      <select id="capabilitySource">
-        <option value="all">All</option>
-        <option value="livebench">LiveBench (current)</option>
-        <option value="arena">Arena (legacy)</option>
-        <option value="gateway_yaml">Config override</option>
-        <option value="lcp_benchmark">LCP benchmark</option>
-      </select>
-    </label>
-    <label class="models-toggle-label">
-      <input type="checkbox" id="modelsShowTable"> Table view
-    </label>
+<div class="models-layout">
+  <!-- ── Left: model list ─────────────────────────────────────────────── -->
+  <div class="models-sidebar">
+    <div class="models-sidebar-head">
+      <input type="text" id="modelFilter" placeholder="Filter models…" class="capability-filter" style="width:100%">
+      <button id="addRegistryBtn" class="btn btn-outline" title="Register a new model">+ New model</button>
+    </div>
+    <div id="modelList" class="model-list"></div>
+    <div class="models-sidebar-foot">
+      <button id="seedLivebenchBtn" class="btn btn-outline" title="Re-seed capability scores from LiveBench">Re-seed scores</button>
+      <span id="seedStatus" class="seed-status"></span>
+    </div>
   </div>
 
-  <!-- Card view: per-task top models -->
-  <div id="capabilityCards"></div>
-
-  <!-- Table view (hidden by default) -->
-  <div id="capabilityTable" style="display:none;">
-    <table class="capability-table">
-      <thead><tr><th>Model</th><th>Task</th><th>Score</th><th>Source</th><th>Benchmark Category</th></tr></thead>
-      <tbody id="capabilityTableBody"></tbody>
-    </table>
-  </div>
-
-  <div class="models-footer">
-    <button id="seedLivebenchBtn" class="btn btn-outline">Re-seed from LiveBench</button>
-    <span id="seedStatus" class="seed-status"></span>
-  </div>
-</div>
-
-<!-- Registry tab -->
-<div class="tab-panel" id="tab-registry">
-  <p class="subtitle">
-    Maps each logical model to its provider-side aliases and the benchmark snapshot
-    it is scored against. Editable — changes take effect on the next request.
-  </p>
-  <button id="addRegistryBtn" class="btn btn-outline">+ Add Model</button>
-  <div class="table-wrap" style="margin-top: 0.75rem;">
-    <table class="capability-table">
-      <thead><tr><th>Logical Name</th><th>Benchmark Key</th><th>Provider Aliases</th><th></th></tr></thead>
-      <tbody id="registryTableBody"></tbody>
-    </table>
-  </div>
-</div>
-
-<!-- Benchmarks tab -->
-<div class="tab-panel" id="tab-benchmarks">
-  <p class="subtitle">
-    Run LiveBench against a model <strong>directly at its provider</strong>
-    (not through LCP's router), so the scores are uncontaminated. Requires a
-    LiveBench checkout (<code>LCP_LIVEBENCH_DIR</code>) and Docker for agentic coding.
-  </p>
-  <div class="models-toolbar">
-    <input type="text" id="benchProvider" placeholder="provider (e.g. deepseek)" class="capability-filter" style="width:180px">
-    <input type="text" id="benchModel" placeholder="model (e.g. deepseek-v4-pro)" class="capability-filter" style="width:200px">
-    <button id="benchRunBtn" class="btn btn-outline">Run Full Benchmark</button>
-    <span id="benchStatus" class="seed-status"></span>
-  </div>
-  <div class="table-wrap" style="margin-top: 0.75rem;">
-    <table class="capability-table">
-      <thead><tr><th>ID</th><th>Target</th><th>Categories</th><th>Status</th><th>Started</th><th>Result</th></tr></thead>
-      <tbody id="benchmarkTableBody"></tbody>
-    </table>
+  <!-- ── Right: selected model detail ─────────────────────────────────── -->
+  <div class="models-detail" id="modelDetail">
+    <div class="empty">Select a model from the list.</div>
   </div>
 </div>
 {% endblock %}
@@ -93,15 +33,13 @@
 {% block scripts %}
 <script>
 const API = {
-  async matrix(params = {}) {
-    const qs = new URLSearchParams(params).toString();
-    const r = await fetch('/api/models/capability' + (qs ? '?' + qs : ''));
+  async matrix() {
+    const r = await fetch('/api/models/capability');
     return r.json();
   },
   async seed(source) {
     const r = await fetch('/api/models/capability/seed', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({source})
     });
     return r.json();
@@ -112,240 +50,263 @@ const API = {
   },
   async upsertRegistry(entry) {
     const r = await fetch('/api/models/registry', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(entry)
     });
     return r.json();
   },
   async deleteRegistry(logical) {
-    const r = await fetch('/api/models/registry/' + encodeURIComponent(logical), {
-      method: 'DELETE'
+    const r = await fetch('/api/models/registry/' + encodeURIComponent(logical), {method: 'DELETE'});
+    return r.json();
+  },
+  async benchmarks() {
+    const r = await fetch('/api/models/benchmark');
+    return r.json();
+  },
+  async runBenchmark(provider, model) {
+    const r = await fetch('/api/models/benchmark', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({provider, model})
     });
     return r.json();
   }
 };
 
-async function loadCapability() {
-  const source = document.getElementById('capabilitySource').value;
-  const data = await API.matrix({source: source === 'all' ? '' : source});
-  renderCards(data);
-  renderTable(data);
+// ── State ──────────────────────────────────────────────────────────────────
+let STATE = { registry: {}, matrix: {}, runs: [], selected: null, filter: '' };
+
+function allModels() {
+  const names = new Set(Object.keys(STATE.registry));
+  for (const models of Object.values(STATE.matrix.tasks || {})) {
+    for (const m of Object.keys(models)) names.add(m);
+  }
+  return [...names].sort();
 }
 
-function renderCards(data) {
-  const container = document.getElementById('capabilityCards');
-  const tasks = data.tasks || {};
-  if (!Object.keys(tasks).length) {
-    container.innerHTML = '<p class="empty">No capability data found. <button onclick="seedLivebench()">Seed from LiveBench</button></p>';
+async function loadAll() {
+  const [matrix, reg, runs] = await Promise.all([API.matrix(), API.registry(), API.benchmarks()]);
+  STATE.matrix = matrix;
+  STATE.runs = runs.runs || [];
+  const registryMap = {};
+  for (const e of (reg.registry || [])) registryMap[e.logical_name] = e;
+  STATE.registry = registryMap;
+  renderModelList();
+  if (STATE.selected && allModels().includes(STATE.selected)) {
+    renderDetail(STATE.selected);
+  } else if (allModels().length) {
+    selectModel(allModels()[0]);
+  }
+}
+
+function bestScore(model) {
+  let best = null;
+  for (const [task, models] of Object.entries(STATE.matrix.tasks || {})) {
+    const s = models[model];
+    if (s !== undefined && (best === null || s > best.score)) best = {task, score: s};
+  }
+  return best ? `${(best.score * 100).toFixed(0)}% ${best.task.replace(/_/g, ' ')}` : null;
+}
+
+function renderModelList() {
+  const container = document.getElementById('modelList');
+  const models = allModels().filter(m => m.toLowerCase().includes(STATE.filter.toLowerCase()));
+  if (!models.length) {
+    container.innerHTML = '<div class="empty">No models. Click "+ New model" to register one.</div>';
     return;
   }
+  container.innerHTML = models.map(m => {
+    const active = m === STATE.selected ? 'active' : '';
+    const hasRegistry = !!STATE.registry[m];
+    const best = bestScore(m);
+    return `<div class="model-list-item ${active}" data-model="${m}">
+      <div class="mli-name" title="${m}">${m}</div>
+      <div class="mli-meta">${best ? '<span class="mli-best">' + best + '</span>' : ''}${hasRegistry ? '' : '<span class="mli-unreg">unregistered</span>'}</div>
+    </div>`;
+  }).join('');
+  container.querySelectorAll('.model-list-item').forEach(el => {
+    el.addEventListener('click', () => selectModel(el.dataset.model));
+  });
+}
 
-  let html = '<div class="capability-grid">';
-  for (const [task, models] of Object.entries(tasks)) {
-    const top = Object.entries(models).sort((a, b) => b[1] - a[1]).slice(0, 8);
-    html += `<div class="capability-card">
-      <h4>${task.replace(/_/g, ' ')}</h4>
-      <ul>`;
-    for (const [model, score] of top) {
-      const cls = score >= 0.8 ? 'high' : score >= 0.6 ? 'mid' : 'low';
-      html += `<li><span class="model-name">${model}</span>
-        <span class="cap-score ${cls}">${(score * 100).toFixed(1)}%</span></li>`;
+function selectModel(model) {
+  STATE.selected = model;
+  renderModelList();
+  renderDetail(model);
+}
+
+function renderDetail(model) {
+  const detail = document.getElementById('modelDetail');
+  const reg = STATE.registry[model];
+  const aliases = reg ? reg.aliases : [];
+  const benchmarkKey = reg ? reg.benchmark_key : model;
+  const updatedAt = reg ? (reg.updated_at || '').replace('T', ' ').slice(0, 19) : null;
+
+  const scores = [];
+  for (const [task, models] of Object.entries(STATE.matrix.tasks || {})) {
+    if (models[model] !== undefined) {
+      scores.push({
+        task,
+        score: models[model],
+        source: (STATE.matrix.sources || {})[task]?.[model] || '—',
+        category: (STATE.matrix.benchmark_categories || {})[task]?.[model] || '—',
+      });
     }
-    html += '</ul></div>';
   }
-  html += '</div>';
-  container.innerHTML = html;
+  scores.sort((a, b) => b.score - a.score);
+
+  const runs = STATE.runs.filter(r => (r.target || {}).model === model || (r.target || {}).profile === model);
+
+  detail.innerHTML = `
+    <div class="model-detail-head">
+      <h3 class="mono">${model}</h3>
+      <div class="model-detail-actions">
+        <button class="btn btn-outline" id="editModelBtn">Edit</button>
+        ${reg ? '<button class="btn btn-outline btn-danger" id="deleteModelBtn">Delete</button>' : ''}
+      </div>
+    </div>
+
+    <div class="model-section">
+      <h4>Identity</h4>
+      <dl class="model-kv">
+        <dt>Benchmark key</dt><dd class="mono">${benchmarkKey}</dd>
+        <dt>Provider aliases</dt>
+        <dd>${aliases.length ? aliases.map(a => `<code class="mono">${a}</code>`).join(' ') : '<span class="muted">none — unregistered</span>'}</dd>
+        ${updatedAt ? `<dt>Updated</dt><dd>${updatedAt}</dd>` : ''}
+      </dl>
+    </div>
+
+    <div class="model-section">
+      <h4>Capability scores</h4>
+      ${scores.length ? `
+      <div class="score-list">
+        ${scores.map(s => `
+          <div class="score-row">
+            <span class="score-task" title="${s.task}">${s.task.replace(/_/g, ' ')}</span>
+            <div class="score-track"><div class="score-fill ${s.score >= 0.8 ? 'hi' : s.score >= 0.6 ? 'mid' : 'lo'}" style="width:${(s.score * 100).toFixed(0)}%"></div></div>
+            <span class="score-pct">${(s.score * 100).toFixed(1)}%</span>
+            <span class="score-src" title="source: ${s.source}, category: ${s.category}">${s.source}</span>
+          </div>`).join('')}
+      </div>` : '<p class="empty">No scores yet. Run a benchmark or re-seed.</p>'}
+    </div>
+
+    <div class="model-section">
+      <h4>Benchmark</h4>
+      <div class="bench-run-row">
+        <input type="text" id="benchProvider" placeholder="provider (e.g. deepseek)" class="capability-filter" value="deepseek">
+        <button class="btn btn-outline" id="runBenchBtn">Run full benchmark</button>
+        <span id="benchStatus" class="seed-status"></span>
+      </div>
+      <div class="table-wrap" style="margin-top:0.75rem">
+        <table class="capability-table">
+          <thead><tr><th>ID</th><th>Categories</th><th>Status</th><th>Started</th><th>Result</th></tr></thead>
+          <tbody>
+          ${runs.length ? runs.map(r => {
+            const result = r.status === 'done' && r.result
+              ? Object.entries(r.result.categories || {}).map(([c, s]) => `${c}: ${s.toFixed(1)}`).join(', ')
+              : (r.error || '—');
+            return `<tr>
+              <td class="mono">${r.id}</td>
+              <td>${r.categories ? r.categories.join(', ') : 'all'}</td>
+              <td><span class="badge badge-${r.status === 'done' ? 'success' : r.status === 'failed' ? 'error' : r.status === 'running' ? 'fallback' : 'cache'}">${r.status}</span></td>
+              <td class="mono">${(r.started_at || '—').replace('T', ' ').slice(0, 16)}</td>
+              <td style="max-width:260px; word-break:break-all;">${result}</td>
+            </tr>`;
+          }).join('') : '<tr><td colspan="5" class="empty">No benchmark runs for this model.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+  document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, aliases));
+  document.getElementById('deleteModelBtn')?.addEventListener('click', () => deleteRegistry(model));
+  document.getElementById('runBenchBtn')?.addEventListener('click', () => runBenchmark(model));
 }
 
-function renderTable(data) {
-  const tbody = document.getElementById('capabilityTableBody');
-  const tasks = data.tasks || {};
-  if (!Object.keys(tasks).length) { tbody.innerHTML = ''; return; }
-
-  const rows = [];
-  for (const [task, models] of Object.entries(tasks)) {
-    for (const [model, score] of Object.entries(models)) {
-      rows.push({task, model, score});
-    }
-  }
-
-  const filter = document.getElementById('capabilityFilter').value.toLowerCase();
-  const filtered = filter ? rows.filter(r =>
-    r.model.toLowerCase().includes(filter) || r.task.toLowerCase().includes(filter)
-  ) : rows;
-  filtered.sort((a, b) => b.score - a.score);
-
-  tbody.innerHTML = filtered.map(r => `<tr>
-    <td>${r.model}</td><td>${r.task}</td>
-    <td>${(r.score * 100).toFixed(1)}%</td>
-    <td>${data.sources?.[r.task]?.[r.model] || '—'}</td>
-    <td>${data.benchmark_categories?.[r.task]?.[r.model] || '—'}</td>
-  </tr>`).join('');
-}
-
-async function seedLivebench() {
-  const btn = document.getElementById('seedLivebenchBtn');
-  const status = document.getElementById('seedStatus');
-  btn.disabled = true;
-  status.textContent = 'Seeding...';
-  try {
-    const result = await API.seed('livebench');
-    status.textContent = `Done: ${result.seeded || result.count || '?'} rows`;
-    await loadCapability();
-  } catch (e) {
-    status.textContent = 'Error: ' + e.message;
-  }
-  btn.disabled = false;
-}
-
-// ── Registry tab ────────────────────────────────────────────────────────────
-
-async function loadRegistry() {
-  const data = await API.registry();
-  const tbody = document.getElementById('registryTableBody');
-  const entries = data.registry || [];
-  if (!entries.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty">No registry entries.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = entries.map(e => `<tr>
-    <td class="mono">${e.logical_name}</td>
-    <td class="mono">${e.benchmark_key}</td>
-    <td class="mono" style="max-width:300px; word-break:break-all;">${e.aliases.join(', ')}</td>
-    <td><button class="btn-sm" onclick="editRegistry('${e.logical_name}', '${e.benchmark_key}', ${JSON.stringify(e.aliases).replace(/"/g, '&quot;')})">Edit</button>
-        <button class="btn-sm btn-danger" onclick="deleteRegistry('${e.logical_name}')">Delete</button></td>
-  </tr>`).join('');
-}
+// ── Registry actions ────────────────────────────────────────────────────────
 
 function editRegistry(logical, benchmark, aliases) {
-  const newLogical = prompt('Logical name:', logical);
-  if (newLogical === null) return;
   const newBenchmark = prompt('Benchmark key:', benchmark);
   if (newBenchmark === null) return;
-  const newAliases = prompt('Aliases (comma-separated):', aliases.join(', '));
+  const newAliases = prompt('Provider aliases (comma-separated):', (aliases || []).join(', '));
   if (newAliases === null) return;
-
   API.upsertRegistry({
-    logical_name: newLogical.trim(),
+    logical_name: logical,
     benchmark_key: newBenchmark.trim(),
-    aliases: newAliases.split(',').map(a => a.trim()).filter(Boolean)
+    aliases: newAliases.split(',').map(a => a.trim()).filter(Boolean),
   }).then(r => {
     if (r.error) { alert('Error: ' + r.error); return; }
-    loadRegistry();
+    loadAll();
   });
 }
 
 function addRegistry() {
   const logical = prompt('Logical name (e.g. deepseek-v4-pro):');
   if (!logical) return;
-  const benchmark = prompt('Benchmark key (e.g. deepseek-v4-pro):');
-  if (!benchmark) return;
-  const aliases = prompt('Aliases (comma-separated):', logical);
+  const benchmark = prompt('Benchmark key:', logical);
+  if (benchmark === null) return;
+  const aliases = prompt('Provider aliases (comma-separated):', logical);
   if (aliases === null) return;
-
   API.upsertRegistry({
     logical_name: logical.trim(),
     benchmark_key: benchmark.trim(),
-    aliases: aliases.split(',').map(a => a.trim()).filter(Boolean)
+    aliases: aliases.split(',').map(a => a.trim()).filter(Boolean),
   }).then(r => {
     if (r.error) { alert('Error: ' + r.error); return; }
-    loadRegistry();
+    STATE.selected = logical.trim();
+    loadAll();
   });
 }
 
 function deleteRegistry(logical) {
-  if (!confirm('Delete registry entry "' + logical + '"?')) return;
+  if (!confirm('Delete model "' + logical + '" from the registry?')) return;
   API.deleteRegistry(logical).then(r => {
     if (r.error) { alert('Error: ' + r.error); return; }
-    loadRegistry();
+    STATE.selected = null;
+    loadAll();
   });
 }
 
-// ── Benchmarks tab ──────────────────────────────────────────────────────────
+// ── Benchmark ───────────────────────────────────────────────────────────────
 
-async function loadBenchmarks() {
-  const r = await fetch('/api/models/benchmark');
-  const data = await r.json();
-  const tbody = document.getElementById('benchmarkTableBody');
-  const runs = data.runs || [];
-  if (!runs.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">No benchmark runs yet.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = runs.map(run => {
-    const target = run.target || {};
-    const tgt = run.target_kind === 'profile'
-      ? (target.profile || '?')
-      : `${target.provider}/${target.model}`;
-    const cats = run.categories ? run.categories.join(', ') : 'all';
-    const result = run.status === 'done' && run.result
-      ? Object.entries(run.result.categories || {}).map(([c, s]) => `${c}: ${(s).toFixed(1)}`).join(', ')
-      : (run.error || '—');
-    return `<tr>
-      <td class="mono">${run.id}</td>
-      <td class="mono">${tgt}</td>
-      <td>${cats}</td>
-      <td><span class="badge badge-${run.status === 'done' ? 'success' : run.status === 'failed' ? 'error' : run.status === 'running' ? 'fallback' : 'cache'}">${run.status}</span></td>
-      <td class="mono">${(run.started_at || '—').replace('T', ' ').slice(0, 19)}</td>
-      <td style="max-width:300px; word-break:break-all;">${result}</td>
-    </tr>`;
-  }).join('');
-}
-
-async function runBenchmark() {
+async function runBenchmark(model) {
   const provider = document.getElementById('benchProvider').value.trim();
-  const model = document.getElementById('benchModel').value.trim();
   const status = document.getElementById('benchStatus');
-  if (!provider || !model) {
-    status.textContent = 'Enter provider and model first.';
-    return;
-  }
-  const btn = document.getElementById('benchRunBtn');
+  if (!provider) { status.textContent = 'Enter a provider.'; return; }
+  const btn = document.getElementById('runBenchBtn');
   btn.disabled = true;
-  status.textContent = 'Queueing...';
+  status.textContent = 'Queueing…';
   try {
-    const r = await fetch('/api/models/benchmark', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({provider, model})
-    });
-    const data = await r.json();
-    if (data.error) { status.textContent = 'Error: ' + data.error; }
-    else { status.textContent = `Queued run #${data.run.id} (full benchmark).`; loadBenchmarks(); }
-  } catch (e) {
-    status.textContent = 'Error: ' + e.message;
-  }
+    const data = await API.runBenchmark(provider, model);
+    if (data.error) status.textContent = 'Error: ' + data.error;
+    else { status.textContent = `Queued run #${data.run.id}.`; loadAll(); }
+  } catch (e) { status.textContent = 'Error: ' + e.message; }
   btn.disabled = false;
 }
 
-// ── Tab switching ───────────────────────────────────────────────────────────
+// ── Seed ────────────────────────────────────────────────────────────────────
 
-document.querySelectorAll('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', function() {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    this.classList.add('active');
-    const tab = this.dataset.tab;
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    document.getElementById('tab-' + tab).classList.add('active');
-    if (tab === 'registry') loadRegistry();
-    if (tab === 'benchmarks') loadBenchmarks();
-  });
-});
+async function seedLivebench() {
+  const btn = document.getElementById('seedLivebenchBtn');
+  const status = document.getElementById('seedStatus');
+  btn.disabled = true;
+  status.textContent = 'Seeding…';
+  try {
+    const r = await API.seed('livebench');
+    status.textContent = `Done: ${r.seeded || r.count || '?'} rows`;
+    loadAll();
+  } catch (e) { status.textContent = 'Error: ' + e.message; }
+  btn.disabled = false;
+}
 
-document.getElementById('capabilitySource').addEventListener('change', loadCapability);
-document.getElementById('capabilityFilter').addEventListener('input', () => {
-  renderTable(window._capData || {});
+// ── Wiring ──────────────────────────────────────────────────────────────────
+
+document.getElementById('modelFilter').addEventListener('input', function() {
+  STATE.filter = this.value;
+  renderModelList();
 });
-document.getElementById('modelsShowTable').addEventListener('change', function() {
-  document.getElementById('capabilityCards').style.display = this.checked ? 'none' : 'block';
-  document.getElementById('capabilityTable').style.display = this.checked ? 'block' : 'none';
-});
-document.getElementById('seedLivebenchBtn').addEventListener('click', seedLivebench);
 document.getElementById('addRegistryBtn').addEventListener('click', addRegistry);
-document.getElementById('benchRunBtn').addEventListener('click', runBenchmark);
+document.getElementById('seedLivebenchBtn').addEventListener('click', seedLivebench);
 
-// Initial load
-loadCapability();
+loadAll();
 </script>
 {% endblock %}
