@@ -18,7 +18,7 @@
     </div>
     <div id="modelList" class="model-list"></div>
     <div class="models-sidebar-foot">
-      <button id="seedLivebenchBtn" class="btn btn-outline" title="Re-seed capability scores from LiveBench">Re-seed scores</button>
+      <button id="seedLivebenchBtn" class="btn btn-outline" title="Refresh capability scores from the canonical LiveBench HF dataset">Refresh from LiveBench</button>
       <span id="seedStatus" class="seed-status"></span>
     </div>
   </div>
@@ -289,9 +289,9 @@ async function seedLivebench() {
   const btn = document.getElementById('seedLivebenchBtn');
   const status = document.getElementById('seedStatus');
   btn.disabled = true;
-  status.textContent = 'Seeding…';
+  status.textContent = 'Refreshing from LiveBench (HF)…';
   try {
-    const r = await API.seed('livebench');
+    const r = await API.seed('livebench-hf');
     status.textContent = `Done: ${r.seeded || r.count || '?'} rows`;
     loadAll();
   } catch (e) { status.textContent = 'Error: ' + e.message; }

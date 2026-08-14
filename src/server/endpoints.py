@@ -1948,18 +1948,31 @@ class DashboardEndpoints:
             self._send_json({"error": str(e)}, 500)
 
     def _serve_capability_seed_api(self):
-        """POST /api/models/capability/seed — re-seed from LiveBench or Arena."""
+        """POST /api/models/capability/seed — re-seed from LiveBench.
+
+        ``source`` is one of ``livebench`` (hand-typed snapshot), ``livebench-hf``
+        (canonical HF dataset), or ``arena`` (Chatbot Arena Elo). Defaults to
+        ``livebench-hf``. Uses the engine's real DB path (not a hardcoded one).
+        """
         try:
             body = self._read_body()
         except Exception:
             body = {}
-        source = body.get("source", "livebench")
+        source = body.get("source", "livebench-hf")
+
+        # Resolve the actual SQLite path from the engine URL (e.g. sqlite:///data/costs.db).
+        db_path = self.engine.url.database if self.engine.url.database else "data/costs.db"
+
         try:
-            from ..api.seed_capabilities import seed_livebench, seed_arena
+            from ..api.seed_capabilities import (
+                seed_livebench, seed_livebench_hf, seed_arena,
+            )
             if source == "arena":
-                count = seed_arena("data/costs.db")
+                count = seed_arena(db_path)
+            elif source == "livebench":
+                count = seed_livebench(db_path)
             else:
-                count = seed_livebench("data/costs.db")
+                count = seed_livebench_hf(db_path)
             self._send_json({"ok": True, "seeded": count, "source": source})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
