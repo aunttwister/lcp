@@ -17,6 +17,7 @@
 - [Quick Start](#quick-start)
 - [VS Code Integration](#vs-code-integration)
 - [Configuration](#configuration)
+- [Benchmarking (LiveBench)](#benchmarking-livebench)
 - [Why LCP over alternatives?](#why-lcp-over-alternatives)
 - [Architecture](#architecture)
 - [Dependencies](#dependencies)
@@ -72,7 +73,7 @@ Clients (agents, VS Code, scripts, curl)
 - Circuit breaker with configurable thresholds — degraded providers are probed, dead providers are skipped
 - Profile-based routing by URL path: `/l2`, `/l1`, `/career`, `/coder`, `/cron`
 - SSE streaming passthrough — real-time token delivery, no buffering
-- *(Planned)* Harness-style dynamic routing — auto-route to flash (cheap) or pro (capable) based on request complexity
+- Benchmark-driven capability routing — grade each model with LiveBench, then route each request by the model's measured task scores ([benchmarking](#benchmarking-livebench))
 
 ### Tool permission control
 - Strip dangerous tools per profile — an L1 triage agent cannot `terminal`, a cron profile strips everything
@@ -230,6 +231,85 @@ pricing:
     output: 0.87
 ```
 
+## Benchmarking (LiveBench)
+
+LCP's dynamic router is driven by **benchmark grades, not vibes**. Each model's
+capability scores (`model_capabilities`) are produced exclusively by running
+[LiveBench](https://livebench.ai/) against the **raw provider model** — never
+through LCP's own routing, which would contaminate the very scores the router
+relies on.
+
+Benchmarking is an **opt-in plugin**: the base image stays lean, and the runner
+simply reports "not installed" until you enable it.
+
+### How it works
+
+1. You queue a run for a provider model (e.g. `deepseek` / `deepseek-v4-pro`) from
+   the Models page or the API. LCP resolves the provider's `api_base` and
+   credential-store API key, then runs LiveBench as a subprocess **directly
+   against the provider**.
+2. LiveBench generates answers and ground-truth judgments per category, and LCP
+   parses `all_groups.csv` into per-category 0–100 scores.
+3. Scores are upserted into `model_capabilities` with `source="lcp_benchmark"`,
+   keyed to the model's registry `benchmark_key`. The router's task classifier
+   then uses those graded scores (plus a cost bias) to pick the best model for
+   each request.
+
+Only the six non-Docker categories are run; `agentic_coding` is deliberately
+excluded because it requires Docker.
+
+| LiveBench category | LCP task type |
+|---|---|
+| `reasoning` | `reasoning_chain` |
+| `coding` | `code_generation` |
+| `math` | `reasoning_chain` |
+| `data_analysis` | `research_deep` |
+| `language` | `casual_chat` |
+| `instruction_following` | `planning` |
+
+### Installation
+
+**Option A — bake it into the image (recommended for Docker):**
+
+```bash
+docker compose build --build-arg WITH_BENCH=1 lcp
+```
+
+This clones LiveBench into `/opt/livebench` and installs the core package plus
+the `code_runner/requirements_eval.txt` extras. Those extras (TensorFlow, scipy,
+etc., ~GBs) are only needed to **grade the `coding` category**, which executes
+generated code. Core-only covers the other five categories.
+
+**Option B — point LCP at a local checkout:**
+
+```bash
+git clone --depth 1 https://github.com/LiveBench/LiveBench.git /opt/livebench
+cd /opt/livebench && pip install -e .
+# optional, only for the `coding` category:
+pip install -r code_runner/requirements_eval.txt
+```
+
+Then tell LCP where it lives:
+
+```bash
+export LCP_LIVEBENCH_DIR=/opt/livebench
+```
+
+LCP also falls back to a `run_livebench.py` on `PATH`.
+
+### Runtime status
+
+The runner degrades gracefully. `GET /api/models/benchmark/status` reports:
+
+- `available` — whether a LiveBench checkout is reachable
+- `coding_supported` — whether the `coding` category can be graded
+  (probes for the heavyweight `code_runner` deps)
+- `reason` — a human-readable explanation when unavailable
+
+The Models page uses this status to show a clear "not installed" notice instead
+of a Run button, and to flag when `coding` is unsupported — while still listing
+past runs.
+
 ## Why LCP over alternatives?
 
 | | LCP | LiteLLM | llmgateway |
@@ -333,6 +413,10 @@ Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 | `GET /api/daily-costs` | JSON cost data |
 | `POST /api/keys` | Create API key |
 | `GET /api/keys` | List API keys |
+| `GET /api/models/benchmark/status` | Whether the benchmark runner is installed |
+| `GET /api/models/benchmark` | List benchmark runs |
+| `POST /api/models/benchmark` | Queue a LiveBench run (direct-to-provider) |
+| `GET /api/models/benchmark/{id}` | Benchmark run detail |
 
 See [PLAN.md](PLAN.md) for the full API reference.
 
@@ -354,6 +438,8 @@ See [PLAN.md](PLAN.md) for the full API reference.
 - Provider model discovery — auto-detect models from `/v1/models` with metadata
 - tiktoken integration — exact BPE token counts, pre-downloaded at build time
 - Startup observability — per-step timing logs in `docker logs`
+- Benchmark runner — opt-in LiveBench integration; queue runs against provider models and parse per-category scores into `model_capabilities`
+- Capability router — task classifier routes by benchmark-graded scores with a cost bias
 
 ### Scope boundary
 - **Credit limits** — already covered by per-key budgets (spend caps with hard-stop)
@@ -364,7 +450,6 @@ See [PLAN.md](PLAN.md) for the full API reference.
 ### Planned
 - Permission matrix — declarative `allow` / `block` / `blocked_globally` rules,
   replaces tool stripping ([spec](features/permission-plugin.md))
-- Harness-style dynamic routing — auto-route flash vs pro based on request complexity
 - Logging enhancements — structured request telemetry, token-usage logging
   ([spec](features/logging-enhancements.md))
 - Provider health dashboard — richer uptime/health surfacing
