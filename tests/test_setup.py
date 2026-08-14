@@ -1,5 +1,6 @@
 """Tests for the first-run setup wizard (src.api.setup)."""
 import os
+import subprocess
 import tempfile
 from unittest.mock import MagicMock, patch
 
@@ -185,4 +186,31 @@ class TestLivebenchInstall:
         last = setup_mod.bench_last()
         assert last is not None and last["status"] == "done"
         assert last["progress"] == 100.0
+        monkeypatch.setattr(setup_mod, "_bench_last", None)
+
+    def test_eval_extras_failure_is_non_fatal(self, temp_db, monkeypatch):
+        """Eval extras (TensorFlow) failing must still mark install done."""
+        calls = []
+
+        def fake_stream(cmd, cwd=None, start=0, end=0, status_msg=""):
+            calls.append(cmd)
+            if any("requirements_eval.txt" in c for c in cmd):
+                raise subprocess.CalledProcessError(1, cmd)
+
+        monkeypatch.setattr("shutil.rmtree", lambda *a, **k: None)
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/git")
+        monkeypatch.setattr("os.path.isdir", lambda _: False)
+        monkeypatch.setattr(setup_mod, "_stream", fake_stream)
+        monkeypatch.setattr(setup_mod.os, "environ", {})
+        # Simulate an in-flight install so _bench_update/_bench_finish have state.
+        monkeypatch.setattr(setup_mod, "_bench_install", {
+            "status": "running", "progress": 0.0, "detail": "", "log": [],
+        })
+        setup_mod._run_livebench_install(temp_db)
+
+        assert calls[0] == ["git", "clone", "--depth", "1", setup_mod.LIVEBENCH_REPO, setup_mod.LIVEBENCH_DIR]
+        last = setup_mod.bench_last()
+        assert last is not None and last["status"] == "done"
+        assert "coding" in last["detail"]
+        assert setup_mod.load_state(temp_db)["module:livebench"]["status"] == "done"
         monkeypatch.setattr(setup_mod, "_bench_last", None)

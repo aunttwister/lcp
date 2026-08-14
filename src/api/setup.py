@@ -82,6 +82,12 @@ def benchmark_step() -> dict:
     from .benchmark import benchmark_status
 
     status = benchmark_status()
+    # Expose an in-flight install, or the most recent terminal *failure* so
+    # the UI can keep showing what went wrong. A successful terminal state is
+    # represented by ``installed=True`` and needs no ``installing`` payload.
+    installing = _bench_install
+    if installing is None and _bench_last is not None and _bench_last.get("status") == "failed":
+        installing = _bench_last
     return {
         "kind": "module",
         "name": "livebench",
@@ -93,7 +99,7 @@ def benchmark_step() -> dict:
         "required": False,
         "installed": bool(status.get("available")),
         "status": status,
-        "installing": _bench_install,
+        "installing": installing,
     }
 
 
@@ -406,7 +412,13 @@ def start_livebench_install(engine) -> dict:
 
 
 def _run_livebench_install(engine) -> None:
-    """Background install: clone LiveBench + pip install core + eval extras."""
+    """Background install: clone LiveBench + pip install core + eval extras.
+
+    The ``code_runner/requirements_eval.txt`` extras (TensorFlow + scientific
+    stack) are only needed to grade the ``coding`` category. When they fail
+    (e.g. no compatible wheel for the Python version) the install still
+    succeeds with a warning — the other five categories keep working.
+    """
     try:
         if os.path.isdir(LIVEBENCH_DIR):
             shutil.rmtree(LIVEBENCH_DIR, ignore_errors=True)
@@ -419,20 +431,48 @@ def _run_livebench_install(engine) -> None:
             [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-e", "."],
             cwd=LIVEBENCH_DIR, start=25.0, end=60.0, status_msg="Installing LiveBench core…",
         )
-        _stream(
-            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-r", LIVEBENCH_EVAL_REQUIREMENTS],
-            cwd=LIVEBENCH_DIR, start=60.0, end=100.0,
-            status_msg="Installing eval extras (TensorFlow + scientific stack)…",
-        )
+
+        coding_note = None
+        try:
+            _stream(
+                [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-r", LIVEBENCH_EVAL_REQUIREMENTS],
+                cwd=LIVEBENCH_DIR, start=60.0, end=100.0,
+                status_msg="Installing eval extras (TensorFlow + scientific stack)…",
+            )
+        except subprocess.CalledProcessError as exc:
+            # Non-fatal: grading the `coding` category will simply be disabled.
+            _bench_update(
+                f"Eval extras failed ({exc}) — LiveBench works, but the "
+                f"'coding' category will be unavailable."
+            )
+            coding_note = "eval extras not installed; coding category unavailable"
+            _bench_update(None, progress=100.0)
 
         # Make the running process see the checkout (benchmark.livebench_dir()
         # reads LCP_LIVEBENCH_DIR first).
         os.environ["LCP_LIVEBENCH_DIR"] = LIVEBENCH_DIR
         set_state(engine, "module:livebench", "done")
-        _bench_finish("done", "LiveBench installed.")
+        if coding_note:
+            _bench_finish("done", f"LiveBench installed — {coding_note}.")
+        else:
+            _bench_finish("done", "LiveBench installed.")
     except subprocess.CalledProcessError as exc:
-        _bench_finish("failed", f"Install failed: {exc}")
+        _bench_finish("failed", _tail_detail(f"Install failed: {exc}"))
     except FileNotFoundError as exc:
         _bench_finish("failed", f"Missing tool: {exc}")
     except Exception as exc:  # noqa: BLE001 — background thread must not die
-        _bench_finish("failed", f"Install failed: {exc}")
+        _bench_finish("failed", _tail_detail(f"Install failed: {exc}"))
+
+
+def _tail_detail(fallback: str, lines: int = 3) -> str:
+    """Return *fallback* plus the last few log lines (the real pip error)."""
+    global _bench_install
+    if _bench_install is None:
+        return fallback
+    log = _bench_install.get("log") or []
+    if not log:
+        return fallback
+    tail = "\n".join(log[-lines:]).strip()
+    if not tail:
+        return fallback
+    return f"{fallback}\n{tail[-400:]}"
