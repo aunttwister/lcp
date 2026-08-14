@@ -912,7 +912,7 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 .mli-meta { font-size: 0.625rem; color: hsl(var(--muted-foreground)); }
 .mli-best { color: hsl(var(--green-fg)); }
-.mli-unreg { color: hsl(var(--amber-fg)); margin-left: 0.375rem; }
+.mli-prov { color: hsl(var(--muted-foreground)); margin-left: 0.375rem; }
 
 .models-detail { min-width: 0; }
 .model-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; margin-bottom: 1rem; }

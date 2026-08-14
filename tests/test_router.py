@@ -122,18 +122,3 @@ def test_registry_aliases_are_unique():
             key = alias.lower()
             assert key not in seen, f"alias {alias!r} duplicated in registry"
             seen[key] = entry["logical_name"]
-
-def test_registry_benchmark_keys_exist_in_livebench():
-    # The benchmark snapshot keys must match what the seeder writes.
-    # Models not in LiveBench (e.g. claude-sonnet-5) legitimately fall back
-    # to default capability — only validate keys that ARE meant to be seeded.
-    from src.api.seed_capabilities import LIVEBENCH_DATA
-    for entry in DEFAULT_MODEL_REGISTRY:
-        benchmark = entry["benchmark_key"]
-        if benchmark in LIVEBENCH_DATA:
-            continue
-        # Dated variant: base name must be in LIVEBENCH_DATA (e.g. -0731)
-        base, sep, suffix = benchmark.rpartition("-")
-        if sep and suffix.isdigit() and len(suffix) == 4:
-            assert base in LIVEBENCH_DATA, f"benchmark {benchmark!r} not in seed data"
-        # Otherwise it's intentionally not in LiveBench — nothing to check.

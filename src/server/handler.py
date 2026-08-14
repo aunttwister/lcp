@@ -380,9 +380,6 @@ class LCPHandler(
         elif self.path == "/api/circuit-breaker/reset":
             self._serve_circuit_breaker_reset()
             return
-        elif self.path == "/api/models/capability/seed":
-            self._serve_capability_seed_api()
-            return
         elif self.path == "/api/models/registry":
             self._serve_registry_upsert_api()
             return

@@ -3,10 +3,9 @@
 {% block content %}
 <h2>Models</h2>
 <p class="subtitle">
-  One page per model: its provider aliases, the benchmark snapshot it's scored against,
-  its per-task capability scores, and its benchmark history — all in one place.
-  Scores come from <a href="https://livebench.ai/" target="_blank" rel="noopener">LiveBench</a>
-  and <a href="https://lmarena.ai/" target="_blank" rel="noopener">Chatbot Arena</a>.
+  Benchmark any provider model with <a href="https://livebench.ai/" target="_blank" rel="noopener">LiveBench</a>
+  (run direct-to-provider, no Docker), then grade it into the capability matrix
+  that drives dynamic routing. Scores come only from benchmarks you run here.
 </p>
 
 <div class="models-layout">
@@ -14,13 +13,9 @@
   <div class="models-sidebar">
     <div class="models-sidebar-head">
       <input type="text" id="modelFilter" placeholder="Filter models…" class="capability-filter" style="width:100%">
-      <button id="addRegistryBtn" class="btn btn-outline" title="Register a new model">+ New model</button>
+      <button id="addRegistryBtn" class="btn btn-outline" title="Register a model alias">+ Register model</button>
     </div>
     <div id="modelList" class="model-list"></div>
-    <div class="models-sidebar-foot">
-      <button id="seedLivebenchBtn" class="btn btn-outline" title="Refresh capability scores from the canonical LiveBench HF dataset">Refresh from LiveBench</button>
-      <span id="seedStatus" class="seed-status"></span>
-    </div>
   </div>
 
   <!-- ── Right: selected model detail ─────────────────────────────────── -->
@@ -37,11 +32,8 @@ const API = {
     const r = await fetch('/api/models/capability');
     return r.json();
   },
-  async seed(source) {
-    const r = await fetch('/api/models/capability/seed', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({source})
-    });
+  async providers() {
+    const r = await fetch('/api/providers');
     return r.json();
   },
   async registry() {
@@ -73,10 +65,22 @@ const API = {
 };
 
 // ── State ──────────────────────────────────────────────────────────────────
-let STATE = { registry: {}, matrix: {}, runs: [], selected: null, filter: '' };
+let STATE = { registry: {}, providers: {}, matrix: {}, runs: [], selected: null, filter: '' };
+
+// model → list of providers that expose it (from gateway.yaml providers.models)
+function providerModels() {
+  const map = {};
+  for (const [name, cfg] of Object.entries(STATE.providers || {})) {
+    for (const m of (cfg.models || [])) {
+      (map[m] = map[m] || []).push(name);
+    }
+  }
+  return map;
+}
 
 function allModels() {
   const names = new Set(Object.keys(STATE.registry));
+  for (const m of Object.keys(providerModels())) names.add(m);
   for (const models of Object.values(STATE.matrix.tasks || {})) {
     for (const m of Object.keys(models)) names.add(m);
   }
@@ -84,8 +88,9 @@ function allModels() {
 }
 
 async function loadAll() {
-  const [matrix, reg, runs] = await Promise.all([API.matrix(), API.registry(), API.benchmarks()]);
+  const [matrix, providers, reg, runs] = await Promise.all([API.matrix(), API.providers(), API.registry(), API.benchmarks()]);
   STATE.matrix = matrix;
+  STATE.providers = providers.providers || {};
   STATE.runs = runs.runs || [];
   const registryMap = {};
   for (const e of (reg.registry || [])) registryMap[e.logical_name] = e;
@@ -109,18 +114,19 @@ function bestScore(model) {
 
 function renderModelList() {
   const container = document.getElementById('modelList');
+  const pmap = providerModels();
   const models = allModels().filter(m => m.toLowerCase().includes(STATE.filter.toLowerCase()));
   if (!models.length) {
-    container.innerHTML = '<div class="empty">No models. Click "+ New model" to register one.</div>';
+    container.innerHTML = '<div class="empty">No provider models found.</div>';
     return;
   }
   container.innerHTML = models.map(m => {
     const active = m === STATE.selected ? 'active' : '';
-    const hasRegistry = !!STATE.registry[m];
     const best = bestScore(m);
+    const provs = pmap[m] || [];
     return `<div class="model-list-item ${active}" data-model="${m}">
       <div class="mli-name" title="${m}">${m}</div>
-      <div class="mli-meta">${best ? '<span class="mli-best">' + best + '</span>' : ''}${hasRegistry ? '' : '<span class="mli-unreg">unregistered</span>'}</div>
+      <div class="mli-meta">${best ? '<span class="mli-best">' + best + '</span>' : ''}${provs.length ? '<span class="mli-prov">' + provs.join(', ') + '</span>' : ''}</div>
     </div>`;
   }).join('');
   container.querySelectorAll('.model-list-item').forEach(el => {
@@ -140,6 +146,8 @@ function renderDetail(model) {
   const aliases = reg ? reg.aliases : [];
   const benchmarkKey = reg ? reg.benchmark_key : model;
   const updatedAt = reg ? (reg.updated_at || '').replace('T', ' ').slice(0, 19) : null;
+  const provs = providerModels()[model] || [];
+  const defaultProvider = provs[0] || '';
 
   const scores = [];
   for (const [task, models] of Object.entries(STATE.matrix.tasks || {})) {
@@ -186,14 +194,14 @@ function renderDetail(model) {
             <span class="score-pct">${(s.score * 100).toFixed(1)}%</span>
             <span class="score-src" title="source: ${s.source}, category: ${s.category}">${s.source}</span>
           </div>`).join('')}
-      </div>` : '<p class="empty">No scores yet. Run a benchmark or re-seed.</p>'}
+      </div>` : '<p class="empty">No scores yet — run a benchmark below.</p>'}
     </div>
 
     <div class="model-section">
       <h4>Benchmark</h4>
       <div class="bench-run-row">
-        <input type="text" id="benchProvider" placeholder="provider (e.g. deepseek)" class="capability-filter" value="deepseek">
-        <button class="btn btn-outline" id="runBenchBtn">Run full benchmark</button>
+        <input type="text" id="benchProvider" placeholder="provider (e.g. deepseek)" class="capability-filter" value="${defaultProvider}">
+        <button class="btn btn-outline" id="runBenchBtn">Run benchmark</button>
         <span id="benchStatus" class="seed-status"></span>
       </div>
       <div class="table-wrap" style="margin-top:0.75rem">
@@ -283,26 +291,6 @@ async function runBenchmark(model) {
   btn.disabled = false;
 }
 
-// ── Seed ────────────────────────────────────────────────────────────────────
-
-async function seedLivebench() {
-  const btn = document.getElementById('seedLivebenchBtn');
-  const status = document.getElementById('seedStatus');
-  btn.disabled = true;
-  status.textContent = 'Refreshing from LiveBench (HF)…';
-  try {
-    const r = await API.seed('livebench-hf');
-    if (r.error) {
-      status.textContent = 'Error: ' + r.error;
-    } else {
-      const n = r.seeded ?? r.count ?? 0;
-      status.textContent = `Done: ${n} rows`;
-      loadAll();
-    }
-  } catch (e) { status.textContent = 'Error: ' + e.message; }
-  btn.disabled = false;
-}
-
 // ── Wiring ──────────────────────────────────────────────────────────────────
 
 document.getElementById('modelFilter').addEventListener('input', function() {
@@ -310,7 +298,6 @@ document.getElementById('modelFilter').addEventListener('input', function() {
   renderModelList();
 });
 document.getElementById('addRegistryBtn').addEventListener('click', addRegistry);
-document.getElementById('seedLivebenchBtn').addEventListener('click', seedLivebench);
 
 loadAll();
 </script>

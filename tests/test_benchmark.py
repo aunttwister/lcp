@@ -8,7 +8,6 @@ from src.api.benchmark import (
     build_livebench_commands,
     parse_livebench_csv,
     livebench_dir,
-    _check_docker,
     LIVEBENCH_CATEGORIES,
 )
 
@@ -28,14 +27,18 @@ def test_build_commands_full_suite(tmp_path):
         categories=None,
         livebench_path=str(tmp_path),
     )
-    # Full suite → one scope, two commands (run + show)
-    assert len(commands) == 2
+    # categories=None → one scope per non-Docker category (2 cmds each).
+    n_categories = len(LIVEBENCH_CATEGORIES)
+    assert len(commands) == n_categories * 2
     run_cmd = commands[0]
     assert "run_livebench.py" in run_cmd[1]
     assert "--model" in run_cmd and "deepseek-v4-pro" in run_cmd
     assert "--api-base" in run_cmd and "https://api.deepseek.com/v1" in run_cmd
     assert "--api-key" in run_cmd and "sk-test" in run_cmd
-    assert "live_bench" in run_cmd  # full suite scope
+    # No bare live_bench scope (that would include Docker agentic coding).
+    scopes = [c for cmd in commands for c in cmd if c.startswith("live_bench")]
+    assert all(s.startswith("live_bench/") for s in scopes)
+    assert "live_bench/agentic_coding" not in scopes
 
 
 def test_build_commands_subset(tmp_path):
@@ -63,6 +66,11 @@ def test_build_commands_missing_checkout_raises(monkeypatch):
             model="m", api_base="u", api_key="k",
             categories=None, livebench_path=None,
         )
+
+
+def test_livebench_categories_exclude_agentic():
+    assert "agentic_coding" not in LIVEBENCH_CATEGORIES
+    assert len(LIVEBENCH_CATEGORIES) == 6
 
 
 # ── CSV parsing ─────────────────────────────────────────────────────────────
@@ -99,30 +107,6 @@ def test_parse_csv_empty():
     assert parse_livebench_csv("", "m") == {}
 
 
-# ── Docker check ────────────────────────────────────────────────────────────
-
-def test_docker_check_no_agentic_no_docker(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _: None)
-    _check_docker(["coding", "math"])  # should not raise
-
-
-def test_docker_check_agentic_requires_docker(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _: None)
-    with pytest.raises(RuntimeError, match="requires Docker"):
-        _check_docker(["agentic_coding"])
-
-
-def test_docker_check_full_suite_requires_docker(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _: None)
-    with pytest.raises(RuntimeError, match="requires Docker"):
-        _check_docker(None)  # full suite includes agentic_coding
-
-
-def test_docker_check_docker_present(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/docker")
-    _check_docker(["agentic_coding"])  # should not raise
-
-
 # ── Queue + run flow (with mocked subprocess) ───────────────────────────────
 
 def test_queue_and_run_flow(tmp_path, monkeypatch):
@@ -149,9 +133,6 @@ def test_queue_and_run_flow(tmp_path, monkeypatch):
         def for_provider(self, provider):
             return None
     monkeypatch.setattr("src.api.cost_plugins.get_registry", lambda: FakeRegistry())
-
-    # Docker present so agentic check passes.
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/docker")
 
     # Mock subprocess: first call (run) returns 0, second (show) writes CSV.
     import subprocess as sp

@@ -32,15 +32,14 @@ from .logging_config import get_logger
 
 logger = get_logger("lcp.benchmark")
 
-# LiveBench categories in leaderboard order. These map 1:1 to columns in
+# LiveBench categories LCP benchmarks. These map 1:1 to columns in
 # all_groups.csv and to LCP task types via seed_capabilities.LB_TO_LCP.
+# ``agentic_coding`` is intentionally excluded — it requires Docker and is not
+# run (per project decision to skip Docker tests).
 LIVEBENCH_CATEGORIES = [
-    "reasoning", "coding", "agentic_coding", "math",
+    "reasoning", "coding", "math",
     "data_analysis", "language", "instruction_following",
 ]
-
-# Categories that require Docker (agentic coding spins up containers).
-DOCKER_CATEGORIES = {"agentic_coding"}
 
 # LiveBench question release to evaluate. The latest public release is
 # 2024-11-25; the website shows 2026-06-25 but not all questions are public.
@@ -78,8 +77,10 @@ def build_livebench_commands(
       - ``run_livebench.py`` — generates answers + ground-truth judgments
       - ``show_livebench_result.py`` — writes ``all_groups.csv`` for parsing
 
-    ``categories=None`` (or empty) benchmarks the full suite (``live_bench``);
-    otherwise one scope per category (``live_bench/<category>``).
+    ``categories=None`` (or empty) benchmarks every non-Docker category
+    (``LIVEBENCH_CATEGORIES``); otherwise one scope per requested category
+    (``live_bench/<category>``). The full ``live_bench`` scope is never used
+    because it would pull in Docker-requiring agentic coding.
     """
     path = livebench_path or livebench_dir()
     if not path:
@@ -91,11 +92,8 @@ def build_livebench_commands(
     runner = os.path.join(path, "run_livebench.py")
     shower = os.path.join(path, "show_livebench_result.py")
 
-    scopes: list[str]
-    if categories:
-        scopes = [f"live_bench/{c}" for c in categories]
-    else:
-        scopes = ["live_bench"]
+    chosen = categories or LIVEBENCH_CATEGORIES
+    scopes = [f"live_bench/{c}" for c in chosen]
 
     commands: list[list[str]] = []
     for scope in scopes:
@@ -318,7 +316,6 @@ def _execute_run(run_id: int, engine, config) -> None:
             )
 
         api_model, api_base, api_key = _resolve_provider_target(engine, config, target)
-        _check_docker(categories)
 
         commands = build_livebench_commands(
             model=api_model,
@@ -373,16 +370,6 @@ def _execute_run(run_id: int, engine, config) -> None:
     except Exception as exc:  # noqa: BLE001 — record any failure, keep worker alive
         logger.error("benchmark_failed", run_id=run_id, error=str(exc))
         _mark_failed(run_id, engine, str(exc))
-
-
-def _check_docker(categories: Optional[list[str]]) -> None:
-    """Fail loudly when Docker is required but the daemon is unavailable."""
-    needed = set(categories) if categories else set(DOCKER_CATEGORIES)
-    if DOCKER_CATEGORIES & needed and shutil.which("docker") is None:
-        raise RuntimeError(
-            "agentic_coding requires Docker, but 'docker' was not found on PATH. "
-            "Install Docker or exclude the agentic_coding category."
-        )
 
 
 def _upsert_scores(engine, target: dict, category_scores: dict[str, float]) -> None:
