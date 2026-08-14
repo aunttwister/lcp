@@ -3,6 +3,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# ── git — required by the in-UI runtime install of LiveBench ────────────────
+# (the "benchmark plugin" clones its checkout at runtime when not baked in)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # ── Dependencies (layer-cached: only reinstalls when pyproject.toml changes) ──
 COPY pyproject.toml .
 COPY src/__init__.py ./src/__init__.py
@@ -25,15 +31,10 @@ RUN mkdir -p /app/data/tiktoken_cache && \
 # TensorFlow + the scientific stack). Core-only covers the other 5.
 ARG WITH_BENCH=0
 RUN if [ "$WITH_BENCH" = "1" ]; then \
-        apt-get update \
-        && apt-get install -y --no-install-recommends git ca-certificates \
-        && git clone --depth 1 https://github.com/LiveBench/LiveBench.git /opt/livebench \
+        git clone --depth 1 https://github.com/LiveBench/LiveBench.git /opt/livebench \
         && cd /opt/livebench \
         && pip install --no-cache-dir -e . \
-        && pip install --no-cache-dir -r code_runner/requirements_eval.txt \
-        && apt-get purge -y git \
-        && apt-get autoremove -y \
-        && rm -rf /var/lib/apt/lists/* ; \
+        && pip install --no-cache-dir -r code_runner/requirements_eval.txt ; \
     fi
 ENV LCP_LIVEBENCH_DIR=/opt/livebench
 

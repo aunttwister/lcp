@@ -131,10 +131,30 @@ class TestInstallProvider:
 class TestLivebenchInstall:
     def test_bench_progress_idle_by_default(self):
         assert setup_mod.bench_progress() is None
+        assert setup_mod.bench_last() is None
 
     def test_start_returns_state_and_resets(self, temp_db, monkeypatch):
         monkeypatch.setattr(setup_mod, "_run_livebench_install", lambda engine: None)
+        monkeypatch.setattr(setup_mod.shutil, "which", lambda _: "/usr/bin/git")
         state = setup_mod.start_livebench_install(temp_db)
         assert state["status"] in ("queued", "running")
-        # Reset the module global so other tests are unaffected.
+        assert "log" in state
+        # Reset the module globals so other tests are unaffected.
         monkeypatch.setattr(setup_mod, "_bench_install", None)
+        monkeypatch.setattr(setup_mod, "_bench_last", None)
+
+    def test_start_requires_git(self, temp_db, monkeypatch):
+        monkeypatch.setattr(setup_mod.shutil, "which", lambda _: None)
+        with pytest.raises(setup_mod.SetupError, match="git is not installed"):
+            setup_mod.start_livebench_install(temp_db)
+
+    def test_finish_moves_state_to_last(self, monkeypatch):
+        monkeypatch.setattr(setup_mod, "_bench_install", {
+            "status": "running", "progress": 42.0, "detail": "x", "log": ["a"],
+        })
+        setup_mod._bench_finish("done", "LiveBench installed.")
+        assert setup_mod.bench_progress() is None
+        last = setup_mod.bench_last()
+        assert last is not None and last["status"] == "done"
+        assert last["progress"] == 100.0
+        monkeypatch.setattr(setup_mod, "_bench_last", None)

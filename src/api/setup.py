@@ -23,7 +23,9 @@ handshake.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import sys
 import threading
 from datetime import datetime, timezone
 from typing import Optional
@@ -33,7 +35,7 @@ from .logging_config import get_logger
 logger = get_logger("lcp.setup")
 
 LIVEBENCH_REPO = "https://github.com/LiveBench/LiveBench.git"
-LIVEBENCH_DIR = "/opt/livebench"
+LIVEBENCH_DIR = os.environ.get("LCP_LIVEBENCH_DIR", "/opt/livebench").strip() or "/opt/livebench"
 LIVEBENCH_EVAL_REQUIREMENTS = "code_runner/requirements_eval.txt"
 
 # Env knob that disables the HTTP redirect gate (used by the test suite).
@@ -91,7 +93,7 @@ def benchmark_step() -> dict:
         "required": False,
         "installed": bool(status.get("available")),
         "status": status,
-        "installing": _bench_install is not None,
+        "installing": _bench_install,
     }
 
 
@@ -245,18 +247,70 @@ def install_provider(engine, config, name: str, body: dict) -> dict:
 # ── LiveBench runtime install (background + progress) ───────────────────────
 
 _bench_lock = threading.Lock()
-_bench_install: Optional[dict] = None  # {status, progress, detail, started_at, ...}
+_bench_install: Optional[dict] = None  # in-flight {status, progress, detail, log, ...}
+_bench_last: Optional[dict] = None     # terminal result (done/failed) for the UI
+
+_LOG_MAX_LINES = 300
 
 
-def _bench_log(msg: str, progress: float | None = None, status: str | None = None) -> None:
+def _bench_update(msg: Optional[str], progress: Optional[float] = None,
+                  status: Optional[str] = None) -> None:
+    """Mutate the shared install state (no-op when nothing is in flight)."""
     global _bench_install
+    if _bench_install is None:
+        return
+    if status is not None:
+        _bench_install["status"] = status
+    if progress is not None:
+        _bench_install["progress"] = round(min(max(progress, 0.0), 100.0), 1)
+    if msg is not None:
+        clean = (msg.rstrip("\n") if isinstance(msg, str) else str(msg)).strip("\r")
+        if clean:
+            _bench_install["detail"] = clean[-200:]
+            log = _bench_install.setdefault("log", [])
+            log.append(clean)
+            if len(log) > _LOG_MAX_LINES:
+                del log[: len(log) - _LOG_MAX_LINES]
+    _bench_install["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def _bench_finish(status: str, detail: str) -> None:
+    """Mark the install terminal and move its state into ``_bench_last``."""
+    global _bench_install, _bench_last
+    _bench_update(detail, status=status)
+    if status == "done":
+        _bench_update(None, progress=100.0)
     if _bench_install is not None:
-        if status is not None:
-            _bench_install["status"] = status
-        if progress is not None:
-            _bench_install["progress"] = round(progress, 1)
-        _bench_install["detail"] = msg
-        _bench_install["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _bench_install["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _bench_last = dict(_bench_install)
+    _bench_install = None
+
+
+def _stream(cmd: list[str], cwd: Optional[str], start: float, end: float,
+            status_msg: str) -> None:
+    """Run a subprocess streaming its output into the shared install log.
+
+    Progress eases from ``start`` to ``end`` as output lines arrive.
+    Raises ``subprocess.CalledProcessError`` on a non-zero exit code.
+    """
+    _bench_update(status_msg, progress=start, status="running")
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, errors="replace",
+    )
+    seen = 0
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        seen += 1
+        _bench_update(line)
+        if seen % 3 == 0:
+            # Ease toward the phase ceiling; the final wait pins it exactly.
+            frac = min(0.9, seen / 90.0)
+            _bench_update(None, progress=start + (end - start) * frac)
+    rc = proc.wait()
+    _bench_update(None, progress=end)
+    if rc != 0:
+        raise subprocess.CalledProcessError(rc, cmd)
 
 
 def bench_progress() -> Optional[dict]:
@@ -264,16 +318,30 @@ def bench_progress() -> Optional[dict]:
     return _bench_install
 
 
+def bench_last() -> Optional[dict]:
+    """Return the most recent terminal install result (or None)."""
+    return _bench_last
+
+
 def start_livebench_install(engine) -> dict:
     """Start (or join) the LiveBench runtime install and return its state."""
-    global _bench_install
+    global _bench_install, _bench_last
+
+    if shutil.which("git") is None:
+        raise SetupError(
+            "git is not installed in this environment — rebuild the image with "
+            "WITH_BENCH=1, or install git in the container."
+        )
+
     with _bench_lock:
-        if _bench_install is not None and _bench_install.get("status") in ("running", "done", "failed"):
+        if _bench_install is not None and _bench_install.get("status") in ("queued", "running"):
             return _bench_install
+        _bench_last = None
         _bench_install = {
             "status": "queued",
             "progress": 0.0,
             "detail": "Waiting to start…",
+            "log": [],
             "started_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -286,38 +354,31 @@ def start_livebench_install(engine) -> dict:
 def _run_livebench_install(engine) -> None:
     """Background install: clone LiveBench + pip install core + eval extras."""
     try:
-        _bench_log("Cloning LiveBench…", 5.0, "running")
-        subprocess.run(
+        if os.path.isdir(LIVEBENCH_DIR):
+            shutil.rmtree(LIVEBENCH_DIR, ignore_errors=True)
+
+        _stream(
             ["git", "clone", "--depth", "1", LIVEBENCH_REPO, LIVEBENCH_DIR],
-            check=True,
-            capture_output=True,
-            text=True,
+            cwd=None, start=2.0, end=25.0, status_msg="Cloning LiveBench…",
         )
-
-        _bench_log("Installing LiveBench core…", 30.0)
-        subprocess.run(
-            ["pip", "install", "--no-cache-dir", "-e", "."],
-            cwd=LIVEBENCH_DIR,
-            check=True,
-            capture_output=True,
-            text=True,
+        _stream(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-e", "."],
+            cwd=LIVEBENCH_DIR, start=25.0, end=60.0, status_msg="Installing LiveBench core…",
         )
-
-        _bench_log("Installing eval extras (TensorFlow + scientific stack)…", 65.0)
-        subprocess.run(
-            ["pip", "install", "--no-cache-dir", "-r", LIVEBENCH_EVAL_REQUIREMENTS],
-            cwd=LIVEBENCH_DIR,
-            check=True,
-            capture_output=True,
-            text=True,
+        _stream(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-r", LIVEBENCH_EVAL_REQUIREMENTS],
+            cwd=LIVEBENCH_DIR, start=60.0, end=100.0,
+            status_msg="Installing eval extras (TensorFlow + scientific stack)…",
         )
 
         # Make the running process see the checkout (benchmark.livebench_dir()
         # reads LCP_LIVEBENCH_DIR first).
         os.environ["LCP_LIVEBENCH_DIR"] = LIVEBENCH_DIR
         set_state(engine, "module:livebench", "done")
-        _bench_log("LiveBench installed.", 100.0, "done")
+        _bench_finish("done", "LiveBench installed.")
     except subprocess.CalledProcessError as exc:
-        _bench_log(f"Install failed: {exc.stderr[-400:] or exc}", None, "failed")
+        _bench_finish("failed", f"Install failed: {exc}")
+    except FileNotFoundError as exc:
+        _bench_finish("failed", f"Missing tool: {exc}")
     except Exception as exc:  # noqa: BLE001 — background thread must not die
-        _bench_log(f"Install failed: {exc}", None, "failed")
+        _bench_finish("failed", f"Install failed: {exc}")

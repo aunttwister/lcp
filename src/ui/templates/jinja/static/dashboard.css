@@ -982,6 +982,19 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .setup-form-row label { display: block; font-size: 0.75rem; font-weight: 600; margin-bottom: 0.3rem; }
 .setup-form-row input { width: 100%; }
 
+.setup-log {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.6875rem; line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--card-border));
+  border-radius: var(--radius);
+  padding: 0.625rem 0.75rem;
+  max-height: 260px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-all;
+  margin: 0;
+}
+
 @media (max-width: 768px) {
   .setup-step { flex-direction: column; }
   .setup-step-actions { width: 100%; justify-content: flex-start; }

@@ -2245,8 +2245,9 @@ class SetupEndpoints:
         from ..api import setup as setup_mod
 
         progress = setup_mod.bench_progress()
+        last = setup_mod.bench_last()
         self._send_json({
-            "progress": progress or {"status": "idle", "progress": 0.0},
+            "progress": progress or last or {"status": "idle", "progress": 0.0},
             "installed": bool(setup_mod.benchmark_step()["installed"]),
         })
 

@@ -29,6 +29,15 @@
     <div class="empty">Loading…</div>
   </div>
 
+  <!-- Live install log (visible while LiveBench installs) -->
+  <div class="model-section" id="setupLogPanel" style="display:none;margin-top:1rem">
+    <h4 style="display:flex;justify-content:space-between;align-items:center">
+      Install log
+      <button class="btn btn-outline btn-sm" onclick="document.getElementById('setupLogPanel').style.display='none'">Hide</button>
+    </h4>
+    <pre id="setupLogLines" class="setup-log"></pre>
+  </div>
+
   <div class="setup-actions">
     <button class="btn btn-outline" id="setupRefreshBtn" onclick="loadSetup()">Refresh</button>
     <button class="btn btn-primary" id="setupDoneBtn" onclick="finishSetup()">Continue to dashboard</button>
@@ -71,7 +80,7 @@
 
 {% block scripts %}
 <script>
-let SETUP = { manifest: null, installing: null, pollTimer: null };
+let SETUP = { manifest: null, pollTimer: null };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -84,10 +93,9 @@ async function api(method, url, body) {
 
 function progressOf() {
   const steps = SETUP.manifest ? (SETUP.manifest.steps || []).concat(SETUP.manifest.modules || []) : [];
-  if (!steps.length) return { done: 0, total: 0, pct: 0 };
-  const required = steps.filter(s => s.required || s.kind === 'provider');
+  if (!steps.length) return { done: 0, total: 0, pct: 0, requiredDone: 0, requiredTotal: 1 };
+  const required = steps.filter(s => s.required);
   const done = steps.filter(s => s.installed).length;
-  const total = steps.length;
   const requiredDone = required.filter(s => s.installed).length;
   const requiredTotal = required.length || 1;
   return { done, total, pct: Math.round(done / total * 100), requiredDone, requiredTotal };
@@ -102,7 +110,7 @@ function renderProgress() {
   if (fill) fill.style.width = p.pct + '%';
   if (pct) pct.textContent = p.pct + '%';
   if (label) label.textContent = p.requiredDone < p.requiredTotal
-    ? `Installing required plugins (${p.requiredDone}/${p.requiredTotal})` : 'All required plugins installed';
+    ? 'Installing required plugins (' + p.requiredDone + '/' + p.requiredTotal + ')' : 'All required plugins installed';
   if (stats) stats.textContent = p.done + ' / ' + p.total + ' steps installed';
   const doneBtn = document.getElementById('setupDoneBtn');
   const gateNote = document.getElementById('setupGateNote');
@@ -112,33 +120,50 @@ function renderProgress() {
     : 'All required plugins installed — you can continue.';
 }
 
+function installState(step) {
+  const s = step.installing;
+  if (!s) return step.installed ? 'done' : (step.required ? 'required' : 'optional');
+  if (s.status === 'failed') return 'failed';
+  return 'running';
+}
+
 function statusBadge(step) {
-  const s = step.installing && step.installing !== 'idle'
-    ? 'running' : (step.installed ? 'success' : (step.required ? 'error' : 'cache'));
-  return '<span class="badge badge-' + s + '">' +
-    (step.installing && step.installing !== 'idle' ? 'installing' : (step.installed ? 'installed' : (step.required ? 'required' : 'optional'))) +
-    '</span>';
+  const state = installState(step);
+  const map = {
+    done: ['success', 'installed'],
+    running: ['fallback', 'installing…'],
+    failed: ['error', 'failed'],
+    required: ['error', 'required'],
+    optional: ['cache', 'optional'],
+  };
+  const [cls, label] = map[state] || ['cache', state];
+  return '<span class="badge badge-' + cls + '">' + label + '</span>';
 }
 
 function stepCard(step) {
-  const pct = step.progress != null ? step.progress : null;
+  const installing = step.installing;
+  const pct = installing && installing.progress != null ? installing.progress : null;
   const bar = pct != null
-    ? '<div class="setup-track" style="margin:0.4rem 0"><div class="setup-fill" style="width:' + pct + '%"></div></div>'
+    ? '<div class="setup-track" style="margin:0.4rem 0"><div class="setup-fill" style="width:' + pct + '%"></div>' +
+      '<div class="muted" style="font-size:0.65rem;margin-top:0.2rem">' + Math.round(pct) + '%</div></div>'
     : '';
-  const detail = step.detail ? '<div class="setup-step-detail">' + esc(step.detail) + '</div>' : '';
+  const detail = installing && installing.detail
+    ? '<div class="setup-step-detail">' + esc(installing.detail) + '</div>' : '';
+  const logBtn = (step.kind === 'module' && installing && installing.log)
+    ? '<button class="btn btn-outline btn-sm" data-log="' + step.kind + '-' + step.name + '">Logs</button>' : '';
+  const state = installState(step);
+  const action = state === 'done'
+    ? '<span class="muted" style="font-size:0.7rem">✓ done</span>'
+    : (state === 'running'
+      ? '<span class="muted" style="font-size:0.7rem">installing…</span>'
+      : '<button class="btn btn-outline btn-sm" data-install="' + step.kind + ':' + esc(step.name) + '">Install</button>');
   return '<div class="setup-step" id="step-' + step.kind + '-' + step.name + '">' +
     '<div class="setup-step-main">' +
       '<div class="setup-step-title">' + esc(step.title || step.name) + statusBadge(step) + '</div>' +
       '<div class="setup-step-desc muted">' + esc(step.description || '') + '</div>' +
       bar + detail +
     '</div>' +
-    '<div class="setup-step-actions">' +
-      (step.installed
-        ? '<span class="muted" style="font-size:0.7rem">✓ done</span>'
-        : (step.kind === 'provider'
-          ? '<button class="btn btn-outline btn-sm" data-install="provider:' + esc(step.name) + '">Install</button>'
-          : '<button class="btn btn-outline btn-sm" data-install="module:' + esc(step.name) + '">' + (step.installing ? 'Installing…' : 'Install') + '</button>')) +
-    '</div>' +
+    '<div class="setup-step-actions">' + action + logBtn + '</div>' +
   '</div>';
 }
 
@@ -151,48 +176,73 @@ function renderSteps() {
   document.querySelectorAll('[data-install]').forEach(btn => {
     btn.addEventListener('click', () => openInstall(btn.dataset.install));
   });
+  document.querySelectorAll('[data-log]').forEach(btn => {
+    btn.addEventListener('click', () => openLog(btn.dataset.log));
+  });
   renderProgress();
+  renderLog();
+}
+
+function livebench() {
+  const modules = SETUP.manifest ? (SETUP.manifest.modules || []) : [];
+  return modules.find(m => m.name === 'livebench');
 }
 
 async function loadSetup() {
   const data = await api('GET', '/api/setup');
   if (data.error) { document.getElementById('providerSteps').innerHTML = '<div class="empty">' + esc(data.error) + '</div>'; return; }
   SETUP.manifest = data.manifest;
-  mergeProgress();
   renderSteps();
 }
 
-function mergeProgress() {
-  const modules = SETUP.manifest ? (SETUP.manifest.modules || []) : [];
-  const lb = modules.find(m => m.name === 'livebench');
-  if (lb && lb.installing) {
-    lb.progress = lb.installing.progress;
-    lb.detail = lb.installing.detail;
+// ── Live log panel ────────────────────────────────────────────────────────
+
+function renderLog() {
+  const panel = document.getElementById('setupLogPanel');
+  if (!panel) return;
+  const lb = livebench();
+  const installing = lb && lb.installing;
+  const log = (installing && installing.log) || [];
+  if (!log.length) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  const pre = document.getElementById('setupLogLines');
+  if (pre) {
+    pre.textContent = log.join('\n');
+    pre.scrollTop = pre.scrollHeight;
   }
+}
+
+function openLog(target) {
+  const panel = document.getElementById('setupLogPanel');
+  if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  renderLog();
 }
 
 async function pollProgress() {
   const data = await api('GET', '/api/setup/progress');
-  if (!data.error && data.progress) {
-    const modules = SETUP.manifest ? (SETUP.manifest.modules || []) : [];
-    const lb = modules.find(m => m.name === 'livebench');
-    if (lb) {
-      lb.installing = data.progress.status !== 'idle' ? data.progress : null;
-      lb.progress = data.progress.progress;
-      lb.detail = data.progress.detail;
-      if (data.installed) { lb.installed = true; }
-      renderSteps();
-      if (data.progress.status === 'done' || data.progress.status === 'failed') {
-        stopPolling();
-        loadSetup();
-      }
-    }
+  if (data.error) return;
+  const lb = livebench();
+  if (!lb) return;
+  const prog = data.progress || {};
+  if (prog.status === 'idle') {
+    lb.installing = null;
+  } else {
+    lb.installing = prog;
+    lb.progress = prog.progress;
+    lb.detail = prog.detail;
+  }
+  if (data.installed) { lb.installed = true; }
+  renderSteps();
+  if (prog.status === 'done' || prog.status === 'failed') {
+    stopPolling();
+    loadSetup(); // refresh manifest for final state
   }
 }
 
 function startPolling() {
   if (SETUP.pollTimer) return;
-  SETUP.pollTimer = setInterval(pollProgress, 1500);
+  pollProgress(); // immediate first tick
+  SETUP.pollTimer = setInterval(pollProgress, 1000);
 }
 
 function stopPolling() {
