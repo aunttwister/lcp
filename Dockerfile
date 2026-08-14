@@ -14,9 +14,11 @@ RUN mkdir -p /app/data/tiktoken_cache && \
     python3 -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 
 # ── LiveBench checkout (benchmark runner shells out to run_livebench.py) ─────
-# NOTE: LiveBench pulls in heavy ML dependencies (PyTorch, etc.), so this layer
-# adds significantly to image size. Only needed if you run the in-UI benchmark
-# runner. `git` is only required at build time and is removed after.
+# Core LiveBench deps only (no PyTorch, no TensorFlow): openai/anthropic clients,
+# pandas, numpy, sympy, nltk, spacy, datasets, litellm, etc. This is enough to
+# generate answers and grade every category EXCEPT 'coding', which additionally
+# needs code_runner/requirements_eval.txt (TensorFlow + the scientific stack) to
+# execute generated code. `git` is only required at build time and is removed.
 ENV LCP_LIVEBENCH_DIR=/opt/livebench
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
