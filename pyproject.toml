@@ -27,6 +27,9 @@ dev = [
     "pytest-cov>=5.0",
     "pytest-mock>=3.12",
 ]
+bench = [
+    "datasets>=3.0",
+]
 
 [project.scripts]
 lcp = "src.main:main"

@@ -292,8 +292,13 @@ async function seedLivebench() {
   status.textContent = 'Refreshing from LiveBench (HF)…';
   try {
     const r = await API.seed('livebench-hf');
-    status.textContent = `Done: ${r.seeded || r.count || '?'} rows`;
-    loadAll();
+    if (r.error) {
+      status.textContent = 'Error: ' + r.error;
+    } else {
+      const n = r.seeded ?? r.count ?? 0;
+      status.textContent = `Done: ${n} rows`;
+      loadAll();
+    }
   } catch (e) { status.textContent = 'Error: ' + e.message; }
   btn.disabled = false;
 }

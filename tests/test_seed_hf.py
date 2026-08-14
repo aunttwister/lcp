@@ -117,7 +117,7 @@ def test_seed_livebench_hf_overwrites_existing_livebench_row(tmp_path, monkeypat
         assert row.raw_score == pytest.approx(0.0)
 
 
-def test_seed_livebench_hf_missing_datasets_returns_zero(tmp_path, monkeypatch):
+def test_seed_livebench_hf_missing_datasets_raises(tmp_path, monkeypatch):
     from src.api.models import Base, get_engine
 
     db_path = str(tmp_path / "seed3.db")
@@ -134,4 +134,5 @@ def test_seed_livebench_hf_missing_datasets_returns_zero(tmp_path, monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    assert seed_livebench_hf(db_path) == 0
+    with pytest.raises(RuntimeError, match="requires the 'datasets' package"):
+        seed_livebench_hf(db_path)

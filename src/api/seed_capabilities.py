@@ -197,9 +197,11 @@ def seed_livebench_hf(db_path: str) -> int:
     """
     try:
         from datasets import load_dataset
-    except ImportError:
-        print("Skipping LiveBench HF: datasets not installed. Run: pip install datasets")
-        return 0
+    except ImportError as exc:
+        raise RuntimeError(
+            "LiveBench HF ingestion requires the 'datasets' package. "
+            "Install it with: pip install 'lcp[bench]'"
+        ) from exc
 
     from src.api.models import ModelCapability
 
@@ -497,7 +499,10 @@ def main():
     if args.source in ("livebench", "all"):
         total += seed_livebench(args.db_path)
     if args.source in ("livebench-hf", "all"):
-        total += seed_livebench_hf(args.db_path)
+        try:
+            total += seed_livebench_hf(args.db_path)
+        except RuntimeError as exc:
+            print(f"SKIPPED livebench-hf: {exc}")
     if args.source in ("arena", "all"):
         total += seed_arena(args.db_path, max_rows=args.arena_rows)
     if args.source in ("registry", "all"):
