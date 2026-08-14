@@ -6,22 +6,6 @@
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 {% endblock %}
 
-{% block sidebar %}
-<aside class="sidebar" id="sidebar">
-  <div class="sidebar-brand">LCP</div>
-  <nav class="sidebar-nav">
-    <a href="/dashboard"{% if not profile_filter %} class="active"{% endif %}>Dashboard</a>
-    <a href="/keys">API Keys</a>
-    <a href="/providers">Providers</a>
-    <a href="/usage">Usage</a>
-    <div class="sb-provider-rows" id="providerPluginRows"></div>
-    <a href="/logs">Logs</a>
-    <a href="/alerts">Alerts <span id="sidebarAlertBadge" class="sb-alert-badge" style="display:none">0</span></a>
-    <a href="/profiles">Profiles</a>
-  </nav>
-</aside>
-{% endblock %}
-
 {% block content %}
 <div class="header-row">
   <div>

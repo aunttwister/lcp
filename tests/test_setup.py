@@ -126,6 +126,34 @@ class TestInstallProvider:
         assert setup_mod.load_state(temp_db)["provider:deepseek"]["status"] == "done"
 
 
+class TestRemoveProvider:
+    def test_unknown_provider_raises(self, temp_db, mock_config):
+        with pytest.raises(setup_mod.SetupError, match="unknown provider"):
+            setup_mod.remove_provider(temp_db, mock_config, "openai")
+
+    def test_remove_provider_clears_config_and_credentials(self, temp_db, mock_config):
+        mock_config.providers = {"deepseek": {"api_base": "https://api.deepseek.com/v1", "models": ["m"]}}
+        mock_config.raw = {
+            "providers": {"deepseek": {"api_base": "https://api.deepseek.com/v1", "models": ["m"]}},
+            "profiles": {"l2": {"chain": [{"provider": "deepseek", "model": "m"}]}},
+        }
+        store = MagicMock()
+        with patch("src.api.credential_store.get_credential_store", return_value=store):
+            result = setup_mod.remove_provider(temp_db, mock_config, "deepseek")
+        assert result == {"removed": True, "provider": "deepseek"}
+        assert "deepseek" not in mock_config.raw["providers"]
+        assert mock_config.raw["profiles"]["l2"]["chain"] == []
+        store.set.assert_called_once_with("deepseek", "")
+        assert setup_mod.load_state(temp_db)["provider:deepseek"]["status"] == "removed"
+
+    def test_remove_livebench(self, temp_db, monkeypatch, tmp_path):
+        (tmp_path / "run_livebench.py").write_text("")
+        monkeypatch.setattr("src.api.benchmark.livebench_dir", lambda: str(tmp_path))
+        result = setup_mod.remove_livebench(temp_db)
+        assert result == {"removed": True, "module": "livebench", "path": str(tmp_path)}
+        assert setup_mod.load_state(temp_db)["module:livebench"]["status"] == "removed"
+
+
 # ── LiveBench install coordinator ───────────────────────────────────────────
 
 class TestLivebenchInstall:

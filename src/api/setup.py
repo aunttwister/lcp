@@ -244,6 +244,60 @@ def install_provider(engine, config, name: str, body: dict) -> dict:
     return {"installed": True, "provider": name}
 
 
+def remove_provider(engine, config, name: str) -> dict:
+    """Remove a provider plugin from the running config + credential store.
+
+    Mirrors ``_serve_provider_delete`` but also clears the setup state marker.
+    Returns ``{"removed": True, "provider": name}`` or raises ``SetupError``.
+    """
+    if name not in ("deepseek", "opencode", "commandcode", "llamacpp"):
+        raise SetupError(f"unknown provider: {name}")
+
+    # Remove the provider entry from gateway.yaml.
+    cfg_raw = config.raw
+    cfg_raw.setdefault("providers", {}).pop(name, None)
+    # Drop it from every profile chain (same as the Providers page).
+    for pcfg in cfg_raw.get("profiles", {}).values():
+        chain = pcfg.get("chain")
+        if isinstance(chain, list):
+            pcfg["chain"] = [c for c in chain if c.get("provider") != name]
+    config.save()
+
+    # Clear encrypted credentials / cookies / workspace IDs.
+    from .credential_store import get_credential_store
+
+    store = get_credential_store()
+    if store is not None:
+        store.set(name, "")
+        store.set_cookie(name, "")
+        store.set_workspace_id(name, "")
+
+    set_state(engine, f"provider:{name}", "removed")
+    logger.info("setup_provider_removed", provider=name)
+    return {"removed": True, "provider": name}
+
+
+def remove_livebench(engine) -> dict:
+    """Remove the LiveBench checkout and clear its setup state.
+
+    Does nothing when LiveBench isn't installed (idempotent).
+    """
+    from .benchmark import livebench_dir
+
+    removed_path = None
+    path = livebench_dir()
+    if path and os.path.isdir(path):
+        removed_path = path
+        shutil.rmtree(path, ignore_errors=True)
+
+    # Drop the env override so a later install can re-clone cleanly.
+    os.environ.pop("LCP_LIVEBENCH_DIR", None)
+
+    set_state(engine, "module:livebench", "removed")
+    logger.info("setup_livebench_removed", path=removed_path)
+    return {"removed": True, "module": "livebench", "path": removed_path}
+
+
 # ── LiveBench runtime install (background + progress) ───────────────────────
 
 _bench_lock = threading.Lock()

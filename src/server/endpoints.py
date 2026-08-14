@@ -2260,3 +2260,22 @@ class SetupEndpoints:
             self._send_json({"ok": True, "skipped": newly_skipped})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
+
+    def _serve_setup_remove_api(self, kind: str, name: str):
+        """DELETE /api/setup/{kind}/{name} — uninstall one plugin/module."""
+        from ..api import setup as setup_mod
+
+        try:
+            if kind == "provider":
+                result = setup_mod.remove_provider(self.engine, self.config, name)
+            elif kind == "module" and name == "livebench":
+                result = setup_mod.remove_livebench(self.engine)
+            else:
+                self._send_json({"error": f"unknown remove target: {kind}/{name}"}, 404)
+                return
+            self._send_json({"ok": True, **result})
+        except setup_mod.SetupError as e:
+            self._send_json({"error": str(e)}, 400)
+        except Exception as e:
+            logger.error("setup_remove_failed", kind=kind, name=name, error=str(e))
+            self._send_json({"error": str(e)}, 500)

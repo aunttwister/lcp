@@ -805,6 +805,11 @@ class LCPHandler(
         elif self.path.startswith("/api/models/registry/") and len(self.path.split("/")) == 5:
             logical = self.path.split("/")[4]
             self._serve_registry_delete_api(logical)
+        elif self.path.startswith("/api/setup/") and len(self.path.split("/")) == 5:
+            # DELETE /api/setup/{kind}/{name}
+            kind = self.path.split("/")[3]
+            name = self.path.split("/")[4]
+            self._serve_setup_remove_api(kind, name)
         else:
             self._send_json({"error": "not found"}, 404)
 

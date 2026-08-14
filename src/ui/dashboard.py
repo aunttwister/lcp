@@ -544,6 +544,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
 
     return render_page(
         "pages/dashboard.html", config, engine,
+        active_page="dashboard",
         profile_filter=profile_filter,
         filter_title=filter_title,
         now_utc=now_utc,

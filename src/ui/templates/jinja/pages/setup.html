@@ -153,7 +153,8 @@ function stepCard(step) {
     ? '<button class="btn btn-outline btn-sm" data-log="' + step.kind + '-' + step.name + '">Logs</button>' : '';
   const state = installState(step);
   const action = state === 'done'
-    ? '<span class="muted" style="font-size:0.7rem">✓ done</span>'
+    ? '<span class="muted" style="font-size:0.7rem">✓ done</span>' +
+      ' <button class="btn btn-outline btn-sm btn-danger" data-remove="' + step.kind + ':' + esc(step.name) + '">Remove</button>'
     : (state === 'running'
       ? '<span class="muted" style="font-size:0.7rem">installing…</span>'
       : '<button class="btn btn-outline btn-sm" data-install="' + step.kind + ':' + esc(step.name) + '">Install</button>');
@@ -176,11 +177,23 @@ function renderSteps() {
   document.querySelectorAll('[data-install]').forEach(btn => {
     btn.addEventListener('click', () => openInstall(btn.dataset.install));
   });
+  document.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.addEventListener('click', () => removeStep(btn.dataset.remove));
+  });
   document.querySelectorAll('[data-log]').forEach(btn => {
     btn.addEventListener('click', () => openLog(btn.dataset.log));
   });
   renderProgress();
   renderLog();
+}
+
+async function removeStep(target) {
+  const [kind, name] = target.split(':');
+  const title = kind === 'provider' ? name : 'LiveBench';
+  if (!confirm('Remove "' + title + '" plugin? This clears its config and credentials.')) return;
+  const res = await api('DELETE', '/api/setup/' + kind + '/' + name);
+  if (res.error) { alert('Error: ' + res.error); return; }
+  await loadSetup();
 }
 
 function livebench() {
