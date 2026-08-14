@@ -7,8 +7,8 @@ depends on). The target abstraction accepts a ``provider`` kind today and a
 end-to-end through LCP).
 
 LiveBench is invoked as a subprocess against a local checkout (path from
-``LCP_LIVEBENCH_DIR``). Agentic coding requires Docker; a missing daemon fails
-the run loudly rather than silently skipping the category.
+``LCP_LIVEBENCH_DIR``). Only the six non-Docker categories are run — agentic
+coding is excluded by design (no Docker).
 
 Results are parsed from LiveBench's ``all_groups.csv`` (per-category accuracy)
 and upserted into ``model_capabilities`` with ``source="lcp_benchmark"``.
@@ -46,6 +46,30 @@ LIVEBENCH_CATEGORIES = [
 DEFAULT_LIVEBENCH_RELEASE = os.environ.get("LCP_LIVEBENCH_RELEASE", "2024-11-25")
 
 
+def validate_categories(categories: Optional[list[str]]) -> list[str]:
+    """Validate a requested category list against ``LIVEBENCH_CATEGORIES``.
+
+    Returns a normalized (deduped, order-preserving) list, or raises
+    ``ValueError`` for unknown categories — including ``agentic_coding``,
+    which is deliberately unsupported.
+    """
+    if not categories:
+        return list(LIVEBENCH_CATEGORIES)
+    normalized: list[str] = []
+    for c in categories:
+        c = (c or "").strip().lower()
+        if not c:
+            continue
+        if c not in LIVEBENCH_CATEGORIES:
+            raise ValueError(
+                f"unknown benchmark category {c!r} — supported: "
+                f"{', '.join(LIVEBENCH_CATEGORIES)}"
+            )
+        if c not in normalized:
+            normalized.append(c)
+    return normalized or list(LIVEBENCH_CATEGORIES)
+
+
 # ── Pure command construction (testable) ────────────────────────────────────
 
 def livebench_dir() -> Optional[str]:
@@ -61,6 +85,15 @@ def livebench_dir() -> Optional[str]:
     if found:
         return os.path.dirname(found)
     return None
+
+
+def _redact_cmd(cmd: list[str]) -> str:
+    """Render a command for logging with the API key redacted."""
+    out = list(cmd)
+    for i, arg in enumerate(out):
+        if i > 0 and out[i - 1] == "--api-key":
+            out[i] = "***"
+    return " ".join(out)
 
 
 def build_livebench_commands(
@@ -92,7 +125,7 @@ def build_livebench_commands(
     runner = os.path.join(path, "run_livebench.py")
     shower = os.path.join(path, "show_livebench_result.py")
 
-    chosen = categories or LIVEBENCH_CATEGORIES
+    chosen = validate_categories(categories)
     scopes = [f"live_bench/{c}" for c in chosen]
 
     commands: list[list[str]] = []
@@ -195,17 +228,29 @@ def queue_benchmark(
     target: dict,
     categories: Optional[list[str]] = None,
 ) -> dict:
-    """Queue a benchmark run. Returns the run record (status=queued)."""
+    """Queue a benchmark run. Returns the run record (status=queued).
+
+    Validates the target kind, target shape, and categories up front so a bad
+    request fails synchronously (the caller sees the error) instead of
+    producing a silently-failed background run.
+    """
     from .models import BenchmarkRun, get_session
 
     if target_kind not in ("provider", "profile"):
         raise ValueError(f"invalid target_kind: {target_kind!r}")
 
+    # Category validation now (fail fast), not in the background worker.
+    validated = validate_categories(categories)
+
+    if target_kind == "provider":
+        if not isinstance(target, dict) or not target.get("provider") or not target.get("model"):
+            raise ValueError("provider target requires 'provider' and 'model'")
+
     with get_session(engine) as session:
         run = BenchmarkRun(
             target_kind=target_kind,
             target_json=json.dumps(target),
-            categories_json=json.dumps(categories) if categories else None,
+            categories_json=json.dumps(validated),
             status="queued",
         )
         session.add(run)
@@ -326,15 +371,12 @@ def _execute_run(run_id: int, engine, config) -> None:
 
         workdir = tempfile.mkdtemp(prefix="lcp-bench-")
         category_scores: dict[str, float] = {}
-        all_logs: list[str] = []
 
         for cmd in commands:
-            logger.info("benchmark_subprocess", run_id=run_id, cmd=" ".join(cmd))
+            logger.info("benchmark_subprocess", run_id=run_id, cmd=_redact_cmd(cmd))
             proc = subprocess.run(
                 cmd, cwd=workdir, capture_output=True, text=True, timeout=3600,
             )
-            all_logs.append(proc.stdout or "")
-            all_logs.append(proc.stderr or "")
             if proc.returncode != 0:
                 raise RuntimeError(
                     f"LiveBench command failed (exit {proc.returncode}): "

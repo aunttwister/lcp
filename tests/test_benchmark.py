@@ -8,8 +8,37 @@ from src.api.benchmark import (
     build_livebench_commands,
     parse_livebench_csv,
     livebench_dir,
+    validate_categories,
+    _redact_cmd,
+    _resolve_provider_target,
+    _upsert_scores,
     LIVEBENCH_CATEGORIES,
 )
+
+
+# ── Category validation ─────────────────────────────────────────────────────
+
+def test_validate_categories_none_returns_all():
+    cats = validate_categories(None)
+    assert cats == LIVEBENCH_CATEGORIES
+
+
+def test_validate_categories_empty_returns_all():
+    assert validate_categories([]) == LIVEBENCH_CATEGORIES
+
+
+def test_validate_categories_normalizes_and_dedupes():
+    assert validate_categories(["coding", "Coding", " math "]) == ["coding", "math"]
+
+
+def test_validate_categories_rejects_agentic_coding():
+    with pytest.raises(ValueError, match="agentic_coding"):
+        validate_categories(["agentic_coding"])
+
+
+def test_validate_categories_rejects_unknown():
+    with pytest.raises(ValueError, match="bogus"):
+        validate_categories(["coding", "bogus"])
 
 
 # ── Command construction ────────────────────────────────────────────────────
@@ -182,3 +211,216 @@ def test_queue_and_run_flow(tmp_path, monkeypatch):
         by_task = {r.task_type: r.score for r in rows}
         assert by_task["code_generation"] == pytest.approx(0.70)
         assert by_task["reasoning_chain"] == pytest.approx(0.907)
+
+
+# ── API key redaction in logs ───────────────────────────────────────────────
+
+def test_redact_cmd_masks_api_key():
+    cmd = ["python", "run_livebench.py", "--model", "m", "--api-key", "sk-secret-123"]
+    out = _redact_cmd(cmd)
+    assert "sk-secret-123" not in out
+    assert "--api-key ***" in out
+
+
+def test_redact_cmd_no_api_key_unchanged():
+    cmd = ["python", "run_livebench.py", "--model", "m"]
+    assert _redact_cmd(cmd) == "python run_livebench.py --model m"
+
+
+# ── Provider target resolution ──────────────────────────────────────────────
+
+class _FakeConfig:
+    def __init__(self, providers, key="sk-env-key"):
+        self.providers = providers
+        self._key = key
+
+    def get_provider_key(self, provider):
+        return self._key
+
+
+class _FakeStore:
+    def __init__(self, key=None):
+        self._key = key
+
+    def get(self, provider):
+        return self._key
+
+
+class _FakePlugin:
+    def __init__(self, api_model=None):
+        self._api_model = api_model
+
+    def get_api_model(self, model):
+        return self._api_model or model
+
+
+class _FakeRegistry:
+    def __init__(self, plugin=None):
+        self._plugin = plugin
+
+    def for_provider(self, provider):
+        return self._plugin
+
+
+def test_resolve_provider_target_env_key(monkeypatch):
+    config = _FakeConfig({"deepseek": {"api_base": "https://api.deepseek.com/v1"}})
+    monkeypatch.setattr("src.api.credential_store.get_credential_store", lambda: None)
+    monkeypatch.setattr("src.api.cost_plugins.get_registry", lambda: _FakeRegistry())
+
+    model, base, key = _resolve_provider_target(
+        None, config, {"provider": "deepseek", "model": "deepseek-v4-pro"}
+    )
+    assert model == "deepseek-v4-pro"
+    assert base == "https://api.deepseek.com/v1"
+    assert key == "sk-env-key"
+
+
+def test_resolve_provider_target_credential_store_wins(monkeypatch):
+    config = _FakeConfig({"deepseek": {"api_base": "https://api.deepseek.com/v1"}})
+    monkeypatch.setattr(
+        "src.api.credential_store.get_credential_store",
+        lambda: _FakeStore("sk-store-key"),
+    )
+    monkeypatch.setattr("src.api.cost_plugins.get_registry", lambda: _FakeRegistry())
+
+    _, _, key = _resolve_provider_target(
+        None, config, {"provider": "deepseek", "model": "deepseek-v4-pro"}
+    )
+    assert key == "sk-store-key"
+
+
+def test_resolve_provider_target_translates_model(monkeypatch):
+    config = _FakeConfig({"commandcode": {"api_base": "https://api.commandcode.ai/provider/v1"}})
+    monkeypatch.setattr("src.api.credential_store.get_credential_store", lambda: None)
+    plugin = _FakePlugin("deepseek/deepseek-v4-pro")
+    monkeypatch.setattr("src.api.cost_plugins.get_registry", lambda: _FakeRegistry(plugin))
+
+    model, _, _ = _resolve_provider_target(
+        None, config, {"provider": "commandcode", "model": "deepseek-v4-pro"}
+    )
+    assert model == "deepseek/deepseek-v4-pro"
+
+
+def test_resolve_provider_target_unknown_provider_raises():
+    config = _FakeConfig({})
+    with pytest.raises(ValueError, match="unknown provider"):
+        _resolve_provider_target(None, config, {"provider": "nope", "model": "m"})
+
+
+def test_resolve_provider_target_missing_fields_raises():
+    config = _FakeConfig({"deepseek": {"api_base": "x"}})
+    with pytest.raises(ValueError, match="requires 'provider' and 'model'"):
+        _resolve_provider_target(None, config, {"provider": "deepseek"})
+
+
+def test_resolve_provider_target_missing_api_base_raises():
+    config = _FakeConfig({"deepseek": {}})
+    with pytest.raises(ValueError, match="no api_base"):
+        _resolve_provider_target(None, config, {"provider": "deepseek", "model": "m"})
+
+
+# ── Score upsert ────────────────────────────────────────────────────────────
+
+def test_upsert_scores_normalizes_and_inserts(tmp_path):
+    from src.api.models import Base, get_engine, get_session, ModelCapability
+
+    engine = get_engine(str(tmp_path / "upsert.db"))
+    Base.metadata.create_all(engine)
+
+    _upsert_scores(
+        engine,
+        {"model": "m1"},
+        {"coding": 70.0, "math": 90.0},
+    )
+
+    with get_session(engine) as session:
+        rows = session.query(ModelCapability).filter_by(model="m1", source="lcp_benchmark").all()
+        by_task = {r.task_type: (r.score, r.raw_score, r.benchmark_category) for r in rows}
+        assert by_task["code_generation"] == (pytest.approx(0.70), pytest.approx(70.0), "coding")
+        assert by_task["reasoning_chain"] == (pytest.approx(0.90), pytest.approx(90.0), "math")
+
+
+def test_upsert_scores_overwrites_existing(tmp_path):
+    from src.api.models import Base, get_engine, get_session, ModelCapability
+
+    engine = get_engine(str(tmp_path / "upsert2.db"))
+    Base.metadata.create_all(engine)
+
+    # First grade: coding 60.0
+    _upsert_scores(engine, {"model": "m1"}, {"coding": 60.0})
+    # Regrade: coding 80.0 (should overwrite, not duplicate)
+    _upsert_scores(engine, {"model": "m1"}, {"coding": 80.0})
+
+    with get_session(engine) as session:
+        rows = session.query(ModelCapability).filter_by(
+            model="m1", source="lcp_benchmark", task_type="code_generation"
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].score == pytest.approx(0.80)
+
+
+# ── Queue-time validation ───────────────────────────────────────────────────
+
+def test_queue_rejects_unknown_category(tmp_path):
+    from src.api.benchmark import queue_benchmark
+    from src.api.models import Base, get_engine
+
+    engine = get_engine(str(tmp_path / "q.db"))
+    Base.metadata.create_all(engine)
+
+    with pytest.raises(ValueError, match="bogus"):
+        queue_benchmark(
+            engine, _FakeConfig({}),
+            target_kind="provider",
+            target={"provider": "deepseek", "model": "m"},
+            categories=["bogus"],
+        )
+
+
+def test_queue_rejects_missing_provider_target(tmp_path):
+    from src.api.benchmark import queue_benchmark
+    from src.api.models import Base, get_engine
+
+    engine = get_engine(str(tmp_path / "q2.db"))
+    Base.metadata.create_all(engine)
+
+    with pytest.raises(ValueError, match="requires 'provider' and 'model'"):
+        queue_benchmark(
+            engine, _FakeConfig({}),
+            target_kind="provider",
+            target={"model": "m"},
+        )
+
+
+def test_queue_rejects_invalid_kind(tmp_path):
+    from src.api.benchmark import queue_benchmark
+    from src.api.models import Base, get_engine
+
+    engine = get_engine(str(tmp_path / "q3.db"))
+    Base.metadata.create_all(engine)
+
+    with pytest.raises(ValueError, match="invalid target_kind"):
+        queue_benchmark(
+            engine, _FakeConfig({}),
+            target_kind="bogus",
+            target={},
+        )
+
+
+def test_queue_stores_normalized_categories(tmp_path):
+    from src.api.benchmark import queue_benchmark
+    from src.api.models import Base, get_engine, get_session, BenchmarkRun
+
+    engine = get_engine(str(tmp_path / "q4.db"))
+    Base.metadata.create_all(engine)
+
+    # Queue with categories=None → stored as full normalized list.
+    queue_benchmark(
+        engine, _FakeConfig({}),
+        target_kind="provider",
+        target={"provider": "deepseek", "model": "m"},
+        categories=None,
+    )
+    with get_session(engine) as session:
+        run = session.query(BenchmarkRun).first()
+        assert json.loads(run.categories_json) == LIVEBENCH_CATEGORIES
