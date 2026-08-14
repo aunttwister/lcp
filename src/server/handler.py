@@ -333,6 +333,8 @@ class LCPHandler(
             self._serve_registry_api()
         elif self.path == "/api/models/benchmark" or self.path.startswith("/api/models/benchmark?"):
             self._serve_benchmark_list_api()
+        elif self.path == "/api/models/benchmark/status":
+            self._serve_benchmark_status_api()
         elif self.path.startswith("/api/models/benchmark/") and len(self.path.split("/")) == 5:
             run_id = self.path.split("/")[4]
             self._serve_benchmark_detail_api(run_id)

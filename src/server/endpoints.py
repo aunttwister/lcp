@@ -1955,6 +1955,14 @@ class DashboardEndpoints:
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
+    def _serve_benchmark_status_api(self):
+        """GET /api/models/benchmark/status — whether the runner is installed."""
+        from ..api.benchmark import benchmark_status
+        try:
+            self._send_json(benchmark_status())
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _serve_benchmark_detail_api(self, run_id: str):
         """GET /api/models/benchmark/{id} — one benchmark run."""
         from ..api.benchmark import get_run

@@ -87,6 +87,48 @@ def livebench_dir() -> Optional[str]:
     return None
 
 
+def coding_deps_available() -> bool:
+    """Return True when the 'coding' category can be graded.
+
+    Grading generated code needs LiveBench's ``code_runner`` extra
+    (TensorFlow, scipy, etc.). We probe for one heavyweight marker package;
+    the absence only disables the ``coding`` category, not the whole runner.
+    """
+    try:
+        import tensorflow  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def benchmark_status() -> dict:
+    """Report whether the benchmark runner is usable, and at what capacity.
+
+    Returns ``{"available": bool, "reason": str|None, "categories": [...],
+    "coding_supported": bool}``. The runner is optional ("plugin") — the base
+    gateway stays lean and this simply reports what's installed.
+    """
+    path = livebench_dir()
+    if not path:
+        return {
+            "available": False,
+            "reason": (
+                "LiveBench checkout not found — set LCP_LIVEBENCH_DIR to a "
+                "directory containing run_livebench.py, or build the image "
+                "with WITH_BENCH=1."
+            ),
+            "categories": list(LIVEBENCH_CATEGORIES),
+            "coding_supported": False,
+        }
+    return {
+        "available": True,
+        "reason": None,
+        "livebench_dir": path,
+        "categories": list(LIVEBENCH_CATEGORIES),
+        "coding_supported": coding_deps_available(),
+    }
+
+
 def _redact_cmd(cmd: list[str]) -> str:
     """Render a command for logging with the API key redacted."""
     out = list(cmd)

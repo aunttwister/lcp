@@ -55,6 +55,10 @@ const API = {
     const r = await fetch('/api/models/benchmark');
     return r.json();
   },
+  async benchmarkStatus() {
+    const r = await fetch('/api/models/benchmark/status');
+    return r.json();
+  },
   async runBenchmark(provider, model) {
     const r = await fetch('/api/models/benchmark', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -65,7 +69,7 @@ const API = {
 };
 
 // ── State ──────────────────────────────────────────────────────────────────
-let STATE = { registry: {}, providers: {}, matrix: {}, runs: [], selected: null, filter: '' };
+let STATE = { registry: {}, providers: {}, matrix: {}, runs: [], bench: null, selected: null, filter: '' };
 
 // model → list of providers that expose it (from gateway.yaml providers.models)
 function providerModels() {
@@ -88,10 +92,13 @@ function allModels() {
 }
 
 async function loadAll() {
-  const [matrix, providers, reg, runs] = await Promise.all([API.matrix(), API.providers(), API.registry(), API.benchmarks()]);
+  const [matrix, providers, reg, runs, bench] = await Promise.all([
+    API.matrix(), API.providers(), API.registry(), API.benchmarks(), API.benchmarkStatus()
+  ]);
   STATE.matrix = matrix;
   STATE.providers = providers.providers || {};
   STATE.runs = runs.runs || [];
+  STATE.bench = bench;
   const registryMap = {};
   for (const e of (reg.registry || [])) registryMap[e.logical_name] = e;
   STATE.registry = registryMap;
@@ -199,11 +206,7 @@ function renderDetail(model) {
 
     <div class="model-section">
       <h4>Benchmark</h4>
-      <div class="bench-run-row">
-        <input type="text" id="benchProvider" placeholder="provider (e.g. deepseek)" class="capability-filter" value="${defaultProvider}">
-        <button class="btn btn-outline" id="runBenchBtn">Run benchmark</button>
-        <span id="benchStatus" class="seed-status"></span>
-      </div>
+      ${benchSection(model, defaultProvider)}
       <div class="table-wrap" style="margin-top:0.75rem">
         <table class="capability-table">
           <thead><tr><th>ID</th><th>Categories</th><th>Status</th><th>Started</th><th>Result</th></tr></thead>
@@ -228,6 +231,23 @@ function renderDetail(model) {
   document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, aliases));
   document.getElementById('deleteModelBtn')?.addEventListener('click', () => deleteRegistry(model));
   document.getElementById('runBenchBtn')?.addEventListener('click', () => runBenchmark(model));
+}
+
+function benchSection(model, defaultProvider) {
+  const bench = STATE.bench;
+  if (!bench || !bench.available) {
+    const reason = (bench && bench.reason) || 'Benchmark runner not installed.';
+    return `<p class="empty">${reason}</p>`;
+  }
+  let note = '';
+  if (bench.coding_supported === false) {
+    note = '<span class="seed-status"> (coding category unavailable — install the LiveBench eval extra)</span>';
+  }
+  return `<div class="bench-run-row">
+    <input type="text" id="benchProvider" placeholder="provider (e.g. deepseek)" class="capability-filter" value="${defaultProvider}">
+    <button class="btn btn-outline" id="runBenchBtn">Run benchmark</button>${note}
+    <span id="benchStatus" class="seed-status"></span>
+  </div>`;
 }
 
 // ── Registry actions ────────────────────────────────────────────────────────

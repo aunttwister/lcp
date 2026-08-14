@@ -13,21 +13,29 @@ ENV TIKTOKEN_CACHE_DIR=/app/data/tiktoken_cache
 RUN mkdir -p /app/data/tiktoken_cache && \
     python3 -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 
-# ── LiveBench checkout (benchmark runner shells out to run_livebench.py) ─────
-# Core LiveBench deps only (no PyTorch, no TensorFlow): openai/anthropic clients,
-# pandas, numpy, sympy, nltk, spacy, datasets, litellm, etc. This is enough to
-# generate answers and grade every category EXCEPT 'coding', which additionally
-# needs code_runner/requirements_eval.txt (TensorFlow + the scientific stack) to
-# execute generated code. `git` is only required at build time and is removed.
+# ── LiveBench (OPTIONAL — benchmark "plugin") ────────────────────────────────
+# The in-UI benchmark runner is opt-in. Set the build arg WITH_BENCH=1 to bake
+# a LiveBench checkout into the image; the default (WITH_BENCH=0) keeps the
+# gateway image lean and the benchmark runner reports "unavailable".
+#
+#   docker compose build --build-arg WITH_BENCH=1 lcp
+#
+# Full LiveBench (core + code_runner/requirements_eval.txt) covers all 6
+# categories including `coding` (which executes generated code and needs
+# TensorFlow + the scientific stack). Core-only covers the other 5.
+ARG WITH_BENCH=0
+RUN if [ "$WITH_BENCH" = "1" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends git ca-certificates \
+        && git clone --depth 1 https://github.com/LiveBench/LiveBench.git /opt/livebench \
+        && cd /opt/livebench \
+        && pip install --no-cache-dir -e . \
+        && pip install --no-cache-dir -r code_runner/requirements_eval.txt \
+        && apt-get purge -y git \
+        && apt-get autoremove -y \
+        && rm -rf /var/lib/apt/lists/* ; \
+    fi
 ENV LCP_LIVEBENCH_DIR=/opt/livebench
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
-    && git clone --depth 1 https://github.com/LiveBench/LiveBench.git /opt/livebench \
-    && cd /opt/livebench \
-    && pip install --no-cache-dir -e . \
-    && apt-get purge -y git \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
 
 # ── Application code ──
 COPY src/ ./src/

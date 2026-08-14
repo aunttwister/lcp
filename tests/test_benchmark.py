@@ -9,11 +9,43 @@ from src.api.benchmark import (
     parse_livebench_csv,
     livebench_dir,
     validate_categories,
+    benchmark_status,
     _redact_cmd,
     _resolve_provider_target,
     _upsert_scores,
     LIVEBENCH_CATEGORIES,
 )
+
+
+# ── Availability / status (benchmark "plugin") ──────────────────────────────
+
+def test_benchmark_status_unavailable_when_no_checkout(monkeypatch):
+    monkeypatch.delenv("LCP_LIVEBENCH_DIR", raising=False)
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    status = benchmark_status()
+    assert status["available"] is False
+    assert status["reason"] is not None
+    assert status["categories"] == LIVEBENCH_CATEGORIES
+
+
+def test_benchmark_status_available_with_checkout(tmp_path, monkeypatch):
+    (tmp_path / "run_livebench.py").write_text("")
+    monkeypatch.setenv("LCP_LIVEBENCH_DIR", str(tmp_path))
+    status = benchmark_status()
+    assert status["available"] is True
+    assert status["livebench_dir"] == str(tmp_path)
+    # coding_supported is False unless tensorflow is importable — don't assert
+    # a specific value here, just that the key exists.
+    assert "coding_supported" in status
+
+
+def test_benchmark_status_coding_detection(monkeypatch):
+    import src.api.benchmark as bm
+
+    monkeypatch.setattr("src.api.benchmark.coding_deps_available", lambda: True)
+    assert bm.coding_deps_available() is True
+    monkeypatch.setattr("src.api.benchmark.coding_deps_available", lambda: False)
+    assert bm.coding_deps_available() is False
 
 
 # ── Category validation ─────────────────────────────────────────────────────
