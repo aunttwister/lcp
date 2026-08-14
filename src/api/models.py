@@ -199,6 +199,21 @@ class BenchmarkRun(Base):
     created_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
 
 
+class SetupState(Base):
+    """First-run setup wizard progress.
+
+    One row per installable module step plus a ``wizard`` marker row that
+    records when the user skipped the wizard (status=skipped).
+    """
+    __tablename__ = "setup_state"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String, unique=True, nullable=False, index=True)  # e.g. provider:deepseek, module:livebench, wizard
+    status = Column(String, nullable=False)  # done | skipped | failed | running
+    detail = Column(Text, nullable=True)
+    updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
 # ── Engine + session factory ───────────────────────────────────────────────
 
 def get_engine(db_path: str):

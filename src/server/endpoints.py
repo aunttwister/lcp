@@ -2177,3 +2177,85 @@ class DashboardEndpoints:
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
         self.wfile.write(html.encode("utf-8"))
+
+
+# ── First-run Setup Wizard Endpoints ─────────────────────────────────────────
+
+class SetupEndpoints:
+    """First-run setup wizard: manifest, install, progress, skip."""
+
+    config: Any
+    engine: Any
+    _send_json: Any
+    _read_body: Any
+    send_response: Any
+    send_header: Any
+    end_headers: Any
+    wfile: Any
+
+    def _serve_setup_page(self):
+        """Server-rendered setup wizard page."""
+        from ..ui.pages import render_setup_page
+        html = render_setup_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_setup_api(self):
+        """GET /api/setup — full manifest (steps + modules) and completion state."""
+        from ..api import setup as setup_mod
+
+        try:
+            self._send_json({
+                "manifest": setup_mod.manifest(self.config),
+                "state": setup_mod.load_state(self.engine),
+                "complete": setup_mod.is_complete(self.engine, self.config),
+            })
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_setup_install_api(self, kind: str, name: str):
+        """POST /api/setup/install/{kind}/{name} — install one plugin/module."""
+        from ..api import setup as setup_mod
+
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+
+        try:
+            if kind == "provider":
+                result = setup_mod.install_provider(self.engine, self.config, name, body)
+            elif kind == "module" and name == "livebench":
+                result = setup_mod.start_livebench_install(self.engine)
+            else:
+                self._send_json({"error": f"unknown install target: {kind}/{name}"}, 404)
+                return
+            self._send_json({"ok": True, **result})
+        except setup_mod.SetupError as e:
+            self._send_json({"error": str(e)}, 400)
+        except Exception as e:
+            logger.error("setup_install_failed", kind=kind, name=name, error=str(e))
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_setup_progress_api(self):
+        """GET /api/setup/progress — live progress of the benchmark install."""
+        from ..api import setup as setup_mod
+
+        progress = setup_mod.bench_progress()
+        self._send_json({
+            "progress": progress or {"status": "idle", "progress": 0.0},
+            "installed": bool(setup_mod.benchmark_step()["installed"]),
+        })
+
+    def _serve_setup_skip_api(self):
+        """POST /api/setup/skip — mark the wizard as skipped."""
+        from ..api import setup as setup_mod
+
+        try:
+            newly_skipped = setup_mod.mark_skipped(self.engine)
+            self._send_json({"ok": True, "skipped": newly_skipped})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)

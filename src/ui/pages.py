@@ -61,3 +61,9 @@ def render_models_page(config, engine=None) -> str:
     """Render the Models capability matrix page (Jinja2)."""
     from .render import render_page
     return render_page("pages/models.html", config, engine, active_page="models")
+
+
+def render_setup_page(config, engine=None) -> str:
+    """Render the first-run setup wizard page (Jinja2)."""
+    from .render import render_page
+    return render_page("pages/setup.html", config, engine, active_page="setup")

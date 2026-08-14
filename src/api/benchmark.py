@@ -76,7 +76,9 @@ def livebench_dir() -> Optional[str]:
     """Return the path to a LiveBench checkout, or None if not configured.
 
     Resolution order: ``LCP_LIVEBENCH_DIR`` env var → ``livebench`` on PATH
-    (a directory containing ``run_livebench.py``).
+    (a directory containing ``run_livebench.py``) → the well-known
+    ``/opt/livebench`` default (used by the Dockerfile and the runtime
+    installer).
     """
     env = os.environ.get("LCP_LIVEBENCH_DIR", "").strip()
     if env and os.path.isdir(env):
@@ -84,6 +86,8 @@ def livebench_dir() -> Optional[str]:
     found = shutil.which("run_livebench.py")
     if found:
         return os.path.dirname(found)
+    if os.path.isdir("/opt/livebench"):
+        return "/opt/livebench"
     return None
 
 
