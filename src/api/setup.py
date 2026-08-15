@@ -53,11 +53,12 @@ def modules_dir() -> str:
     return os.environ.get(MODULES_DIR_ENV, "").strip() or DEFAULT_MODULES_DIR
 
 
-def livebench_dir() -> str:
-    """Return the LiveBench checkout path used by the runtime installer.
+def livebench_root() -> str:
+    """Return the LiveBench checkout ROOT used by the runtime installer.
 
-    Always ``<LCP_MODULES_DIR>/livebench``. This is the install *target*; it
-    deliberately does NOT require the directory to exist yet.
+    Always ``<LCP_MODULES_DIR>/livebench`` (contains ``pyproject.toml``). The
+    livebench Python package lives in ``<root>/livebench``. This is the install
+    *target*; it deliberately does NOT require the directory to exist yet.
     """
     return os.path.join(modules_dir(), "livebench")
 
@@ -117,7 +118,7 @@ def benchmark_step() -> dict:
         "required": False,
         "installed": bool(status.get("available")),
         "status": status,
-        "install_path": livebench_dir(),
+        "install_path": livebench_root(),
         "installing": installing,
     }
 
@@ -312,7 +313,7 @@ def remove_livebench(engine) -> dict:
     targets: list[str] = []
 
     # 1. Configured target.
-    targets.append(livebench_dir())
+    targets.append(livebench_root())
 
     # 2. Well-known fallbacks the runtime installer may have written earlier.
     targets.append("/opt/livebench")
@@ -449,38 +450,34 @@ def _run_livebench_install(engine) -> None:
     succeeds with a warning — the other five categories keep working.
     """
     try:
-        target = livebench_dir()
-        _bench_update(f"Target directory: {target}")
-        parent = os.path.dirname(target)
+        root = livebench_root()
+        _bench_update(f"Target directory: {root}")
+        parent = os.path.dirname(root)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        if os.path.isdir(target):
-            shutil.rmtree(target, ignore_errors=True)
+        if os.path.isdir(root):
+            shutil.rmtree(root, ignore_errors=True)
 
         _stream(
-            ["git", "clone", "--depth", "1", LIVEBENCH_REPO, target],
+            ["git", "clone", "--depth", "1", LIVEBENCH_REPO, root],
             cwd=None, start=2.0, end=25.0, status_msg="Cloning LiveBench…",
         )
 
-        # Defensive: if the clone produced a nested layout (e.g. the target
-        # dir already existed), normalize to <target>/ by moving the nested
-        # checkout up one level.
-        runner = os.path.join(target, "run_livebench.py")
-        nested = os.path.join(target, "livebench")
-        if not os.path.isfile(runner) and os.path.isfile(os.path.join(nested, "run_livebench.py")):
-            _bench_update("Normalizing nested checkout layout…")
-            for entry in os.listdir(nested):
-                shutil.move(os.path.join(nested, entry), os.path.join(target, entry))
-            shutil.rmtree(nested, ignore_errors=True)
-
-        if not os.path.isfile(os.path.join(target, "run_livebench.py")):
+        # The repo clones to <root> with pyproject.toml at the top and the
+        # livebench Python package in <root>/livebench. Verify the package is
+        # present (never flatten it — scripts import `from livebench...`).
+        if not os.path.isfile(os.path.join(root, "pyproject.toml")) \
+                or not os.path.isfile(os.path.join(root, "livebench", "run_livebench.py")):
             raise SetupError(
-                f"clone finished but {target}/run_livebench.py is missing"
+                f"clone finished but {root} is missing pyproject.toml or "
+                f"livebench/run_livebench.py"
             )
 
+        # pip install -e . must run from the checkout ROOT (where pyproject.toml
+        # lives), not the livebench package subdirectory.
         _stream(
             [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-e", "."],
-            cwd=target, start=25.0, end=60.0, status_msg="Installing LiveBench core…",
+            cwd=root, start=25.0, end=60.0, status_msg="Installing LiveBench core…",
         )
 
         # Verify the core package actually became importable (libtmux is a
@@ -489,15 +486,15 @@ def _run_livebench_install(engine) -> None:
         if not core_deps_available():
             raise SetupError(
                 "LiveBench core install did not take effect (libtmux still "
-                f"not importable). The checkout is at {target} — try running "
-                f"`pip install -e {target}` manually and check for errors."
+                f"not importable). The checkout is at {root} — try running "
+                f"`pip install -e {root}` manually and check for errors."
             )
 
         coding_note = None
         try:
             _stream(
                 [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-r", LIVEBENCH_EVAL_REQUIREMENTS],
-                cwd=target, start=60.0, end=100.0,
+                cwd=os.path.join(root, "livebench"), start=60.0, end=100.0,
                 status_msg="Installing eval extras (TensorFlow + scientific stack)…",
             )
         except subprocess.CalledProcessError as exc:

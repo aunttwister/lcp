@@ -30,13 +30,15 @@ def test_benchmark_status_unavailable_when_no_checkout(monkeypatch):
 
 
 def test_benchmark_status_available_with_checkout(tmp_path, monkeypatch):
-    checkout = tmp_path / "modules" / "livebench"
-    checkout.mkdir(parents=True)
-    (checkout / "run_livebench.py").write_text("")
+    root = tmp_path / "modules" / "livebench"
+    pkg = root / "livebench"
+    pkg.mkdir(parents=True)
+    (root / "pyproject.toml").write_text("")
+    (pkg / "run_livebench.py").write_text("")
     monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "modules"))
     status = benchmark_status()
     assert status["available"] is True
-    assert status["livebench_dir"] == str(checkout)
+    assert status["livebench_dir"] == str(pkg)
     # coding_supported is False unless tensorflow is importable — don't assert
     # a specific value here, just that the key exists.
     assert "coding_supported" in status

@@ -205,7 +205,7 @@ class TestLivebenchInstall:
         monkeypatch.setattr("shutil.rmtree", lambda *a, **k: None)
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/git")
         monkeypatch.setattr("os.path.isdir", lambda _: False)
-        monkeypatch.setattr("os.path.isfile", lambda p: p.endswith("run_livebench.py"))
+        monkeypatch.setattr("os.path.isfile", lambda p: p.endswith("run_livebench.py") or p.endswith("pyproject.toml"))
         monkeypatch.setattr("os.listdir", lambda p: [])
         monkeypatch.setattr("os.makedirs", lambda *a, **k: None)
         monkeypatch.setattr(setup_mod, "_stream", fake_stream)
@@ -219,18 +219,18 @@ class TestLivebenchInstall:
         })
         setup_mod._run_livebench_install(temp_db)
 
-        expected_target = "/tmp/lcp-modules/livebench"
-        assert calls[0] == ["git", "clone", "--depth", "1", setup_mod.LIVEBENCH_REPO, expected_target]
+        expected_root = "/tmp/lcp-modules/livebench"
+        assert calls[0] == ["git", "clone", "--depth", "1", setup_mod.LIVEBENCH_REPO, expected_root]
         last = setup_mod.bench_last()
         assert last is not None and last["status"] == "done"
         assert "coding" in last["detail"]
         assert setup_mod.load_state(temp_db)["module:livebench"]["status"] == "done"
         monkeypatch.setattr(setup_mod, "_bench_last", None)
 
-    def test_livebench_dir_uses_modules_dir(self, monkeypatch, tmp_path):
+    def test_livebench_root_uses_modules_dir(self, monkeypatch, tmp_path):
         monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "modules"))
-        assert setup_mod.livebench_dir() == str(tmp_path / "modules" / "livebench")
+        assert setup_mod.livebench_root() == str(tmp_path / "modules" / "livebench")
 
-    def test_livebench_dir_default(self, monkeypatch):
+    def test_livebench_root_default(self, monkeypatch):
         monkeypatch.delenv("LCP_MODULES_DIR", raising=False)
-        assert setup_mod.livebench_dir() == "/opt/lcp-modules/livebench"
+        assert setup_mod.livebench_root() == "/opt/lcp-modules/livebench"

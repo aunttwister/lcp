@@ -72,39 +72,45 @@ def validate_categories(categories: Optional[list[str]]) -> list[str]:
 # ── Pure command construction (testable) ────────────────────────────────────
 
 def _valid_checkout(path: str) -> bool:
-    """Return True when *path* looks like a usable LiveBench checkout."""
-    return os.path.isfile(os.path.join(path, "run_livebench.py"))
+    """Return True when *path* is a checkout ROOT.
+
+    A checkout root contains ``pyproject.toml`` AND a ``livebench/`` package
+    directory holding ``run_livebench.py``. The repository clones to
+    ``<LCP_MODULES_DIR>/livebench`` (root), and the actual Python package is
+    ``<LCP_MODULES_DIR>/livebench/livebench``.
+    """
+    return (
+        os.path.isfile(os.path.join(path, "pyproject.toml"))
+        and os.path.isfile(os.path.join(path, "livebench", "run_livebench.py"))
+    )
+
+
+def livebench_root() -> Optional[str]:
+    """Return the LiveBench checkout root (contains pyproject.toml)."""
+    modules_root = os.environ.get("LCP_MODULES_DIR", "").strip()
+    if modules_root:
+        candidate = os.path.join(modules_root, "livebench")
+        if _valid_checkout(candidate):
+            return candidate
+    for candidate in ("/opt/livebench",):
+        if _valid_checkout(candidate):
+            return candidate
+    return None
 
 
 def livebench_dir() -> Optional[str]:
-    """Return the path to a LiveBench checkout, or None if not configured.
+    """Return the LiveBench package dir containing ``run_livebench.py``.
 
-    A candidate directory only counts when it actually contains
-    ``run_livebench.py`` — an empty (mount-created) directory is NOT a
-    checkout. Also accepts the accidental nested layout
-    (``.../livebench/livebench``) produced by some manual clones.
-
-    Resolution order:
-      1. ``<LCP_MODULES_DIR>/livebench`` (runtime-installed modules root)
-      2. ``<LCP_MODULES_DIR>/livebench/livebench`` (nested layout)
-      3. ``run_livebench.py`` on PATH
-      4. ``/opt/livebench`` (legacy Dockerfile default)
+    This is both the script directory AND the required working directory —
+    LiveBench's scripts import ``from livebench...`` and read ``data/...``
+    relative to it.
     """
-    modules_root = os.environ.get("LCP_MODULES_DIR", "").strip()
-    if modules_root:
-        for candidate in (
-            os.path.join(modules_root, "livebench"),
-            os.path.join(modules_root, "livebench", "livebench"),
-        ):
-            if _valid_checkout(candidate):
-                return candidate
-
+    root = livebench_root()
+    if root:
+        return os.path.join(root, "livebench")
     found = shutil.which("run_livebench.py")
     if found:
         return os.path.dirname(found)
-    for candidate in ("/opt/livebench", "/opt/livebench/livebench"):
-        if _valid_checkout(candidate):
-            return candidate
     return None
 
 
@@ -123,14 +129,15 @@ def coding_deps_available() -> bool:
 
 
 def core_deps_available() -> bool:
-    """Return True when LiveBench's core Python package is importable.
+    """Return True when LiveBench's core package is importable.
 
-    LiveBench's ``run_livebench.py`` imports ``libtmux`` (a core dependency
-    from its pyproject.toml) before it does anything. When the checkout exists
-    but ``pip install -e .`` never ran (e.g. a nested/broken clone), this
-    returns False so we can surface a clear message instead of a traceback.
+    ``show_livebench_result.py`` does ``from livebench.common import ...``, so
+    the ``livebench`` package must be importable (editable-installed), and
+    ``run_livebench.py`` imports ``libtmux`` first. Both must resolve before
+    a benchmark run can proceed; this surfaces a clear message otherwise.
     """
     try:
+        import livebench  # noqa: F401
         import libtmux  # noqa: F401
         return True
     except ImportError:
