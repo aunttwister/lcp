@@ -96,6 +96,7 @@ function progressOf() {
   if (!steps.length) return { done: 0, total: 0, pct: 0, requiredDone: 0, requiredTotal: 1 };
   const required = steps.filter(s => s.required);
   const done = steps.filter(s => s.installed).length;
+  const total = steps.length;
   const requiredDone = required.filter(s => s.installed).length;
   const requiredTotal = required.length || 1;
   return { done, total, pct: Math.round(done / total * 100), requiredDone, requiredTotal };
