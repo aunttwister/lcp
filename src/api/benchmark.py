@@ -547,6 +547,19 @@ def _execute_run(run_id: int, engine, config) -> None:
         workdir = checkout
         category_scores: dict[str, float] = {}
 
+        # Fatal provider/auth errors in the streamed output. When these appear
+        # there's no point grinding through all 150 questions with retries —
+        # abort the run immediately with an actionable message.
+        fatal_markers = (
+            "insufficient balance", "creditserror", "authenticationerror",
+            "invalid api key", "not in plan", "model_not_in_plan",
+            "upgrade_required", "permission_error",
+        )
+
+        def _is_fatal(line: str) -> bool:
+            low = line.lower()
+            return any(m in low for m in fatal_markers)
+
         for cmd in commands:
             _log(run_id, f"$ {_redact_cmd(cmd)}")
             logger.info("benchmark_subprocess", run_id=run_id, cmd=_redact_cmd(cmd))
@@ -555,9 +568,18 @@ def _execute_run(run_id: int, engine, config) -> None:
                 text=True, bufsize=1, errors="replace", env=env,
             )
             assert proc.stdout is not None
+            fatal = None
             for line in proc.stdout:
-                _log(run_id, _redact_stream_line(line, api_key))
+                clean = _redact_stream_line(line, api_key)
+                _log(run_id, clean)
+                if fatal is None and _is_fatal(clean):
+                    fatal = clean.strip()[-500:]
             rc = proc.wait()
+            if fatal is not None:
+                proc.kill()
+                raise RuntimeError(
+                    f"LiveBench aborted — fatal provider error: {fatal}"
+                )
             if rc != 0:
                 tail = "\n".join(get_run_log(run_id)[-40:])
                 raise RuntimeError(
