@@ -409,6 +409,9 @@ class LCPHandler(
         elif self.path == "/api/models/registry":
             self._serve_registry_upsert_api()
             return
+        elif self.path == "/api/models/capability/manual":
+            self._serve_capability_manual_api()
+            return
         elif self.path == "/api/models/benchmark":
             self._serve_benchmark_create_api()
             return

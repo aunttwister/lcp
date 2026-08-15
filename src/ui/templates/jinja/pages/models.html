@@ -88,6 +88,13 @@ const API = {
   async benchmarkLog(id) {
     const r = await fetch('/api/models/benchmark/' + id + '/log');
     return r.json();
+  },
+  async manualScores(model, scores, release) {
+    const r = await fetch('/api/models/capability/manual', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model, scores, release})
+    });
+    return r.json();
   }
 };
 
@@ -175,6 +182,7 @@ function renderDetail(model) {
   const reg = STATE.registry[model];
   const aliases = reg ? reg.aliases : [];
   const benchmarkKey = reg ? reg.benchmark_key : model;
+  const activeRelease = reg ? (reg.active_release || 'latest') : 'latest';
   const updatedAt = reg ? (reg.updated_at || '').replace('T', ' ').slice(0, 19) : null;
   const provs = providerModels()[model] || [];
   const defaultProvider = provs[0] || '';
@@ -187,6 +195,7 @@ function renderDetail(model) {
         score: models[model],
         source: (STATE.matrix.sources || {})[task]?.[model] || '—',
         category: (STATE.matrix.benchmark_categories || {})[task]?.[model] || '—',
+        release: (STATE.matrix.releases || {})[task]?.[model] || null,
       });
     }
   }
@@ -198,6 +207,7 @@ function renderDetail(model) {
     <div class="model-detail-head">
       <h3 class="mono">${model}</h3>
       <div class="model-detail-actions">
+        <button class="btn btn-outline" id="addScoreBtn">+ Add score</button>
         <button class="btn btn-outline" id="editModelBtn">Edit</button>
         ${reg ? '<button class="btn btn-outline btn-danger" id="deleteModelBtn">Delete</button>' : ''}
       </div>
@@ -209,6 +219,7 @@ function renderDetail(model) {
         <dt>Benchmark key</dt><dd class="mono">${benchmarkKey}</dd>
         <dt>Provider aliases</dt>
         <dd>${aliases.length ? aliases.map(a => `<code class="mono">${a}</code>`).join(' ') : '<span class="muted">none — unregistered</span>'}</dd>
+        <dt>Active release</dt><dd class="mono">${activeRelease}</dd>
         ${updatedAt ? `<dt>Updated</dt><dd>${updatedAt}</dd>` : ''}
       </dl>
     </div>
@@ -222,9 +233,9 @@ function renderDetail(model) {
             <span class="score-task" title="${s.task}">${s.task.replace(/_/g, ' ')}</span>
             <div class="score-track"><div class="score-fill ${s.score >= 0.8 ? 'hi' : s.score >= 0.6 ? 'mid' : 'lo'}" style="width:${(s.score * 100).toFixed(0)}%"></div></div>
             <span class="score-pct">${(s.score * 100).toFixed(1)}%</span>
-            <span class="score-src" title="source: ${s.source}, category: ${s.category}">${s.source}</span>
+            <span class="score-src" title="source: ${s.source}, category: ${s.category}${s.release ? ', release: ' + s.release : ''}">${s.source}${s.release ? ' @ ' + s.release : ''}</span>
           </div>`).join('')}
-      </div>` : '<p class="empty">No scores yet — run a benchmark below.</p>'}
+      </div>` : '<p class="empty">No scores yet — run a benchmark below or add scores manually.</p>'}
     </div>
 
     <div class="model-section">
@@ -256,6 +267,7 @@ function renderDetail(model) {
   document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, aliases));
   document.getElementById('deleteModelBtn')?.addEventListener('click', () => deleteRegistry(model));
   document.getElementById('runBenchBtn')?.addEventListener('click', () => runBenchmark(model));
+  document.getElementById('addScoreBtn')?.addEventListener('click', () => openManualScore(model));
   document.querySelectorAll('[data-benchlog]').forEach(btn => {
     btn.addEventListener('click', () => openBenchmarkLog(btn.dataset.benchlog));
   });
@@ -290,6 +302,47 @@ function editRegistry(logical, benchmark, aliases) {
     benchmark_key: newBenchmark.trim(),
     aliases: newAliases.split(',').map(a => a.trim()).filter(Boolean),
   }).then(r => {
+    if (r.error) { alert('Error: ' + r.error); return; }
+    loadAll();
+  });
+}
+
+// ── Manual score entry ─────────────────────────────────────────────────────
+
+const SCORE_TASKS = [
+  'code_generation', 'reasoning_chain', 'debugging', 'agentic_multi_step',
+  'planning', 'research_deep', 'casual_chat',
+];
+
+function openManualScore(model) {
+  const reg = STATE.registry[model];
+  const activeRelease = reg ? (reg.active_release || '') : '';
+  const today = new Date().toISOString().slice(0, 10);
+  const release = prompt('Release label (e.g. 2026-08-13, or leave blank for today):', activeRelease || today);
+  if (release === null) return;
+
+  const rows = SCORE_TASKS.map(t => {
+    const existing = (STATE.matrix.tasks || {})[t]?.[model];
+    const val = existing !== undefined ? (existing * 100).toFixed(1) : '';
+    return t + '=' + val;
+  });
+  const input = prompt(
+    'Scores as 0-100, comma-separated.\nTasks: ' + SCORE_TASKS.join(', ') + '\n\n' +
+    'Example:\n' + SCORE_TASKS.map(t => t + '=85').join(', ') + '\n\n' +
+    'Leave a task blank to skip it.',
+    rows.join(', ')
+  );
+  if (input === null) return;
+
+  const scores = {};
+  for (const part of input.split(',')) {
+    const [task, value] = part.split('=').map(s => (s || '').trim());
+    if (!task || value === '' || isNaN(Number(value))) continue;
+    scores[task] = Number(value);
+  }
+  if (!Object.keys(scores).length) { alert('No valid scores entered.'); return; }
+
+  API.manualScores(model, scores, release).then(r => {
     if (r.error) { alert('Error: ' + r.error); return; }
     loadAll();
   });

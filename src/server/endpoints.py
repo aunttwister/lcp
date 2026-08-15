@@ -1810,34 +1810,45 @@ class DashboardEndpoints:
         self.wfile.write(html.encode("utf-8"))
 
     def _serve_capability_api(self):
-        """GET /api/models/capability — return the capability matrix as JSON."""
+        """GET /api/models/capability — return the capability matrix as JSON.
+
+        Optional ``?release=<label>`` filters to one release; without it each
+        model's rows are returned (the client/registry resolves active).
+        """
         from urllib.parse import parse_qs, urlparse
         from ..api.models import ModelCapability, get_session as _gs
 
         qs = parse_qs(urlparse(self.path).query)
         source_filter = qs.get("source", [None])[0]
+        release_filter = qs.get("release", [None])[0]
 
         try:
             with _gs(self.engine) as session:
                 q = session.query(ModelCapability)
                 if source_filter:
                     q = q.filter(ModelCapability.source == source_filter)
+                if release_filter:
+                    q = q.filter(ModelCapability.release_label == release_filter)
                 rows = q.all()
 
             tasks: dict[str, dict[str, float]] = {}
             sources: dict[str, dict[str, str]] = {}
             benchmarks: dict[str, dict[str, str]] = {}
+            releases: dict[str, dict[str, str]] = {}
 
             for r in rows:
                 tasks.setdefault(r.task_type, {})[r.model] = r.score
                 sources.setdefault(r.task_type, {})[r.model] = r.source
                 if r.benchmark_category:
                     benchmarks.setdefault(r.task_type, {})[r.model] = r.benchmark_category
+                if r.release_label:
+                    releases.setdefault(r.task_type, {})[r.model] = r.release_label
 
             self._send_json({
                 "tasks": tasks,
                 "sources": sources,
                 "benchmark_categories": benchmarks,
+                "releases": releases,
                 "count": len(rows),
             })
         except Exception as e:
@@ -1863,16 +1874,83 @@ class DashboardEndpoints:
                     "logical_name": r.logical_name,
                     "benchmark_key": r.benchmark_key,
                     "aliases": aliases,
+                    "active_release": r.active_release,
                     "updated_at": r.updated_at,
                 })
             self._send_json({"registry": entries, "count": len(entries)})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
+    def _serve_capability_manual_api(self):
+        """POST /api/models/capability/manual — upsert user-entered scores.
+
+        Body: {model, release (optional), scores: {task_type: 0..1 or 0..100}}.
+        Scores are stored source="manual" with the given release label (default
+        today's date), so manual edits never clobber benchmark results.
+        """
+        from datetime import datetime, timezone
+        from ..api.models import ModelCapability, get_session as _gs
+        from ..api.router import invalidate_registry_cache
+
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+
+        model = (body.get("model") or "").strip().lower()
+        scores = body.get("scores") or {}
+        release = (body.get("release") or "").strip() or None
+        if not model:
+            self._send_json({"error": "missing 'model'"}, 400)
+            return
+        if not isinstance(scores, dict) or not scores:
+            self._send_json({"error": "'scores' must be a non-empty object"}, 400)
+            return
+
+        label = release or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now = datetime.now(timezone.utc).isoformat()
+
+        try:
+            with _gs(self.engine) as session:
+                for task, value in scores.items():
+                    try:
+                        raw = float(value)
+                    except (TypeError, ValueError):
+                        self._send_json({"error": f"score for {task} is not a number"}, 400)
+                        return
+                    # Accept 0-100 or 0-1; normalize to 0-1.
+                    normalized = raw / 100.0 if raw > 1.0 else raw
+                    normalized = round(max(0.0, min(1.0, normalized)), 4)
+
+                    existing = session.query(ModelCapability).filter_by(
+                        model=model, task_type=task, source="manual",
+                        release_label=label,
+                    ).first()
+                    if existing is not None:
+                        existing.score = normalized
+                        existing.raw_score = raw
+                        existing.updated_at = now
+                    else:
+                        session.add(ModelCapability(
+                            model=model,
+                            task_type=task,
+                            score=normalized,
+                            source="manual",
+                            raw_score=raw,
+                            release_label=label,
+                            updated_at=now,
+                        ))
+                session.commit()
+            invalidate_registry_cache()
+            self._send_json({"ok": True, "model": model, "release": label})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _serve_registry_upsert_api(self):
         """POST /api/models/registry — create or update a registry entry.
 
-        Body: {logical_name, benchmark_key, aliases: [..]}
+        Body: {logical_name, benchmark_key, aliases: [..], active_release?}
         """
         import json
         from datetime import datetime, timezone
@@ -1888,6 +1966,7 @@ class DashboardEndpoints:
         logical = (body.get("logical_name") or "").strip().lower()
         benchmark = (body.get("benchmark_key") or "").strip().lower()
         aliases = body.get("aliases") or []
+        active_release = (body.get("active_release") or "").strip() or None
         if not logical:
             self._send_json({"error": "missing 'logical_name'"}, 400)
             return
@@ -1911,6 +1990,8 @@ class DashboardEndpoints:
                 if entry:
                     entry.benchmark_key = benchmark
                     entry.aliases_json = json.dumps(aliases)
+                    if active_release is not None:
+                        entry.active_release = active_release
                     entry.updated_at = now
                     action = "updated"
                 else:
@@ -1918,6 +1999,7 @@ class DashboardEndpoints:
                         logical_name=logical,
                         benchmark_key=benchmark,
                         aliases_json=json.dumps(aliases),
+                        active_release=active_release,
                         updated_at=now,
                     ))
                     action = "created"
@@ -2003,6 +2085,7 @@ class DashboardEndpoints:
 
         provider = (body.get("provider") or "").strip()
         model = (body.get("model") or "").strip()
+        release = (body.get("release") or "").strip() or None
         if not provider or not model:
             self._send_json({"error": "missing 'provider' and/or 'model'"}, 400)
             return
@@ -2015,12 +2098,16 @@ class DashboardEndpoints:
             self._send_json({"error": "'categories' must be a list of strings"}, 400)
             return
 
+        target = {"provider": provider, "model": model}
+        if release:
+            target["release"] = release
+
         try:
             run = queue_benchmark(
                 self.engine,
                 self.config,
                 target_kind="provider",
-                target={"provider": provider, "model": model},
+                target=target,
                 categories=categories or None,
             )
             self._send_json({"ok": True, "run": run})

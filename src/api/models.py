@@ -140,8 +140,12 @@ class FailoverEvent(Base):
 class ModelCapability(Base):
     """Per-task capability scores for model routing.
 
-    Populated from public benchmarks (LiveBench, Arena) and optionally
-    refreshed by running benchmarks through LCP's own provider routes.
+    Populated from public benchmarks (LiveBench, Arena), runtime benchmark
+    runs (``lcp_benchmark``), and manual user entry (``manual``).
+
+    ``release_label`` separates scores for different releases of the SAME
+    logical model (e.g. ``deepseek-v4-pro`` 2026-06-25 vs 2026-08-13). The
+    registry's ``active_release`` picks which release feeds the router.
     """
     __tablename__ = "model_capabilities"
 
@@ -149,9 +153,10 @@ class ModelCapability(Base):
     model = Column(String, nullable=False, index=True)
     task_type = Column(String, nullable=False, index=True)
     score = Column(Float, nullable=False)  # 0.0–1.0 normalized
-    source = Column(String, nullable=False, default="livebench")  # livebench, arena, gateway_yaml, lcp_benchmark
+    source = Column(String, nullable=False, default="livebench")  # livebench, arena, gateway_yaml, lcp_benchmark, manual
     benchmark_category = Column(String, nullable=True)  # raw LiveBench category (coding, math, etc.)
     raw_score = Column(Float, nullable=True)  # original score before normalization (e.g. 70.0 out of 100)
+    release_label = Column(String, nullable=True, index=True)  # e.g. "2026-08-13"; None = unversioned/legacy
     updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -164,7 +169,9 @@ class ModelRegistryEntry(Base):
     explicitly so the router never has to guess from string patterns.
 
     Each logical model has exactly one row. Its provider aliases are stored as
-    a JSON array, and its benchmark key names the snapshot to score against.
+    a JSON array, ``benchmark_key`` names the snapshot to score against, and
+    ``active_release`` selects which release's scores feed the router (default
+    ``latest`` = the most recently-updated release).
     """
     __tablename__ = "model_registry"
 
@@ -172,6 +179,7 @@ class ModelRegistryEntry(Base):
     logical_name = Column(String, unique=True, nullable=False, index=True)
     benchmark_key = Column(String, nullable=False)  # key in model_capabilities
     aliases_json = Column(Text, nullable=False, default="[]")  # JSON array of provider-side IDs
+    active_release = Column(String, nullable=True)  # release_label to route by; None/latest = newest
     updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
 
 

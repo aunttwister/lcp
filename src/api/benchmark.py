@@ -598,7 +598,8 @@ def _execute_run(run_id: int, engine, config) -> None:
         if not category_scores:
             raise RuntimeError("LiveBench produced no parseable category scores")
 
-        _upsert_scores(engine, target, category_scores)
+        release_label = target.get("release") or None
+        _upsert_scores(engine, target, category_scores, release_label=release_label)
 
         now = datetime.now(timezone.utc).isoformat()
         with get_session(engine) as session:
@@ -619,12 +620,20 @@ def _execute_run(run_id: int, engine, config) -> None:
         _mark_failed(run_id, engine, str(exc))
 
 
-def _upsert_scores(engine, target: dict, category_scores: dict[str, float]) -> None:
-    """Normalize 0-100 category scores to 0-1 and upsert into model_capabilities."""
+def _upsert_scores(engine, target: dict, category_scores: dict[str, float],
+                   release_label: Optional[str] = None) -> None:
+    """Normalize 0-100 category scores to 0-1 and upsert into model_capabilities.
+
+    Scores are tagged with ``release_label`` (defaults to today's date when not
+    provided) so re-benchmarking the same model on a new release keeps history
+    instead of overwriting it. Only rows for the SAME (model, task, source,
+    release) are replaced.
+    """
     from .seed_capabilities import LB_TO_LCP
     from .models import ModelCapability, get_session
 
     logical_model = target.get("model", "")
+    label = release_label or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     now = datetime.now(timezone.utc).isoformat()
 
     with get_session(engine) as session:
@@ -632,9 +641,10 @@ def _upsert_scores(engine, target: dict, category_scores: dict[str, float]) -> N
             task_type = LB_TO_LCP.get(lb_cat)
             if task_type is None:
                 continue
-            # Upsert: replace any prior lcp_benchmark row for this model+task.
+            # Upsert: replace prior lcp_benchmark row for this model+task+release.
             existing = session.query(ModelCapability).filter_by(
-                model=logical_model, task_type=task_type, source="lcp_benchmark"
+                model=logical_model, task_type=task_type, source="lcp_benchmark",
+                release_label=label,
             ).first()
             score = round(raw / 100.0, 4)
             if existing is not None:
@@ -650,6 +660,7 @@ def _upsert_scores(engine, target: dict, category_scores: dict[str, float]) -> N
                     source="lcp_benchmark",
                     benchmark_category=lb_cat,
                     raw_score=raw,
+                    release_label=label,
                     updated_at=now,
                 ))
         session.commit()

@@ -1,4 +1,7 @@
 """Tests for router.py"""
+import os
+import tempfile
+
 import pytest
 import sys
 from src.api.router import (
@@ -6,6 +9,25 @@ from src.api.router import (
     logical_model_name, benchmark_model_name,
 )
 from src.api.seed_capabilities import DEFAULT_MODEL_REGISTRY
+
+
+@pytest.fixture
+def registry_db():
+    """A fresh DB seeded with the default model registry."""
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    from src.api.models import get_engine, Base
+    engine = get_engine(path)
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    from src.api.seed_capabilities import seed_model_registry
+    seed_model_registry(path)
+    yield path
+    for ext in ("", "-wal", "-shm"):
+        try:
+            os.unlink(path + ext)
+        except FileNotFoundError:
+            pass
 
 
 # ── Legacy DynamicRouter tests (flash/pro heuristic) ──────────────────────
@@ -73,15 +95,15 @@ def test_router_disabled_returns_none():
     msgs = [{"role": "user", "content": "write a function"}]
     assert router.select_model(msgs) is None
 
-def test_router_enabled_selects_best():
-    router = CapabilityRouter(enabled=True)
+def test_router_enabled_selects_best(registry_db):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
     msgs = [{"role": "user", "content": "hello there"}]
     result = router.select_model(msgs, available_models=["deepseek-v4-flash", "deepseek-v4-pro"])
     # Casual chat → flash should be preferred (cheaper, good enough)
     assert result is not None
 
-def test_router_ranks_models():
-    router = CapabilityRouter(enabled=True)
+def test_router_ranks_models(registry_db):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
     ranked = router.rank_models("code_generation", ["deepseek-v4-flash", "deepseek-v4-pro"])
     assert len(ranked) == 2
     # Both are valid — flash is cheaper and nearly as capable for coding,
@@ -94,26 +116,26 @@ def test_singleton():
 
 # ── Model registry tests (explicit alias → logical → benchmark) ───────────
 
-def test_logical_model_name_maps_provider_alias():
-    assert logical_model_name("deepseek/deepseek-v4-pro") == "deepseek-v4-pro"
-    assert logical_model_name("moonshotai/Kimi-K3") == "kimi-k3"
-    assert logical_model_name("Qwen/Qwen3.8-Max") == "qwen3.8-max"
-    assert logical_model_name("google/gemini-3.6-flash") == "gemini-3.6-flash"
+def test_logical_model_name_maps_provider_alias(registry_db):
+    assert logical_model_name("deepseek/deepseek-v4-pro", registry_db) == "deepseek-v4-pro"
+    assert logical_model_name("moonshotai/Kimi-K3", registry_db) == "kimi-k3"
+    assert logical_model_name("Qwen/Qwen3.8-Max", registry_db) == "qwen3.8-max"
+    assert logical_model_name("google/gemini-3.6-flash", registry_db) == "gemini-3.6-flash"
 
-def test_logical_model_name_passthrough_unknown():
-    assert logical_model_name("some-brand-new-model") == "some-brand-new-model"
+def test_logical_model_name_passthrough_unknown(registry_db):
+    assert logical_model_name("some-brand-new-model", registry_db) == "some-brand-new-model"
 
-def test_logical_model_name_case_insensitive():
-    assert logical_model_name("DeepSeek-V4-Pro") == "deepseek-v4-pro"
+def test_logical_model_name_case_insensitive(registry_db):
+    assert logical_model_name("DeepSeek-V4-Pro", registry_db) == "deepseek-v4-pro"
 
-def test_benchmark_model_name_resolves_rolling_alias():
+def test_benchmark_model_name_resolves_rolling_alias(registry_db):
     # Rolling 'deepseek-v4-flash' alias scores as the latest benchmarked
     # snapshot (0731), not the stale bare name.
-    assert benchmark_model_name("deepseek-v4-flash") == "deepseek-v4-flash-0731"
+    assert benchmark_model_name("deepseek-v4-flash", registry_db) == "deepseek-v4-flash-0731"
 
-def test_benchmark_model_name_passthrough_without_pin():
+def test_benchmark_model_name_passthrough_without_pin(registry_db):
     # deepseek-v4-pro has no dated snapshot in the registry
-    assert benchmark_model_name("deepseek-v4-pro") == "deepseek-v4-pro"
+    assert benchmark_model_name("deepseek-v4-pro", registry_db) == "deepseek-v4-pro"
 
 def test_registry_aliases_are_unique():
     seen = {}
