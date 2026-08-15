@@ -23,6 +23,7 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -131,16 +132,28 @@ def coding_deps_available() -> bool:
 def core_deps_available() -> bool:
     """Return True when LiveBench's core package is importable.
 
-    ``show_livebench_result.py`` does ``from livebench.common import ...``, so
-    the ``livebench`` package must be importable (editable-installed), and
-    ``run_livebench.py`` imports ``libtmux`` first. Both must resolve before
-    a benchmark run can proceed; this surfaces a clear message otherwise.
+    ``show_livebench_result.py`` does ``from livebench.common import ...`` so
+    the ``livebench`` package must be importable, and ``run_livebench.py``
+    imports ``libtmux`` first.
+
+    IMPORTANT: we probe with a FRESH python subprocess rather than importing
+    in the long-lived LCP process — editable installs (``pip install -e .``)
+    register a ``.pth`` finder that is only picked up at interpreter startup,
+    so an in-process ``import livebench`` would falsely fail right after a
+    successful editable install.
     """
+    probe = (
+        "import importlib.util, sys;"
+        "sys.exit(0 if importlib.util.find_spec('libtmux') and "
+        "importlib.util.find_spec('livebench') else 1)"
+    )
     try:
-        import livebench  # noqa: F401
-        import libtmux  # noqa: F401
-        return True
-    except ImportError:
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True, text=True, timeout=60,
+        )
+        return result.returncode == 0
+    except Exception:  # noqa: BLE001 — treat as unavailable
         return False
 
 
