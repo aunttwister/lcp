@@ -205,6 +205,8 @@ class TestLivebenchInstall:
         monkeypatch.setattr("shutil.rmtree", lambda *a, **k: None)
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/git")
         monkeypatch.setattr("os.path.isdir", lambda _: False)
+        monkeypatch.setattr("os.path.isfile", lambda p: p.endswith("run_livebench.py"))
+        monkeypatch.setattr("os.listdir", lambda p: [])
         monkeypatch.setattr("os.makedirs", lambda *a, **k: None)
         monkeypatch.setattr(setup_mod, "_stream", fake_stream)
         monkeypatch.setattr(setup_mod.os, "environ", {"LCP_MODULES_DIR": "/tmp/lcp-modules"})

@@ -82,22 +82,30 @@ def livebench_dir() -> Optional[str]:
 
     A candidate directory only counts when it actually contains
     ``run_livebench.py`` — an empty (mount-created) directory is NOT a
-    checkout. Resolution order:
+    checkout. Also accepts the accidental nested layout
+    (``.../livebench/livebench``) produced by some manual clones.
+
+    Resolution order:
       1. ``<LCP_MODULES_DIR>/livebench`` (runtime-installed modules root)
-      2. ``run_livebench.py`` on PATH
-      3. ``/opt/livebench`` (legacy Dockerfile default)
+      2. ``<LCP_MODULES_DIR>/livebench/livebench`` (nested layout)
+      3. ``run_livebench.py`` on PATH
+      4. ``/opt/livebench`` (legacy Dockerfile default)
     """
     modules_root = os.environ.get("LCP_MODULES_DIR", "").strip()
     if modules_root:
-        candidate = os.path.join(modules_root, "livebench")
-        if _valid_checkout(candidate):
-            return candidate
+        for candidate in (
+            os.path.join(modules_root, "livebench"),
+            os.path.join(modules_root, "livebench", "livebench"),
+        ):
+            if _valid_checkout(candidate):
+                return candidate
 
     found = shutil.which("run_livebench.py")
     if found:
         return os.path.dirname(found)
-    if _valid_checkout("/opt/livebench"):
-        return "/opt/livebench"
+    for candidate in ("/opt/livebench", "/opt/livebench/livebench"):
+        if _valid_checkout(candidate):
+            return candidate
     return None
 
 

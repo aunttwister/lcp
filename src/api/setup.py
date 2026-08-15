@@ -461,6 +461,23 @@ def _run_livebench_install(engine) -> None:
             ["git", "clone", "--depth", "1", LIVEBENCH_REPO, target],
             cwd=None, start=2.0, end=25.0, status_msg="Cloning LiveBench…",
         )
+
+        # Defensive: if the clone produced a nested layout (e.g. the target
+        # dir already existed), normalize to <target>/ by moving the nested
+        # checkout up one level.
+        runner = os.path.join(target, "run_livebench.py")
+        nested = os.path.join(target, "livebench")
+        if not os.path.isfile(runner) and os.path.isfile(os.path.join(nested, "run_livebench.py")):
+            _bench_update("Normalizing nested checkout layout…")
+            for entry in os.listdir(nested):
+                shutil.move(os.path.join(nested, entry), os.path.join(target, entry))
+            shutil.rmtree(nested, ignore_errors=True)
+
+        if not os.path.isfile(os.path.join(target, "run_livebench.py")):
+            raise SetupError(
+                f"clone finished but {target}/run_livebench.py is missing"
+            )
+
         _stream(
             [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-e", "."],
             cwd=target, start=25.0, end=60.0, status_msg="Installing LiveBench core…",
