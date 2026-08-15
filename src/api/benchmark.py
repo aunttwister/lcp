@@ -123,6 +123,21 @@ def coding_deps_available() -> bool:
         return False
 
 
+def core_deps_available() -> bool:
+    """Return True when LiveBench's core Python package is importable.
+
+    LiveBench's ``run_livebench.py`` imports ``libtmux`` (a core dependency
+    from its pyproject.toml) before it does anything. When the checkout exists
+    but ``pip install -e .`` never ran (e.g. a nested/broken clone), this
+    returns False so we can surface a clear message instead of a traceback.
+    """
+    try:
+        import libtmux  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def benchmark_status() -> dict:
     """Report whether the benchmark runner is usable, and at what capacity.
 
@@ -152,6 +167,7 @@ def benchmark_status() -> dict:
         "livebench_dir": path,
         "categories": list(LIVEBENCH_CATEGORIES),
         "coding_supported": coding_deps_available(),
+        "core_installed": core_deps_available(),
     }
 
 
@@ -448,6 +464,13 @@ def _execute_run(run_id: int, engine, config) -> None:
             raise RuntimeError(
                 f"target_kind {target_kind!r} is not implemented yet "
                 f"(only 'provider' benchmarks the raw model directly)"
+            )
+
+        if not core_deps_available():
+            raise RuntimeError(
+                "LiveBench core package is not installed (missing libtmux). "
+                "Run the Setup → LiveBench install to pip install the "
+                "checkout, or run: pip install -e \"$LCP_MODULES_DIR/livebench\""
             )
 
         api_model, api_base, api_key = _resolve_provider_target(engine, config, target)

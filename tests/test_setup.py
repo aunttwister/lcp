@@ -210,6 +210,9 @@ class TestLivebenchInstall:
         monkeypatch.setattr("os.makedirs", lambda *a, **k: None)
         monkeypatch.setattr(setup_mod, "_stream", fake_stream)
         monkeypatch.setattr(setup_mod.os, "environ", {"LCP_MODULES_DIR": "/tmp/lcp-modules"})
+        monkeypatch.setattr(
+            "src.api.benchmark.core_deps_available", lambda: True
+        )
         # Simulate an in-flight install so _bench_update/_bench_finish have state.
         monkeypatch.setattr(setup_mod, "_bench_install", {
             "status": "running", "progress": 0.0, "detail": "", "log": [],

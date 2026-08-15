@@ -483,6 +483,16 @@ def _run_livebench_install(engine) -> None:
             cwd=target, start=25.0, end=60.0, status_msg="Installing LiveBench core…",
         )
 
+        # Verify the core package actually became importable (libtmux is a
+        # core dependency run_livebench.py imports first).
+        from .benchmark import core_deps_available
+        if not core_deps_available():
+            raise SetupError(
+                "LiveBench core install did not take effect (libtmux still "
+                f"not importable). The checkout is at {target} — try running "
+                f"`pip install -e {target}` manually and check for errors."
+            )
+
         coding_note = None
         try:
             _stream(
