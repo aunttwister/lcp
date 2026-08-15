@@ -20,7 +20,7 @@ from src.api.benchmark import (
 # ── Availability / status (benchmark "plugin") ──────────────────────────────
 
 def test_benchmark_status_unavailable_when_no_checkout(monkeypatch):
-    monkeypatch.delenv("LCP_LIVEBENCH_DIR", raising=False)
+    monkeypatch.delenv("LCP_MODULES_DIR", raising=False)
     monkeypatch.setattr("shutil.which", lambda _: None)
     monkeypatch.setattr("src.api.benchmark.os.path.isdir", lambda p: False)
     status = benchmark_status()
@@ -30,11 +30,13 @@ def test_benchmark_status_unavailable_when_no_checkout(monkeypatch):
 
 
 def test_benchmark_status_available_with_checkout(tmp_path, monkeypatch):
-    (tmp_path / "run_livebench.py").write_text("")
-    monkeypatch.setenv("LCP_LIVEBENCH_DIR", str(tmp_path))
+    checkout = tmp_path / "modules" / "livebench"
+    checkout.mkdir(parents=True)
+    (checkout / "run_livebench.py").write_text("")
+    monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "modules"))
     status = benchmark_status()
     assert status["available"] is True
-    assert status["livebench_dir"] == str(tmp_path)
+    assert status["livebench_dir"] == str(checkout)
     # coding_supported is False unless tensorflow is importable — don't assert
     # a specific value here, just that the key exists.
     assert "coding_supported" in status
@@ -122,7 +124,7 @@ def test_build_commands_subset(tmp_path):
 
 
 def test_build_commands_missing_checkout_raises(monkeypatch):
-    monkeypatch.delenv("LCP_LIVEBENCH_DIR", raising=False)
+    monkeypatch.delenv("LCP_MODULES_DIR", raising=False)
     monkeypatch.setattr("shutil.which", lambda _: None)
     monkeypatch.setattr("src.api.benchmark.os.path.isdir", lambda p: False)
     with pytest.raises(RuntimeError, match="LiveBench checkout not found"):

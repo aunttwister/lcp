@@ -7,7 +7,7 @@ depends on). The target abstraction accepts a ``provider`` kind today and a
 end-to-end through LCP).
 
 LiveBench is invoked as a subprocess against a local checkout (path from
-``LCP_LIVEBENCH_DIR``). Only the six non-Docker categories are run — agentic
+``LCP_MODULES_DIR``). Only the six non-Docker categories are run — agentic
 coding is excluded by design (no Docker).
 
 Results are parsed from LiveBench's ``all_groups.csv`` (per-category accuracy)
@@ -76,15 +76,10 @@ def livebench_dir() -> Optional[str]:
     """Return the path to a LiveBench checkout, or None if not configured.
 
     Resolution order:
-      1. ``LCP_LIVEBENCH_DIR`` env var (explicit override)
-      2. ``<LCP_MODULES_DIR>/livebench`` (runtime-installed modules root)
-      3. ``run_livebench.py`` on PATH
-      4. ``/opt/livebench`` (legacy Dockerfile default)
+      1. ``<LCP_MODULES_DIR>/livebench`` (runtime-installed modules root)
+      2. ``run_livebench.py`` on PATH
+      3. ``/opt/livebench`` (legacy Dockerfile default)
     """
-    env = os.environ.get("LCP_LIVEBENCH_DIR", "").strip()
-    if env and os.path.isdir(env):
-        return env
-
     modules_root = os.environ.get("LCP_MODULES_DIR", "").strip()
     if modules_root:
         candidate = os.path.join(modules_root, "livebench")
@@ -125,9 +120,9 @@ def benchmark_status() -> dict:
         return {
             "available": False,
             "reason": (
-                "LiveBench checkout not found — set LCP_LIVEBENCH_DIR to a "
-                "directory containing run_livebench.py, or build the image "
-                "with WITH_BENCH=1."
+                "LiveBench checkout not found — set LCP_MODULES_DIR to a "
+                "directory containing a livebench checkout, or build the "
+                "image with WITH_BENCH=1."
             ),
             "categories": list(LIVEBENCH_CATEGORIES),
             "coding_supported": False,
@@ -172,8 +167,8 @@ def build_livebench_commands(
     path = livebench_path or livebench_dir()
     if not path:
         raise RuntimeError(
-            "LiveBench checkout not found — set LCP_LIVEBENCH_DIR to a "
-            "directory containing run_livebench.py, or put it on PATH."
+            "LiveBench checkout not found — set LCP_MODULES_DIR to a "
+            "directory containing a livebench checkout, or put run_livebench.py on PATH."
         )
 
     runner = os.path.join(path, "run_livebench.py")

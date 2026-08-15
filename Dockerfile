@@ -42,7 +42,6 @@ RUN if [ "$WITH_BENCH" = "1" ]; then \
         && pip install --no-cache-dir -e . \
         && pip install --no-cache-dir -r code_runner/requirements_eval.txt ; \
     fi
-ENV LCP_LIVEBENCH_DIR=${LCP_MODULES_DIR}/livebench
 
 # ── Application code ──
 COPY src/ ./src/

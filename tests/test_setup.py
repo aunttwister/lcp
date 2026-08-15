@@ -222,12 +222,10 @@ class TestLivebenchInstall:
         assert setup_mod.load_state(temp_db)["module:livebench"]["status"] == "done"
         monkeypatch.setattr(setup_mod, "_bench_last", None)
 
-    def test_livebench_dir_precedence(self, monkeypatch, tmp_path):
-        # 1. LCP_LIVEBENCH_DIR wins
-        monkeypatch.setenv("LCP_LIVEBENCH_DIR", str(tmp_path / "explicit"))
+    def test_livebench_dir_uses_modules_dir(self, monkeypatch, tmp_path):
         monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "modules"))
-        assert setup_mod.livebench_dir() == str(tmp_path / "explicit")
-
-        # 2. Falls back to <LCP_MODULES_DIR>/livebench
-        monkeypatch.delenv("LCP_LIVEBENCH_DIR", raising=False)
         assert setup_mod.livebench_dir() == str(tmp_path / "modules" / "livebench")
+
+    def test_livebench_dir_default(self, monkeypatch):
+        monkeypatch.delenv("LCP_MODULES_DIR", raising=False)
+        assert setup_mod.livebench_dir() == "/opt/lcp-modules/livebench"

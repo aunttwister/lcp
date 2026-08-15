@@ -284,33 +284,25 @@ generated code. Core-only covers the other five categories.
 **Option B — point LCP at a local checkout:**
 
 ```bash
-git clone --depth 1 https://github.com/LiveBench/LiveBench.git /opt/livebench
-cd /opt/livebench && pip install -e .
+export LCP_MODULES_DIR=/opt/lcp-modules
+git clone --depth 1 https://github.com/LiveBench/LiveBench.git "$LCP_MODULES_DIR/livebench"
+cd "$LCP_MODULES_DIR/livebench" && pip install -e .
 # optional, only for the `coding` category:
 pip install -r code_runner/requirements_eval.txt
-```
-
-Then tell LCP where it lives:
-
-```bash
-export LCP_LIVEBENCH_DIR=/opt/livebench
 ```
 
 LCP also falls back to `run_livebench.py` on `PATH`.
 
 ### Module install path
 
-The in-UI runtime installer (Setup → LiveBench) clones into the **module root**
-controlled by `LCP_MODULES_DIR` (default `/opt/lcp-modules`), i.e. it installs
-to `$LCP_MODULES_DIR/livebench`. Set this to a Docker volume mount so installs
-survive container recreation:
+All runtime-installed modules live under the **module root** controlled by
+`LCP_MODULES_DIR` (default `/opt/lcp-modules`). The in-UI runtime installer
+(Setup → LiveBench) clones to `$LCP_MODULES_DIR/livebench`. Set this to a
+Docker volume mount so installs survive container recreation:
 
 ```bash
 export LCP_MODULES_DIR=/app/data/modules
 ```
-
-`LCP_LIVEBENCH_DIR` always takes precedence when set — it pins the exact
-checkout location and is what the benchmark runner resolves first.
 
 ### Runtime status
 

@@ -37,16 +37,11 @@ logger = get_logger("lcp.setup")
 LIVEBENCH_REPO = "https://github.com/LiveBench/LiveBench.git"
 LIVEBENCH_EVAL_REQUIREMENTS = "code_runner/requirements_eval.txt"
 
-# Root directory where runtime-installed modules are cloned. Override with
-# ``LCP_MODULES_DIR`` (defaults to ``/opt/lcp-modules``, resolving to the
-# per-install fallback ``~/.local/share/lcp/modules`` when /opt isn't writable).
+# Root directory where runtime-installed modules live. Override with
+# ``LCP_MODULES_DIR`` (default ``/opt/lcp-modules``). Each module clones into
+# its own subdirectory, e.g. ``<modules_dir>/livebench`` for LiveBench.
 MODULES_DIR_ENV = "LCP_MODULES_DIR"
 DEFAULT_MODULES_DIR = "/opt/lcp-modules"
-
-# Env var that pins the LiveBench checkout location explicitly. When unset,
-# the checkout lives at ``<modules_dir>/livebench``. This still wins if set —
-# it's the most specific override (backward compatible with older setups).
-LIVEBENCH_DIR_ENV = "LCP_LIVEBENCH_DIR"
 
 
 class SetupError(Exception):
@@ -61,16 +56,9 @@ def modules_dir() -> str:
 def livebench_dir() -> str:
     """Return the LiveBench checkout path used by the runtime installer.
 
-    Precedence:
-      1. ``LCP_LIVEBENCH_DIR`` (explicit override, backward compatible)
-      2. ``<LCP_MODULES_DIR>/livebench``
-
-    This is the install *target*; it deliberately does NOT require the
-    directory to exist yet.
+    Always ``<LCP_MODULES_DIR>/livebench``. This is the install *target*; it
+    deliberately does NOT require the directory to exist yet.
     """
-    explicit = os.environ.get(LIVEBENCH_DIR_ENV, "").strip()
-    if explicit:
-        return explicit
     return os.path.join(modules_dir(), "livebench")
 
 
@@ -317,15 +305,14 @@ def remove_provider(engine, config, name: str) -> dict:
 def remove_livebench(engine) -> dict:
     """Remove the LiveBench checkout and clear its setup state.
 
-    Removes BOTH the configured install target (e.g. ``<modules_dir>/livebench``
-    or an explicit ``LCP_LIVEBENCH_DIR``) AND any well-known fallback paths,
-    so a stale checkout can't resurrect the module after removal.
+    Removes the configured install target (``<modules_dir>/livebench``) AND
+    any well-known fallback paths, so a stale checkout can't resurrect the
+    module after removal.
     """
     targets: list[str] = []
 
-    # 1. Explicit override / configured target.
-    target = livebench_dir()
-    targets.append(target)
+    # 1. Configured target.
+    targets.append(livebench_dir())
 
     # 2. Well-known fallbacks the runtime installer may have written earlier.
     targets.append("/opt/livebench")
@@ -340,9 +327,6 @@ def remove_livebench(engine) -> dict:
         if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
             removed.append(path)
-
-    # Drop the env override so a later install can re-clone cleanly.
-    os.environ.pop(LIVEBENCH_DIR_ENV, None)
 
     set_state(engine, "module:livebench", "removed")
     logger.info("setup_livebench_removed", removed=removed)
@@ -498,9 +482,6 @@ def _run_livebench_install(engine) -> None:
             coding_note = "eval extras not installed; coding category unavailable"
             _bench_update(None, progress=100.0)
 
-        # Make the running process see the checkout (benchmark.livebench_dir()
-        # reads LCP_LIVEBENCH_DIR first).
-        os.environ[LIVEBENCH_DIR_ENV] = target
         set_state(engine, "module:livebench", "done")
         if coding_note:
             _bench_finish("done", f"LiveBench installed — {coding_note}.")
