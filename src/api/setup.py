@@ -38,9 +38,6 @@ LIVEBENCH_REPO = "https://github.com/LiveBench/LiveBench.git"
 LIVEBENCH_DIR = os.environ.get("LCP_LIVEBENCH_DIR", "/opt/livebench").strip() or "/opt/livebench"
 LIVEBENCH_EVAL_REQUIREMENTS = "code_runner/requirements_eval.txt"
 
-# Env knob that disables the HTTP redirect gate (used by the test suite).
-DISABLE_ENV = "LCP_DISABLE_SETUP_WIZARD"
-
 
 class SetupError(Exception):
     """Raised for synchronous, user-facing setup failures."""
@@ -63,6 +60,7 @@ def provider_steps(config) -> list[dict]:
     steps: list[dict] = []
     for name in ("deepseek", "opencode", "commandcode", "llamacpp"):
         has_cred = bool(store and (store.has(name) or store.has_cookie(name) or store.has_workspace_id(name)))
+        preset = _provider_preset(name)
         steps.append({
             "kind": "provider",
             "name": name,
@@ -73,6 +71,7 @@ def provider_steps(config) -> list[dict]:
             "configured": name in configured,
             "has_credential": has_cred,
             "installed": name in configured and (not _provider_needs_key(name) or has_cred),
+            "api_base": preset.get("api_base", ""),
         })
     return steps
 

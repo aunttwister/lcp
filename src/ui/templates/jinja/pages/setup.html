@@ -37,44 +37,37 @@
     </h4>
     <pre id="setupLogLines" class="setup-log"></pre>
   </div>
-
-  <div class="setup-actions">
-    <button class="btn btn-outline" id="setupRefreshBtn" onclick="loadSetup()">Refresh</button>
-    <button class="btn btn-primary" id="setupDoneBtn" onclick="finishSetup()">Continue to dashboard</button>
-  </div>
-  <p class="muted" style="margin-top:0.75rem" id="setupGateNote">
-    You can finish later — the setup page stays available from the sidebar.
-  </p>
 </div>
 
 <!-- Install form modal (provider) -->
-<div class="dialog-overlay" id="setupInstallDialog">
-  <div class="dialog-content" style="max-width:420px">
-    <div class="dialog-header"><h2 id="setupInstallTitle">Install plugin</h2></div>
-    <div class="dialog-body" id="setupInstallBody">
-      <div class="setup-form-row">
-        <label>API Key <span class="muted">(encrypted at rest)</span></label>
-        <input type="password" id="setupApiKey" placeholder="sk-…" autocomplete="off">
+<div class="modal-overlay dialog-overlay" id="setupInstallDialog">
+<div class="modal dialog-content" style="width:min(440px,95vw)">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title" id="setupInstallTitle">Install plugin</h2>
+    <button class="modal-close dialog-close" onclick="closeDialog('setupInstallDialog')">✕</button>
+  </div>
+  <div class="modal-body dialog-body">
+    <div style="display:grid;gap:0.75rem">
+      <div id="setupKeyRow">
+        <label class="phm-label">API Key <span class="muted">(encrypted at rest)</span></label>
+        <input type="password" id="setupApiKey" placeholder="sk-…" autocomplete="off" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem;font-family:inherit">
       </div>
-      <div class="setup-form-row">
-        <label>API Base URL <span class="muted">(blank = preset default)</span></label>
-        <input type="text" id="setupApiBase" placeholder="https://…">
+      <div id="setupCookieRow" style="display:none">
+        <label class="phm-label">Browser cookie <span class="muted">(opencode subscription tracking)</span></label>
+        <input type="password" id="setupCookie" placeholder="optional" autocomplete="off" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem;font-family:inherit">
       </div>
-      <div class="setup-form-row" id="setupCookieRow" style="display:none">
-        <label>Browser cookie <span class="muted">(opencode subscription tracking)</span></label>
-        <input type="password" id="setupCookie" placeholder="optional" autocomplete="off">
+      <div id="setupWsRow" style="display:none">
+        <label class="phm-label">Workspace ID <span class="muted">(opencode wrk_…)</span></label>
+        <input type="text" id="setupWorkspaceId" placeholder="optional" style="width:100%;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.8125rem;font-family:inherit">
       </div>
-      <div class="setup-form-row" id="setupWsRow" style="display:none">
-        <label>Workspace ID <span class="muted">(opencode wrk_…)</span></label>
-        <input type="text" id="setupWorkspaceId" placeholder="optional">
-      </div>
-      <p class="muted" id="setupInstallNote"></p>
-    </div>
-    <div class="dialog-actions">
-      <button class="btn btn-outline" onclick="closeDialog('setupInstallDialog')">Cancel</button>
-      <button class="btn btn-primary" id="setupInstallBtn" onclick="confirmInstall()">Install</button>
+      <p class="muted" style="font-size:0.6875rem" id="setupInstallNote"></p>
     </div>
   </div>
+  <div class="modal-footer dialog-footer">
+    <button class="btn-sm" onclick="closeDialog('setupInstallDialog')">Cancel</button>
+    <button class="btn-sm btn-primary" id="setupInstallBtn" onclick="confirmInstall()">Install</button>
+  </div>
+</div>
 </div>
 {% endblock %}
 
@@ -113,12 +106,6 @@ function renderProgress() {
   if (label) label.textContent = p.requiredDone < p.requiredTotal
     ? 'Installing required plugins (' + p.requiredDone + '/' + p.requiredTotal + ')' : 'All required plugins installed';
   if (stats) stats.textContent = p.done + ' / ' + p.total + ' steps installed';
-  const doneBtn = document.getElementById('setupDoneBtn');
-  const gateNote = document.getElementById('setupGateNote');
-  if (doneBtn) doneBtn.disabled = p.requiredDone < p.requiredTotal;
-  if (gateNote) gateNote.textContent = p.requiredDone < p.requiredTotal
-    ? 'Install all required provider plugins (or skip) to unlock the dashboard.'
-    : 'All required plugins installed — you can continue.';
 }
 
 function installState(step) {
@@ -270,18 +257,17 @@ function openInstall(target) {
   SETUP.installing = { kind, name };
   const title = document.getElementById('setupInstallTitle');
   const note = document.getElementById('setupInstallNote');
-  const keyRow = document.querySelector('#setupApiKey').closest('.setup-form-row');
+  const keyRow = document.getElementById('setupKeyRow');
   const cookieRow = document.getElementById('setupCookieRow');
   const wsRow = document.getElementById('setupWsRow');
 
   document.getElementById('setupApiKey').value = '';
-  document.getElementById('setupApiBase').value = '';
   document.getElementById('setupCookie').value = '';
   document.getElementById('setupWorkspaceId').value = '';
 
   if (kind === 'provider') {
     title.textContent = 'Install ' + name;
-    note.textContent = 'Registers ' + name + ' in gateway.yaml and stores its credential encrypted.';
+    note.textContent = 'Registers ' + name + ' and stores its credential encrypted.';
     keyRow.style.display = name === 'llamacpp' ? 'none' : '';
     cookieRow.style.display = name === 'opencode' ? '' : 'none';
     wsRow.style.display = name === 'opencode' ? '' : 'none';
@@ -304,7 +290,6 @@ async function confirmInstall() {
   try {
     if (kind === 'provider') {
       const body = {
-        api_base: document.getElementById('setupApiBase').value.trim(),
         api_key: document.getElementById('setupApiKey').value.trim(),
       };
       if (name === 'opencode') {
@@ -327,12 +312,6 @@ async function confirmInstall() {
   }
   btn.disabled = false;
   btn.textContent = 'Install';
-}
-
-async function finishSetup() {
-  const res = await api('POST', '/api/setup/skip', {});
-  if (res.error) { alert('Error: ' + res.error); return; }
-  window.location.href = '/dashboard';
 }
 
 loadSetup();

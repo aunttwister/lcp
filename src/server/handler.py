@@ -223,38 +223,10 @@ class LCPHandler(
         p.strip() for p in os.environ.get("LCP_MODELS_PATHS", "/v1/models,/models").split(",") if p.strip()
     )
 
-    def _redirect_to_setup_if_needed(self) -> bool:
-        """Redirect the dashboard to /setup until the wizard is done/skipped.
-
-        Disabled when ``LCP_DISABLE_SETUP_WIZARD`` is set (used by tests) or
-        when the engine/config are unavailable.
-        """
-        if os.environ.get("LCP_DISABLE_SETUP_WIZARD"):
-            return False
-        if self.engine is None or self.config is None:
-            return False
-        try:
-            from ..api.setup import is_complete
-            if is_complete(self.engine, self.config):
-                return False
-        except Exception as exc:  # noqa: BLE001 — never break the dashboard
-            logger.warning("setup_gate_check_failed", error=str(exc))
-            return False
-        try:
-            self.send_response(302)
-            self.send_header("Location", "/setup")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            logger.debug("client_disconnected", path=self.path, redirect="/setup")
-        return True
-
     def do_GET(self):
         logger.debug("request_start", method="GET", path=self.path,
                      client_ip=self.client_address[0])
         if self.path == "/" or self.path == "/dashboard":
-            if self._redirect_to_setup_if_needed():
-                return
             self._serve_dashboard()
         elif self.path == "/keys" or self.path == "/keys/dashboard":
             self._serve_keys_dashboard()

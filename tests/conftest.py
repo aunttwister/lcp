@@ -9,13 +9,6 @@ import pytest
 import yaml
 
 
-@pytest.fixture(autouse=True)
-def _disable_setup_wizard():
-    """Disable the first-run setup wizard gate for the whole test suite."""
-    os.environ["LCP_DISABLE_SETUP_WIZARD"] = "1"
-    yield
-
-
 @pytest.fixture
 def temp_dir():
     """Temporary directory that cleans up after test."""

@@ -28,9 +28,6 @@ class _TestHandler(LCPHandler):
         self.raw_requestline = f"{method} {path} HTTP/1.1".encode()
         self.client_address = ("127.0.0.1", 0)
 
-        # Disable the first-run setup wizard gate (tests aren't onboarding).
-        os.environ["LCP_DISABLE_SETUP_WIZARD"] = "1"
-
         # Mock response methods
         self.send_response = MagicMock()
         self.send_header = MagicMock()
