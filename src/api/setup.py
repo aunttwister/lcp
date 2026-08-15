@@ -75,6 +75,16 @@ def livebench_site() -> str:
     return os.path.join(modules_dir(), "site")
 
 
+def livebench_pythonpath() -> str:
+    """Return the PYTHONPATH needed to import LiveBench + its deps.
+
+    Includes both the persistent ``site`` dir (deps) and the repo ROOT (so
+    ``import livebench`` resolves to ``<root>/livebench`` even if the editable
+    ``.pth`` finder isn't processed in a given interpreter).
+    """
+    return os.pathsep.join((livebench_site(), livebench_root()))
+
+
 # ── Manifest ────────────────────────────────────────────────────────────────
 
 def provider_steps(config) -> list[dict]:

@@ -141,12 +141,15 @@ def core_deps_available(site: Optional[str] = None) -> bool:
     register a ``.pth`` finder that is only picked up at interpreter startup,
     so an in-process ``import livebench`` would falsely fail right after a
     successful editable install. When *site* is given (the persistent
-    ``--target`` dir), it is prepended to ``PYTHONPATH`` for the probe.
+    ``--target`` dir), it is prepended to ``PYTHONPATH`` along with the repo
+    root for the probe.
     """
     env = dict(os.environ)
     if site:
+        from .setup import livebench_pythonpath
+        module_path = livebench_pythonpath()
         existing = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = site if not existing else f"{site}{os.pathsep}{existing}"
+        env["PYTHONPATH"] = module_path if not existing else f"{module_path}{os.pathsep}{existing}"
     probe = (
         "import importlib.util, sys;"
         "sys.exit(0 if importlib.util.find_spec('libtmux') and "
@@ -520,14 +523,13 @@ def _execute_run(run_id: int, engine, config) -> None:
             raise RuntimeError("LiveBench checkout not found")
 
         # Dependencies are installed into the persistent bind mount
-        # (<modules_dir>/site). Prepend it to PYTHONPATH for the benchmark
-        # subprocesses so the imports survive container recreation.
+        # (<modules_dir>/site) and the livebench package resolves via the repo
+        # root. Prepend both to PYTHONPATH for the benchmark subprocesses.
         env = dict(os.environ)
-        from .setup import livebench_site
-        site = livebench_site()
-        if site:
-            existing = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = site if not existing else f"{site}{os.pathsep}{existing}"
+        from .setup import livebench_pythonpath
+        module_path = livebench_pythonpath()
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = module_path if not existing else f"{module_path}{os.pathsep}{existing}"
 
         commands = build_livebench_commands(
             model=api_model,
