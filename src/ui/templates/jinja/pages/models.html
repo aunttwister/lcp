@@ -29,7 +29,10 @@
 <div class="modal dialog-content" style="width:min(680px,95vw)">
   <div class="modal-header dialog-header">
     <h2 class="dialog-title" id="benchLogTitle">Benchmark log</h2>
-    <button class="modal-close dialog-close" onclick="closeBenchLog()">✕</button>
+    <div style="display:flex;align-items:center;gap:0.5rem">
+      <button class="btn-sm" id="benchLogCopyBtn" onclick="copyBenchLog()">Copy</button>
+      <button class="modal-close dialog-close" onclick="closeBenchLog()">✕</button>
+    </div>
   </div>
   <div class="modal-body dialog-body">
     <pre id="benchLogLines" class="setup-log" style="max-height:420px"></pre>
@@ -321,10 +324,11 @@ function deleteRegistry(logical) {
 
 // ── Benchmark live log ─────────────────────────────────────────────────────
 
-let BENCH_LOG = { timer: null, runId: null };
+let BENCH_LOG = { timer: null, runId: null, stickToBottom: true };
 
 async function openBenchmarkLog(runId) {
   BENCH_LOG.runId = runId;
+  BENCH_LOG.stickToBottom = true;
   document.getElementById('benchLogTitle').textContent = 'Benchmark run #' + runId;
   document.getElementById('benchLogLines').textContent = 'Loading…';
   openDialog('benchLogModal');
@@ -334,12 +338,47 @@ async function openBenchmarkLog(runId) {
 
 async function pollBenchLog() {
   if (!BENCH_LOG.runId) return;
-  const data = await API.benchmarkLog(BENCH_LOG.runId);
-  if (data.error) { document.getElementById('benchLogLines').textContent = 'Error: ' + data.error; return; }
-  const lines = data.log || [];
-  document.getElementById('benchLogLines').textContent = lines.length ? lines.join('\n') : '(no output yet)';
   const pre = document.getElementById('benchLogLines');
-  pre.scrollTop = pre.scrollHeight;
+  const data = await API.benchmarkLog(BENCH_LOG.runId);
+  if (data.error) { pre.textContent = 'Error: ' + data.error; return; }
+  const lines = data.log || [];
+  pre.textContent = lines.length ? lines.join('\n') : '(no output yet)';
+  // Auto-follow the tail only while the user is already at the bottom;
+  // stop yanking the scroll position once they scroll up to read.
+  if (BENCH_LOG.stickToBottom) pre.scrollTop = pre.scrollHeight;
+}
+
+// Track whether the user is at the bottom of the log (enables/disables autoscroll).
+(function () {
+  const pre = document.getElementById('benchLogLines');
+  if (pre) {
+    pre.addEventListener('scroll', function () {
+      const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
+      BENCH_LOG.stickToBottom = atBottom;
+    });
+  }
+})();
+
+async function copyBenchLog() {
+  const pre = document.getElementById('benchLogLines');
+  try {
+    await navigator.clipboard.writeText(pre.textContent);
+    const btn = document.getElementById('benchLogCopyBtn');
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  } catch (e) {
+    // Fallback for non-secure contexts / missing clipboard API.
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.execCommand('copy');
+    sel.removeAllRanges();
+    const btn = document.getElementById('benchLogCopyBtn');
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  }
 }
 
 function closeBenchLog() {
