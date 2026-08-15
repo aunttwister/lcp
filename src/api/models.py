@@ -172,6 +172,12 @@ class ModelRegistryEntry(Base):
     a JSON array, ``benchmark_key`` names the snapshot to score against, and
     ``active_release`` selects which release's scores feed the router (default
     ``latest`` = the most recently-updated release).
+
+    ``provider_mappings_json`` pins the exact provider-side model ID for each
+    provider, e.g. ``{"opencode": "deepseek-v4-pro", "commandcode":
+    "deepseek/deepseek-v4-pro", "deepseek": "deepseek-v4-pro"}`` — so the same
+    logical model exposed by multiple providers resolves to ONE identity and
+    ONE scoring regardless of provider naming.
     """
     __tablename__ = "model_registry"
 
@@ -179,6 +185,7 @@ class ModelRegistryEntry(Base):
     logical_name = Column(String, unique=True, nullable=False, index=True)
     benchmark_key = Column(String, nullable=False)  # key in model_capabilities
     aliases_json = Column(Text, nullable=False, default="[]")  # JSON array of provider-side IDs
+    provider_mappings_json = Column(Text, nullable=False, default="{}")  # {provider: provider-side model ID}
     active_release = Column(String, nullable=True)  # release_label to route by; None/latest = newest
     updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
 

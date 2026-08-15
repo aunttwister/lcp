@@ -183,6 +183,7 @@ function renderDetail(model) {
   const aliases = reg ? reg.aliases : [];
   const benchmarkKey = reg ? reg.benchmark_key : model;
   const activeRelease = reg ? (reg.active_release || 'latest') : 'latest';
+  const providerMappings = reg ? (reg.provider_mappings || {}) : {};
   const updatedAt = reg ? (reg.updated_at || '').replace('T', ' ').slice(0, 19) : null;
   const provs = providerModels()[model] || [];
   const defaultProvider = provs[0] || '';
@@ -220,6 +221,9 @@ function renderDetail(model) {
         <dt>Provider aliases</dt>
         <dd>${aliases.length ? aliases.map(a => `<code class="mono">${a}</code>`).join(' ') : '<span class="muted">none — unregistered</span>'}</dd>
         <dt>Active release</dt><dd class="mono">${activeRelease}</dd>
+        ${Object.keys(providerMappings).length ? `
+        <dt>Provider → model</dt>
+        <dd>${Object.entries(providerMappings).map(([p, m]) => `<code class="mono">${p}</code> → <code class="mono">${m}</code>`).join(' &nbsp; ')}</dd>` : ''}
         ${updatedAt ? `<dt>Updated</dt><dd>${updatedAt}</dd>` : ''}
       </dl>
     </div>
@@ -264,7 +268,7 @@ function renderDetail(model) {
       </div>
     </div>`;
 
-  document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, aliases));
+  document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, aliases, providerMappings));
   document.getElementById('deleteModelBtn')?.addEventListener('click', () => deleteRegistry(model));
   document.getElementById('runBenchBtn')?.addEventListener('click', () => runBenchmark(model));
   document.getElementById('addScoreBtn')?.addEventListener('click', () => openManualScore(model));
@@ -292,15 +296,32 @@ function benchSection(model, defaultProvider) {
 
 // ── Registry actions ────────────────────────────────────────────────────────
 
-function editRegistry(logical, benchmark, aliases) {
+function editRegistry(logical, benchmark, aliases, providerMappings) {
   const newBenchmark = prompt('Benchmark key:', benchmark);
   if (newBenchmark === null) return;
   const newAliases = prompt('Provider aliases (comma-separated):', (aliases || []).join(', '));
   if (newAliases === null) return;
+  const mappings = providerMappings || {};
+  const mappingStr = Object.entries(mappings).map(([p, m]) => p + '=' + m).join(', ');
+  const newMappings = prompt(
+    'Provider → model mappings (provider=model, comma-separated):\n' +
+    'e.g. deepseek=deepseek-v4-pro, opencode=deepseek-v4-pro, commandcode=deepseek/deepseek-v4-pro\n\n' +
+    'Leave blank to clear.',
+    mappingStr
+  );
+  if (newMappings === null) return;
+
+  const providerMappingsOut = {};
+  for (const part of newMappings.split(',')) {
+    const [p, m] = part.split('=').map(s => (s || '').trim());
+    if (p && m) providerMappingsOut[p] = m;
+  }
+
   API.upsertRegistry({
     logical_name: logical,
     benchmark_key: newBenchmark.trim(),
     aliases: newAliases.split(',').map(a => a.trim()).filter(Boolean),
+    provider_mappings: providerMappingsOut,
   }).then(r => {
     if (r.error) { alert('Error: ' + r.error); return; }
     loadAll();

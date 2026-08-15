@@ -203,11 +203,21 @@ DEFAULT_MODEL_REGISTRY: list[dict] = [
         "logical_name": "deepseek-v4-pro",
         "benchmark_key": "deepseek-v4-pro",
         "aliases": ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
+        "provider_mappings": {
+            "deepseek": "deepseek-v4-pro",
+            "opencode": "deepseek-v4-pro",
+            "commandcode": "deepseek/deepseek-v4-pro",
+        },
     },
     {
         "logical_name": "deepseek-v4-flash",
         "benchmark_key": "deepseek-v4-flash-0731",
         "aliases": ["deepseek-v4-flash", "deepseek/deepseek-v4-flash", "deepseek-v4-flash-0731"],
+        "provider_mappings": {
+            "deepseek": "deepseek-v4-flash",
+            "opencode": "deepseek-v4-flash",
+            "commandcode": "deepseek/deepseek-v4-flash",
+        },
     },
     {
         "logical_name": "claude-sonnet-5",
@@ -289,6 +299,7 @@ def seed_model_registry(db_path: str) -> int:
             logical_name=entry["logical_name"],
             benchmark_key=entry["benchmark_key"],
             aliases_json=json.dumps(entry["aliases"]),
+            provider_mappings_json=json.dumps(entry.get("provider_mappings", {})),
             updated_at=now,
         ))
         count += 1
@@ -302,9 +313,9 @@ def seed_model_registry(db_path: str) -> int:
 def load_model_registry(db_path: str) -> dict[str, dict]:
     """Load the model registry as {logical_name: {...}}.
 
-    Each entry: {benchmark_key, aliases, active_release}. ``active_release``
-    is None until an admin pins a release; the router then falls back to the
-    latest-scored release for that model.
+    Each entry: {benchmark_key, aliases, provider_mappings, active_release}.
+    ``active_release`` is None until an admin pins a release; the router then
+    falls back to the latest-scored release for that model.
     """
     from src.api.models import ModelRegistryEntry
 
@@ -316,9 +327,14 @@ def load_model_registry(db_path: str) -> dict[str, dict]:
             aliases = json.loads(row.aliases_json or "[]")
         except (json.JSONDecodeError, TypeError):
             aliases = []
+        try:
+            provider_mappings = json.loads(row.provider_mappings_json or "{}")
+        except (json.JSONDecodeError, TypeError):
+            provider_mappings = {}
         registry[row.logical_name] = {
             "benchmark_key": row.benchmark_key,
             "aliases": aliases,
+            "provider_mappings": provider_mappings,
             "active_release": row.active_release,
         }
 

@@ -221,6 +221,26 @@ def benchmark_model_name(logical: str, db_path: str = "data/costs.db") -> str:
     return logical
 
 
+def provider_model_name(logical: str, provider: str, db_path: str = "data/costs.db") -> str:
+    """Return the provider-side model ID for a logical model + provider.
+
+    Uses the registry's explicit ``provider_mappings`` (e.g. Command Code's
+    ``deepseek/deepseek-v4-pro`` vs OpenCode's bare ``deepseek-v4-pro``).
+    Falls back to the first alias containing the provider, then to the
+    logical name unchanged.
+    """
+    registry = get_model_registry(db_path)
+    entry = registry.get(logical)
+    if entry:
+        mapping = entry.get("provider_mappings") or {}
+        if provider in mapping:
+            return mapping[provider]
+        for alias in entry.get("aliases", []):
+            if alias.lower().startswith(provider.lower() + "/"):
+                return alias
+    return logical
+
+
 class CapabilityRouter:
     """Routes to the best available model using capability scores + cost awareness."""
 

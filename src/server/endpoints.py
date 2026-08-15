@@ -1870,10 +1870,15 @@ class DashboardEndpoints:
                     aliases = json.loads(r.aliases_json or "[]")
                 except json.JSONDecodeError:
                     aliases = []
+                try:
+                    provider_mappings = json.loads(r.provider_mappings_json or "{}")
+                except json.JSONDecodeError:
+                    provider_mappings = {}
                 entries.append({
                     "logical_name": r.logical_name,
                     "benchmark_key": r.benchmark_key,
                     "aliases": aliases,
+                    "provider_mappings": provider_mappings,
                     "active_release": r.active_release,
                     "updated_at": r.updated_at,
                 })
@@ -1967,6 +1972,7 @@ class DashboardEndpoints:
         benchmark = (body.get("benchmark_key") or "").strip().lower()
         aliases = body.get("aliases") or []
         active_release = (body.get("active_release") or "").strip() or None
+        provider_mappings = body.get("provider_mappings") or {}
         if not logical:
             self._send_json({"error": "missing 'logical_name'"}, 400)
             return
@@ -1975,6 +1981,11 @@ class DashboardEndpoints:
             return
         if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
             self._send_json({"error": "'aliases' must be a list of strings"}, 400)
+            return
+        if not isinstance(provider_mappings, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in provider_mappings.items()
+        ):
+            self._send_json({"error": "'provider_mappings' must be a {provider: model} object"}, 400)
             return
 
         # Ensure logical_name is always one of its own aliases
@@ -1990,6 +2001,7 @@ class DashboardEndpoints:
                 if entry:
                     entry.benchmark_key = benchmark
                     entry.aliases_json = json.dumps(aliases)
+                    entry.provider_mappings_json = json.dumps(provider_mappings)
                     if active_release is not None:
                         entry.active_release = active_release
                     entry.updated_at = now
@@ -1999,6 +2011,7 @@ class DashboardEndpoints:
                         logical_name=logical,
                         benchmark_key=benchmark,
                         aliases_json=json.dumps(aliases),
+                        provider_mappings_json=json.dumps(provider_mappings),
                         active_release=active_release,
                         updated_at=now,
                     ))
