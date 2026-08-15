@@ -6,8 +6,8 @@ services:
     ports:
       - "8734:8734"
     volumes:
-      - llm-cost-tracker_cost_data:/app/data
-      - llm-cost-tracker_modules:/opt/lcp-modules
+      - llm_control_plane_data:/app/data
+      - llm_control_plane_modules:/opt/lcp-modules
       - ./config/gateway.yaml:/app/config/gateway.yaml
     env_file:
       - .env
@@ -23,6 +23,6 @@ services:
       # UI — they're encrypted with LCP_SECRET_KEY and stored in SQLite.
 
 volumes:
-  llm-cost-tracker_cost_data:
+  llm_control_plane_data:
     external: true
-  llm-cost-tracker_modules:
+  llm_control_plane_modules:
