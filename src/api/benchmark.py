@@ -129,7 +129,7 @@ def coding_deps_available() -> bool:
         return False
 
 
-def core_deps_available() -> bool:
+def core_deps_available(site: Optional[str] = None) -> bool:
     """Return True when LiveBench's core package is importable.
 
     ``show_livebench_result.py`` does ``from livebench.common import ...`` so
@@ -140,8 +140,13 @@ def core_deps_available() -> bool:
     in the long-lived LCP process — editable installs (``pip install -e .``)
     register a ``.pth`` finder that is only picked up at interpreter startup,
     so an in-process ``import livebench`` would falsely fail right after a
-    successful editable install.
+    successful editable install. When *site* is given (the persistent
+    ``--target`` dir), it is prepended to ``PYTHONPATH`` for the probe.
     """
+    env = dict(os.environ)
+    if site:
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = site if not existing else f"{site}{os.pathsep}{existing}"
     probe = (
         "import importlib.util, sys;"
         "sys.exit(0 if importlib.util.find_spec('libtmux') and "
@@ -150,7 +155,7 @@ def core_deps_available() -> bool:
     try:
         result = subprocess.run(
             [sys.executable, "-c", probe],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, env=env,
         )
         return result.returncode == 0
     except Exception:  # noqa: BLE001 — treat as unavailable
@@ -514,6 +519,16 @@ def _execute_run(run_id: int, engine, config) -> None:
         if not checkout:
             raise RuntimeError("LiveBench checkout not found")
 
+        # Dependencies are installed into the persistent bind mount
+        # (<modules_dir>/site). Prepend it to PYTHONPATH for the benchmark
+        # subprocesses so the imports survive container recreation.
+        env = dict(os.environ)
+        from .setup import livebench_site
+        site = livebench_site()
+        if site:
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = site if not existing else f"{site}{os.pathsep}{existing}"
+
         commands = build_livebench_commands(
             model=api_model,
             api_base=api_base,
@@ -535,7 +550,7 @@ def _execute_run(run_id: int, engine, config) -> None:
             logger.info("benchmark_subprocess", run_id=run_id, cmd=_redact_cmd(cmd))
             proc = subprocess.Popen(
                 cmd, cwd=workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1, errors="replace",
+                text=True, bufsize=1, errors="replace", env=env,
             )
             assert proc.stdout is not None
             for line in proc.stdout:

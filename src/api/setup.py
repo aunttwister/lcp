@@ -63,6 +63,18 @@ def livebench_root() -> str:
     return os.path.join(modules_dir(), "livebench")
 
 
+def livebench_site() -> str:
+    """Return the persistent site-packages dir for LiveBench dependencies.
+
+    ``<LCP_MODULES_DIR>/site`` — pip installs ``--target`` here so third-party
+    deps (libtmux, litellm, pandas, …) survive container recreation. The
+    container's own site-packages lives in the writable image layer and is
+    lost on every rebuild, which is why the checkout survived but the imports
+    did not.
+    """
+    return os.path.join(modules_dir(), "site")
+
+
 # ── Manifest ────────────────────────────────────────────────────────────────
 
 def provider_steps(config) -> list[dict]:
@@ -451,10 +463,12 @@ def _run_livebench_install(engine) -> None:
     """
     try:
         root = livebench_root()
+        site = livebench_site()
         _bench_update(f"Target directory: {root}")
         parent = os.path.dirname(root)
         if parent:
             os.makedirs(parent, exist_ok=True)
+        os.makedirs(site, exist_ok=True)
         if os.path.isdir(root):
             shutil.rmtree(root, ignore_errors=True)
 
@@ -473,27 +487,29 @@ def _run_livebench_install(engine) -> None:
                 f"livebench/run_livebench.py"
             )
 
-        # pip install -e . must run from the checkout ROOT (where pyproject.toml
-        # lives), not the livebench package subdirectory.
+        # Install core deps INTO the persistent bind mount (--target), so they
+        # survive container recreation. The checkout is already on the bind
+        # mount; deps must be too.
         _stream(
-            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-e", "."],
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+             "--target", site, "-e", "."],
             cwd=root, start=25.0, end=60.0, status_msg="Installing LiveBench core…",
         )
 
-        # Verify the core package actually became importable (libtmux is a
-        # core dependency run_livebench.py imports first).
+        # Verify the core package actually became importable with the target
+        # dir on PYTHONPATH.
         from .benchmark import core_deps_available
-        if not core_deps_available():
+        if not core_deps_available(site):
             raise SetupError(
-                "LiveBench core install did not take effect (libtmux still "
-                f"not importable). The checkout is at {root} — try running "
-                f"`pip install -e {root}` manually and check for errors."
+                "LiveBench core install did not take effect. The checkout is "
+                f"at {root} and deps are at {site} — check the install log."
             )
 
         coding_note = None
         try:
             _stream(
-                [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-r", LIVEBENCH_EVAL_REQUIREMENTS],
+                [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                 "--target", site, "-r", LIVEBENCH_EVAL_REQUIREMENTS],
                 cwd=os.path.join(root, "livebench"), start=60.0, end=100.0,
                 status_msg="Installing eval extras (TensorFlow + scientific stack)…",
             )
