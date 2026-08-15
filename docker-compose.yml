@@ -19,7 +19,8 @@ services:
       # Runtime-installed modules (e.g. LiveBench) persist in a dedicated
       # bind-mount directory so they survive container recreation.
       - LCP_MODULES_DIR=/opt/lcp-modules
-      # Make module dependencies (installed to $LCP_MODULES_DIR/site) importable.
-      - PYTHONPATH=/opt/lcp-modules/site
+      # Make module dependencies (installed to $LCP_MODULES_DIR/site) and the
+      # livebench package (<repo-root>/livebench) importable.
+      - PYTHONPATH=/opt/lcp-modules/site:/opt/lcp-modules/livebench
       # Provider API keys and the OpenCode cookie are managed via the dashboard
       # UI — they're encrypted with LCP_SECRET_KEY and stored in SQLite.
