@@ -519,15 +519,33 @@ def _run_livebench_install(engine) -> None:
         _bench_finish("failed", _tail_detail(f"Install failed: {exc}"))
 
 
-def _tail_detail(fallback: str, lines: int = 3) -> str:
-    """Return *fallback* plus the last few log lines (the real pip error)."""
+def _tail_detail(fallback: str, lines: int = 6) -> str:
+    """Return *fallback* plus the real error lines from the install log.
+
+    Prefers lines that look like errors (Traceback, ERROR, error:, fatal,
+    "not importable", etc.) over the generic last-N lines, which are often
+    just pip notices.
+    """
     global _bench_install
     if _bench_install is None:
         return fallback
     log = _bench_install.get("log") or []
     if not log:
         return fallback
-    tail = "\n".join(log[-lines:]).strip()
+
+    error_markers = (
+        "traceback", "error", "fatal", "failed", "exception", "conflict",
+        "cannot", "could not", "no matching", "not importable", "missing",
+    )
+    error_lines = [
+        ln for ln in log
+        if any(m in ln.lower() for m in error_markers)
+        and "pip.pypa.io" not in ln.lower()
+    ]
+    picked = error_lines[-lines:] if error_lines else log[-lines:]
+    tail = "\n".join(picked).strip()
+    if not tail:
+        tail = "\n".join(log[-lines:]).strip()
     if not tail:
         return fallback
-    return f"{fallback}\n{tail[-400:]}"
+    return f"{fallback}\n{tail[-800:]}"
