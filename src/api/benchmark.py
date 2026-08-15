@@ -23,7 +23,6 @@ import os
 import queue
 import shutil
 import subprocess
-import tempfile
 import threading
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -178,6 +177,22 @@ def _redact_cmd(cmd: list[str]) -> str:
         if i > 0 and out[i - 1] == "--api-key":
             out[i] = "***"
     return " ".join(out)
+
+
+def _redact_stream_line(line: str, api_key: str) -> str:
+    """Redact a raw API key that LiveBench itself echoes in its own output.
+
+    LiveBench prints the full command string including
+    ``export LIVEBENCH_API_KEY='...'``. This scrubs that value before it
+    reaches the live log, regardless of quoting style.
+    """
+    if not api_key:
+        return line
+    line = line.replace(api_key, "***")
+    # Also catch the env-export form with single or double quotes.
+    for quoted in (f"'{api_key}'", f'"{api_key}"'):
+        line = line.replace(quoted, "'***'")
+    return line
 
 
 def build_livebench_commands(
@@ -475,14 +490,24 @@ def _execute_run(run_id: int, engine, config) -> None:
 
         api_model, api_base, api_key = _resolve_provider_target(engine, config, target)
 
+        checkout = livebench_dir()
+        if not checkout:
+            raise RuntimeError("LiveBench checkout not found")
+
         commands = build_livebench_commands(
             model=api_model,
             api_base=api_base,
             api_key=api_key,
             categories=categories,
+            livebench_path=checkout,
         )
 
-        workdir = tempfile.mkdtemp(prefix="lcp-bench-")
+        # LiveBench's scripts are path-sensitive: run_livebench.py invokes
+        # gen_api_answer.py / gen_ground_truth_judgment.py relative to CWD, and
+        # show_livebench_result.py does `from livebench.common import ...` plus
+        # reads `data/...` relative to CWD. They MUST run from the checkout
+        # root, not a temp dir.
+        workdir = checkout
         category_scores: dict[str, float] = {}
 
         for cmd in commands:
@@ -494,15 +519,16 @@ def _execute_run(run_id: int, engine, config) -> None:
             )
             assert proc.stdout is not None
             for line in proc.stdout:
-                _log(run_id, line)
+                _log(run_id, _redact_stream_line(line, api_key))
             rc = proc.wait()
             if rc != 0:
                 tail = "\n".join(get_run_log(run_id)[-40:])
                 raise RuntimeError(
-                    f"LiveBench command failed (exit {rc}): {tail[-2000:]}"
+                    f"LiveBench command failed (exit {rc}): {_redact_stream_line(tail[-2000:], api_key)}"
                 )
 
-        # Parse all_groups.csv written by show_livebench_result.py into cwd.
+        # Parse all_groups.csv written by show_livebench_result.py into CWD
+        # (the checkout root).
         csv_path = os.path.join(workdir, "all_groups.csv")
         if os.path.isfile(csv_path):
             with open(csv_path) as f:
