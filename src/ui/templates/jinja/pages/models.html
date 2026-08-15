@@ -235,12 +235,13 @@ function renderDetail(model) {
             const result = r.status === 'done' && r.result
               ? Object.entries(r.result.categories || {}).map(([c, s]) => `${c}: ${s.toFixed(1)}`).join(', ')
               : (r.error || '—');
+            const short = result.length > 80 ? result.slice(0, 80) + '…' : result;
             return `<tr>
               <td class="mono">${r.id}</td>
               <td>${r.categories ? r.categories.join(', ') : 'all'}</td>
               <td><span class="badge badge-${r.status === 'done' ? 'success' : r.status === 'failed' ? 'error' : r.status === 'running' ? 'fallback' : 'cache'}">${r.status}</span></td>
               <td class="mono">${(r.started_at || '—').replace('T', ' ').slice(0, 16)}</td>
-              <td style="max-width:260px; word-break:break-all;">${result}</td>
+              <td style="max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${result.replace(/"/g, '&quot;')}">${short}</td>
               <td><button class="btn btn-outline btn-sm" data-benchlog="${r.id}">Logs</button></td>
             </tr>`;
           }).join('') : '<tr><td colspan="6" class="empty">No benchmark runs for this model.</td></tr>'}

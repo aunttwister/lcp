@@ -22,7 +22,7 @@ from src.api.benchmark import (
 def test_benchmark_status_unavailable_when_no_checkout(monkeypatch):
     monkeypatch.delenv("LCP_MODULES_DIR", raising=False)
     monkeypatch.setattr("shutil.which", lambda _: None)
-    monkeypatch.setattr("src.api.benchmark.os.path.isdir", lambda p: False)
+    monkeypatch.setattr("src.api.benchmark._valid_checkout", lambda p: False)
     status = benchmark_status()
     assert status["available"] is False
     assert status["reason"] is not None
@@ -40,6 +40,16 @@ def test_benchmark_status_available_with_checkout(tmp_path, monkeypatch):
     # coding_supported is False unless tensorflow is importable — don't assert
     # a specific value here, just that the key exists.
     assert "coding_supported" in status
+
+
+def test_empty_modules_dir_is_not_a_checkout(tmp_path, monkeypatch):
+    # An empty $LCP_MODULES_DIR/livebench directory must NOT count as installed.
+    checkout = tmp_path / "modules" / "livebench"
+    checkout.mkdir(parents=True)
+    monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "modules"))
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    status = benchmark_status()
+    assert status["available"] is False
 
 
 def test_benchmark_status_coding_detection(monkeypatch):
@@ -126,7 +136,7 @@ def test_build_commands_subset(tmp_path):
 def test_build_commands_missing_checkout_raises(monkeypatch):
     monkeypatch.delenv("LCP_MODULES_DIR", raising=False)
     monkeypatch.setattr("shutil.which", lambda _: None)
-    monkeypatch.setattr("src.api.benchmark.os.path.isdir", lambda p: False)
+    monkeypatch.setattr("src.api.benchmark._valid_checkout", lambda p: False)
     with pytest.raises(RuntimeError, match="LiveBench checkout not found"):
         build_livebench_commands(
             model="m", api_base="u", api_key="k",

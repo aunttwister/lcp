@@ -72,10 +72,17 @@ def validate_categories(categories: Optional[list[str]]) -> list[str]:
 
 # ── Pure command construction (testable) ────────────────────────────────────
 
+def _valid_checkout(path: str) -> bool:
+    """Return True when *path* looks like a usable LiveBench checkout."""
+    return os.path.isfile(os.path.join(path, "run_livebench.py"))
+
+
 def livebench_dir() -> Optional[str]:
     """Return the path to a LiveBench checkout, or None if not configured.
 
-    Resolution order:
+    A candidate directory only counts when it actually contains
+    ``run_livebench.py`` — an empty (mount-created) directory is NOT a
+    checkout. Resolution order:
       1. ``<LCP_MODULES_DIR>/livebench`` (runtime-installed modules root)
       2. ``run_livebench.py`` on PATH
       3. ``/opt/livebench`` (legacy Dockerfile default)
@@ -83,13 +90,13 @@ def livebench_dir() -> Optional[str]:
     modules_root = os.environ.get("LCP_MODULES_DIR", "").strip()
     if modules_root:
         candidate = os.path.join(modules_root, "livebench")
-        if os.path.isdir(candidate):
+        if _valid_checkout(candidate):
             return candidate
 
     found = shutil.which("run_livebench.py")
     if found:
         return os.path.dirname(found)
-    if os.path.isdir("/opt/livebench"):
+    if _valid_checkout("/opt/livebench"):
         return "/opt/livebench"
     return None
 
@@ -117,12 +124,16 @@ def benchmark_status() -> dict:
     """
     path = livebench_dir()
     if not path:
+        modules_root = os.environ.get("LCP_MODULES_DIR", "").strip()
         return {
             "available": False,
             "reason": (
-                "LiveBench checkout not found — set LCP_MODULES_DIR to a "
-                "directory containing a livebench checkout, or build the "
-                "image with WITH_BENCH=1."
+                "LiveBench checkout not found — install it from the Setup "
+                "page (it clones into $LCP_MODULES_DIR/livebench), or set "
+                "LCP_MODULES_DIR to a directory that already contains a "
+                "livebench checkout." if modules_root else
+                "LiveBench checkout not found — install it from the Setup "
+                "page, or build the image with WITH_BENCH=1."
             ),
             "categories": list(LIVEBENCH_CATEGORIES),
             "coding_supported": False,
