@@ -275,8 +275,9 @@ excluded because it requires Docker.
 docker compose build --build-arg WITH_BENCH=1 lcp
 ```
 
-This clones LiveBench into `/opt/livebench` and installs the core package plus
-the `code_runner/requirements_eval.txt` extras. Those extras (TensorFlow, scipy,
+This clones LiveBench into `${LCP_MODULES_DIR}/livebench` (default
+`/opt/lcp-modules/livebench`) and installs the core package plus the
+`code_runner/requirements_eval.txt` extras. Those extras (TensorFlow, scipy,
 etc., ~GBs) are only needed to **grade the `coding` category**, which executes
 generated code. Core-only covers the other five categories.
 
@@ -295,7 +296,21 @@ Then tell LCP where it lives:
 export LCP_LIVEBENCH_DIR=/opt/livebench
 ```
 
-LCP also falls back to a `run_livebench.py` on `PATH`.
+LCP also falls back to `run_livebench.py` on `PATH`.
+
+### Module install path
+
+The in-UI runtime installer (Setup → LiveBench) clones into the **module root**
+controlled by `LCP_MODULES_DIR` (default `/opt/lcp-modules`), i.e. it installs
+to `$LCP_MODULES_DIR/livebench`. Set this to a Docker volume mount so installs
+survive container recreation:
+
+```bash
+export LCP_MODULES_DIR=/app/data/modules
+```
+
+`LCP_LIVEBENCH_DIR` always takes precedence when set — it pins the exact
+checkout location and is what the benchmark runner resolves first.
 
 ### Runtime status
 

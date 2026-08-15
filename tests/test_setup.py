@@ -148,10 +148,15 @@ class TestRemoveProvider:
         assert setup_mod.load_state(temp_db)["provider:deepseek"]["status"] == "removed"
 
     def test_remove_livebench(self, temp_db, monkeypatch, tmp_path):
-        (tmp_path / "run_livebench.py").write_text("")
-        monkeypatch.setattr("src.api.benchmark.livebench_dir", lambda: str(tmp_path))
+        target = tmp_path / "modules" / "livebench"
+        target.mkdir(parents=True)
+        (target / "run_livebench.py").write_text("")
+        monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "modules"))
+        monkeypatch.setattr("os.path.isdir", lambda p: True)
+        monkeypatch.setattr("shutil.rmtree", lambda p, **k: None)
         result = setup_mod.remove_livebench(temp_db)
-        assert result == {"removed": True, "module": "livebench", "path": str(tmp_path)}
+        assert result["removed"] is True
+        assert str(target) in result["paths"]
         assert setup_mod.load_state(temp_db)["module:livebench"]["status"] == "removed"
 
 
@@ -200,17 +205,29 @@ class TestLivebenchInstall:
         monkeypatch.setattr("shutil.rmtree", lambda *a, **k: None)
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/git")
         monkeypatch.setattr("os.path.isdir", lambda _: False)
+        monkeypatch.setattr("os.makedirs", lambda *a, **k: None)
         monkeypatch.setattr(setup_mod, "_stream", fake_stream)
-        monkeypatch.setattr(setup_mod.os, "environ", {})
+        monkeypatch.setattr(setup_mod.os, "environ", {"LCP_MODULES_DIR": "/tmp/lcp-modules"})
         # Simulate an in-flight install so _bench_update/_bench_finish have state.
         monkeypatch.setattr(setup_mod, "_bench_install", {
             "status": "running", "progress": 0.0, "detail": "", "log": [],
         })
         setup_mod._run_livebench_install(temp_db)
 
-        assert calls[0] == ["git", "clone", "--depth", "1", setup_mod.LIVEBENCH_REPO, setup_mod.LIVEBENCH_DIR]
+        expected_target = "/tmp/lcp-modules/livebench"
+        assert calls[0] == ["git", "clone", "--depth", "1", setup_mod.LIVEBENCH_REPO, expected_target]
         last = setup_mod.bench_last()
         assert last is not None and last["status"] == "done"
         assert "coding" in last["detail"]
         assert setup_mod.load_state(temp_db)["module:livebench"]["status"] == "done"
         monkeypatch.setattr(setup_mod, "_bench_last", None)
+
+    def test_livebench_dir_precedence(self, monkeypatch, tmp_path):
+        # 1. LCP_LIVEBENCH_DIR wins
+        monkeypatch.setenv("LCP_LIVEBENCH_DIR", str(tmp_path / "explicit"))
+        monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "modules"))
+        assert setup_mod.livebench_dir() == str(tmp_path / "explicit")
+
+        # 2. Falls back to <LCP_MODULES_DIR>/livebench
+        monkeypatch.delenv("LCP_LIVEBENCH_DIR", raising=False)
+        assert setup_mod.livebench_dir() == str(tmp_path / "modules" / "livebench")

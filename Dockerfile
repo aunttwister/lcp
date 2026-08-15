@@ -29,14 +29,20 @@ RUN mkdir -p /app/data/tiktoken_cache && \
 # Full LiveBench (core + code_runner/requirements_eval.txt) covers all 6
 # categories including `coding` (which executes generated code and needs
 # TensorFlow + the scientific stack). Core-only covers the other 5.
+#
+# Checkouts live under LCP_MODULES_DIR (default /opt/lcp-modules). The runtime
+# installer clones to $LCP_MODULES_DIR/livebench; set LCP_MODULES_DIR to a
+# Docker volume mount so installs survive container recreation.
 ARG WITH_BENCH=0
+ENV LCP_MODULES_DIR=/opt/lcp-modules
 RUN if [ "$WITH_BENCH" = "1" ]; then \
-        git clone --depth 1 https://github.com/LiveBench/LiveBench.git /opt/livebench \
-        && cd /opt/livebench \
+        mkdir -p "${LCP_MODULES_DIR}" \
+        && git clone --depth 1 https://github.com/LiveBench/LiveBench.git "${LCP_MODULES_DIR}/livebench" \
+        && cd "${LCP_MODULES_DIR}/livebench" \
         && pip install --no-cache-dir -e . \
         && pip install --no-cache-dir -r code_runner/requirements_eval.txt ; \
     fi
-ENV LCP_LIVEBENCH_DIR=/opt/livebench
+ENV LCP_LIVEBENCH_DIR=${LCP_MODULES_DIR}/livebench
 
 # ── Application code ──
 COPY src/ ./src/

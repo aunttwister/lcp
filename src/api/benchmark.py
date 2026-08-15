@@ -75,14 +75,22 @@ def validate_categories(categories: Optional[list[str]]) -> list[str]:
 def livebench_dir() -> Optional[str]:
     """Return the path to a LiveBench checkout, or None if not configured.
 
-    Resolution order: ``LCP_LIVEBENCH_DIR`` env var → ``livebench`` on PATH
-    (a directory containing ``run_livebench.py``) → the well-known
-    ``/opt/livebench`` default (used by the Dockerfile and the runtime
-    installer).
+    Resolution order:
+      1. ``LCP_LIVEBENCH_DIR`` env var (explicit override)
+      2. ``<LCP_MODULES_DIR>/livebench`` (runtime-installed modules root)
+      3. ``run_livebench.py`` on PATH
+      4. ``/opt/livebench`` (legacy Dockerfile default)
     """
     env = os.environ.get("LCP_LIVEBENCH_DIR", "").strip()
     if env and os.path.isdir(env):
         return env
+
+    modules_root = os.environ.get("LCP_MODULES_DIR", "").strip()
+    if modules_root:
+        candidate = os.path.join(modules_root, "livebench")
+        if os.path.isdir(candidate):
+            return candidate
+
     found = shutil.which("run_livebench.py")
     if found:
         return os.path.dirname(found)
