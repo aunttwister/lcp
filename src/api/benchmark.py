@@ -233,6 +233,28 @@ _worker_thread: Optional[threading.Thread] = None
 _worker_queue: "queue.Queue[tuple[int, Any, Any]]" = queue.Queue()
 _worker_lock = threading.Lock()
 
+# Per-run streaming output. The worker appends subprocess stdout/stderr lines
+# as they arrive; the UI polls GET /api/models/benchmark/{id}/log for live
+# progress. Bounded to avoid unbounded memory growth on long runs.
+_run_logs: dict[int, list[str]] = {}
+_LOG_MAX_LINES = 1000
+
+
+def _log(run_id: int, line: str) -> None:
+    """Append a line to a run's live log buffer (bounded)."""
+    clean = (line.rstrip("\n") if isinstance(line, str) else str(line)).strip("\r")
+    if not clean:
+        return
+    buf = _run_logs.setdefault(run_id, [])
+    buf.append(clean)
+    if len(buf) > _LOG_MAX_LINES:
+        del buf[: len(buf) - _LOG_MAX_LINES]
+
+
+def get_run_log(run_id: int) -> list[str]:
+    """Return the live log buffer for a benchmark run (copy)."""
+    return list(_run_logs.get(run_id, []))
+
 
 def _ensure_worker() -> None:
     """Start the single background worker thread if it isn't running."""
@@ -422,14 +444,20 @@ def _execute_run(run_id: int, engine, config) -> None:
         category_scores: dict[str, float] = {}
 
         for cmd in commands:
+            _log(run_id, f"$ {_redact_cmd(cmd)}")
             logger.info("benchmark_subprocess", run_id=run_id, cmd=_redact_cmd(cmd))
-            proc = subprocess.run(
-                cmd, cwd=workdir, capture_output=True, text=True, timeout=3600,
+            proc = subprocess.Popen(
+                cmd, cwd=workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1, errors="replace",
             )
-            if proc.returncode != 0:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                _log(run_id, line)
+            rc = proc.wait()
+            if rc != 0:
+                tail = "\n".join(get_run_log(run_id)[-40:])
                 raise RuntimeError(
-                    f"LiveBench command failed (exit {proc.returncode}): "
-                    f"{proc.stderr[-2000:] or proc.stdout[-2000:]}"
+                    f"LiveBench command failed (exit {rc}): {tail[-2000:]}"
                 )
 
         # Parse all_groups.csv written by show_livebench_result.py into cwd.
@@ -460,6 +488,7 @@ def _execute_run(run_id: int, engine, config) -> None:
 
     except Exception as exc:  # noqa: BLE001 — record any failure, keep worker alive
         logger.error("benchmark_failed", run_id=run_id, error=str(exc))
+        _log(run_id, f"[LCP] benchmark failed: {exc}")
         _mark_failed(run_id, engine, str(exc))
 
 

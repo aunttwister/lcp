@@ -343,6 +343,13 @@ class LCPHandler(
             self._serve_benchmark_list_api()
         elif self.path == "/api/models/benchmark/status":
             self._serve_benchmark_status_api()
+        elif self.path.startswith("/api/models/benchmark/") and self.path.endswith("/log"):
+            # GET /api/models/benchmark/{id}/log
+            parts = self.path.split("/")
+            if len(parts) == 6:
+                self._serve_benchmark_log_api(parts[4])
+            else:
+                self._send_json({"error": "not found"}, 404)
         elif self.path.startswith("/api/models/benchmark/") and len(self.path.split("/")) == 5:
             run_id = self.path.split("/")[4]
             self._serve_benchmark_detail_api(run_id)

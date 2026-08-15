@@ -1977,6 +1977,16 @@ class DashboardEndpoints:
         else:
             self._send_json({"error": "run not found"}, 404)
 
+    def _serve_benchmark_log_api(self, run_id: str):
+        """GET /api/models/benchmark/{id}/log — live subprocess output."""
+        from ..api.benchmark import get_run_log
+        try:
+            rid = int(run_id)
+        except ValueError:
+            self._send_json({"error": "invalid run id"}, 400)
+            return
+        self._send_json({"run_id": rid, "log": get_run_log(rid)})
+
     def _serve_benchmark_create_api(self):
         """POST /api/models/benchmark — queue a LiveBench run.
 

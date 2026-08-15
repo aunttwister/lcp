@@ -23,6 +23,22 @@
     <div class="empty">Select a model from the list.</div>
   </div>
 </div>
+
+<!-- Benchmark live log modal -->
+<div class="modal-overlay dialog-overlay" id="benchLogModal">
+<div class="modal dialog-content" style="width:min(680px,95vw)">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title" id="benchLogTitle">Benchmark log</h2>
+    <button class="modal-close dialog-close" onclick="closeBenchLog()">✕</button>
+  </div>
+  <div class="modal-body dialog-body">
+    <pre id="benchLogLines" class="setup-log" style="max-height:420px"></pre>
+  </div>
+  <div class="modal-footer dialog-footer">
+    <button class="btn-sm" onclick="closeBenchLog()">Close</button>
+  </div>
+</div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -64,6 +80,10 @@ const API = {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({provider, model})
     });
+    return r.json();
+  },
+  async benchmarkLog(id) {
+    const r = await fetch('/api/models/benchmark/' + id + '/log');
     return r.json();
   }
 };
@@ -209,7 +229,7 @@ function renderDetail(model) {
       ${benchSection(model, defaultProvider)}
       <div class="table-wrap" style="margin-top:0.75rem">
         <table class="capability-table">
-          <thead><tr><th>ID</th><th>Categories</th><th>Status</th><th>Started</th><th>Result</th></tr></thead>
+          <thead><tr><th>ID</th><th>Categories</th><th>Status</th><th>Started</th><th>Result</th><th></th></tr></thead>
           <tbody>
           ${runs.length ? runs.map(r => {
             const result = r.status === 'done' && r.result
@@ -221,8 +241,9 @@ function renderDetail(model) {
               <td><span class="badge badge-${r.status === 'done' ? 'success' : r.status === 'failed' ? 'error' : r.status === 'running' ? 'fallback' : 'cache'}">${r.status}</span></td>
               <td class="mono">${(r.started_at || '—').replace('T', ' ').slice(0, 16)}</td>
               <td style="max-width:260px; word-break:break-all;">${result}</td>
+              <td><button class="btn btn-outline btn-sm" data-benchlog="${r.id}">Logs</button></td>
             </tr>`;
-          }).join('') : '<tr><td colspan="5" class="empty">No benchmark runs for this model.</td></tr>'}
+          }).join('') : '<tr><td colspan="6" class="empty">No benchmark runs for this model.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -231,6 +252,9 @@ function renderDetail(model) {
   document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, aliases));
   document.getElementById('deleteModelBtn')?.addEventListener('click', () => deleteRegistry(model));
   document.getElementById('runBenchBtn')?.addEventListener('click', () => runBenchmark(model));
+  document.querySelectorAll('[data-benchlog]').forEach(btn => {
+    btn.addEventListener('click', () => openBenchmarkLog(btn.dataset.benchlog));
+  });
 }
 
 function benchSection(model, defaultProvider) {
@@ -292,6 +316,35 @@ function deleteRegistry(logical) {
     STATE.selected = null;
     loadAll();
   });
+}
+
+// ── Benchmark live log ─────────────────────────────────────────────────────
+
+let BENCH_LOG = { timer: null, runId: null };
+
+async function openBenchmarkLog(runId) {
+  BENCH_LOG.runId = runId;
+  document.getElementById('benchLogTitle').textContent = 'Benchmark run #' + runId;
+  document.getElementById('benchLogLines').textContent = 'Loading…';
+  openDialog('benchLogModal');
+  await pollBenchLog();
+  if (!BENCH_LOG.timer) BENCH_LOG.timer = setInterval(pollBenchLog, 2000);
+}
+
+async function pollBenchLog() {
+  if (!BENCH_LOG.runId) return;
+  const data = await API.benchmarkLog(BENCH_LOG.runId);
+  if (data.error) { document.getElementById('benchLogLines').textContent = 'Error: ' + data.error; return; }
+  const lines = data.log || [];
+  document.getElementById('benchLogLines').textContent = lines.length ? lines.join('\n') : '(no output yet)';
+  const pre = document.getElementById('benchLogLines');
+  pre.scrollTop = pre.scrollHeight;
+}
+
+function closeBenchLog() {
+  if (BENCH_LOG.timer) { clearInterval(BENCH_LOG.timer); BENCH_LOG.timer = null; }
+  BENCH_LOG.runId = null;
+  closeDialog('benchLogModal');
 }
 
 // ── Benchmark ───────────────────────────────────────────────────────────────

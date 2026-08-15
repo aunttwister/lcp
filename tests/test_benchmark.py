@@ -200,23 +200,34 @@ def test_queue_and_run_flow(tmp_path, monkeypatch):
             return None
     monkeypatch.setattr("src.api.cost_plugins.get_registry", lambda: FakeRegistry())
 
-    # Mock subprocess: first call (run) returns 0, second (show) writes CSV.
-    import subprocess as sp
-    real_run = sp.run
+    # Mock subprocess.Popen: first call (run) returns 0, second (show) writes CSV.
+    class FakeProc:
+        def __init__(self, cmd, cwd, **kwargs):
+            self.cmd = cmd
+            self.cwd = cwd
 
-    def fake_run(cmd, cwd, capture_output, text, timeout):
-        if "show_livebench_result.py" in str(cmd):
-            import os
-            with open(os.path.join(cwd, "all_groups.csv"), "w") as f:
-                f.write(
-                    "model,coding,math\n"
-                    "deepseek-v4-pro,70.0,90.7\n"
-                )
-        return real_run(
-            ["true"], cwd=cwd, capture_output=True, text=True, timeout=10,
-        )
+        def __enter__(self):
+            return self
 
-    monkeypatch.setattr("src.api.benchmark.subprocess.run", fake_run)
+        def __exit__(self, *a):
+            return False
+
+        @property
+        def stdout(self):
+            import io
+            return io.StringIO("")
+
+        def wait(self):
+            if "show_livebench_result.py" in str(self.cmd):
+                import os
+                with open(os.path.join(self.cwd, "all_groups.csv"), "w") as f:
+                    f.write(
+                        "model,coding,math\n"
+                        "deepseek-v4-pro,70.0,90.7\n"
+                    )
+            return 0
+
+    monkeypatch.setattr("src.api.benchmark.subprocess.Popen", FakeProc)
     monkeypatch.setattr("src.api.benchmark.livebench_dir", lambda: str(tmp_path))
 
     run = queue_benchmark(
