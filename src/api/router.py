@@ -194,10 +194,12 @@ def invalidate_registry_cache() -> None:
 
 
 def _alias_to_logical(registry: dict[str, dict]) -> dict[str, str]:
-    """Build reverse index: provider-side model ID (lowercased) → logical name."""
+    """Build reverse index: provider-side model ID / benchmark key → logical name."""
     index: dict[str, str] = {}
     for logical, entry in registry.items():
         index[logical.lower()] = logical
+        if entry.get("benchmark_key"):
+            index.setdefault(entry["benchmark_key"].lower(), logical)
         for provider_side in (entry.get("provider_mappings") or {}).values():
             if provider_side:
                 index.setdefault(provider_side.lower(), logical)

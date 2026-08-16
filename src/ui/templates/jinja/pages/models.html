@@ -27,6 +27,89 @@
   </div>
 </div>
 
+<!-- Edit model modal -->
+<div class="modal-overlay dialog-overlay" id="editModelModal">
+<div class="modal dialog-content" style="width:min(640px,95vw)">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title">Edit model</h2>
+    <button class="modal-close dialog-close" type="button" aria-label="Close" onclick="closeEditModel()">✕</button>
+  </div>
+  <div class="modal-body dialog-body">
+    <div class="form-field">
+      <label class="form-label" for="editLogicalName">Logical name</label>
+      <input class="form-input" id="editLogicalName" type="text" disabled>
+    </div>
+    <div class="form-field">
+      <label class="form-label" for="editBenchmarkKey">Benchmark key</label>
+      <input class="form-input" id="editBenchmarkKey" type="text">
+      <div class="form-help">Stable, release-independent key used in the capability matrix.</div>
+    </div>
+    <div class="form-row">
+      <div class="form-field">
+        <label class="form-label" for="editActiveRelease">Provider version</label>
+        <input class="form-input" id="editActiveRelease" type="text" placeholder="e.g. 2026-08-13">
+      </div>
+      <div class="form-field">
+        <label class="form-label" for="editBenchmarkRelease">Benchmark date</label>
+        <input class="form-input" id="editBenchmarkRelease" type="text" placeholder="e.g. 2026-06-25">
+      </div>
+    </div>
+    <div class="form-field">
+      <label class="form-label">Providers</label>
+      <div id="mappingRows"></div>
+      <button class="btn btn-outline btn-sm" type="button" id="addMappingRowBtn">+ Add provider</button>
+      <div class="form-help">Map each provider to the model ID that provider expects.</div>
+    </div>
+    <div class="form-error" id="editModelError"></div>
+  </div>
+  <div class="modal-footer dialog-footer">
+    <button class="btn btn-outline btn-sm" type="button" onclick="closeEditModel()">Cancel</button>
+    <button class="btn btn-primary btn-sm" type="button" id="saveModelBtn">Save</button>
+  </div>
+</div>
+</div>
+
+<!-- Add score modal -->
+<div class="modal-overlay dialog-overlay" id="scoreModal">
+<div class="modal dialog-content" style="width:min(560px,95vw)">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title" id="scoreModalTitle">Add score</h2>
+    <button class="modal-close dialog-close" type="button" aria-label="Close" onclick="closeScoreModal()">✕</button>
+  </div>
+  <div class="modal-body dialog-body">
+    <div class="form-field">
+      <label class="form-label" for="scoreRelease">Release</label>
+      <input class="form-input" id="scoreRelease" type="text" placeholder="e.g. 2026-08-13 (blank = today)">
+      <div class="form-help">Version label for this score entry. Leave blank to use today's date.</div>
+    </div>
+    <div class="score-grid" id="scoreGrid"></div>
+    <div class="form-error" id="scoreError"></div>
+  </div>
+  <div class="modal-footer dialog-footer">
+    <button class="btn btn-outline btn-sm" type="button" onclick="closeScoreModal()">Cancel</button>
+    <button class="btn btn-primary btn-sm" type="button" id="saveScoreBtn">Save scores</button>
+  </div>
+</div>
+</div>
+
+<!-- Delete model modal -->
+<div class="modal-overlay dialog-overlay" id="deleteModelModal">
+<div class="modal dialog-content" style="width:min(440px,95vw)">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title">Delete model</h2>
+    <button class="modal-close dialog-close" type="button" aria-label="Close" onclick="closeDeleteModel()">✕</button>
+  </div>
+  <div class="modal-body dialog-body">
+    <p class="dialog-description" id="deleteModelText">Are you sure you want to delete this model from the registry?</p>
+    <div class="form-error" id="deleteModelError"></div>
+  </div>
+  <div class="modal-footer dialog-footer">
+    <button class="btn btn-outline btn-sm" type="button" onclick="closeDeleteModel()">Cancel</button>
+    <button class="btn btn-danger btn-sm" type="button" id="confirmDeleteModelBtn">Delete</button>
+  </div>
+</div>
+</div>
+
 <!-- Benchmark live log modal -->
 <div class="modal-overlay dialog-overlay" id="benchLogModal">
 <div class="modal dialog-content" style="width:min(680px,95vw)">
@@ -133,6 +216,7 @@ function buildAliasMap() {
   const map = {};
   for (const [logical, entry] of Object.entries(STATE.registry || {})) {
     map[logical.toLowerCase()] = logical;
+    if (entry.benchmark_key) map[String(entry.benchmark_key).toLowerCase()] = logical;
     for (const m of Object.values(entry.provider_mappings || {})) {
       map[String(m).toLowerCase()] = logical;
     }
@@ -297,7 +381,7 @@ function renderDetail(model) {
   }
   scores.sort((a, b) => b.score - a.score);
 
-  const runs = STATE.runs.filter(r => (r.target || {}).model === canonical || (r.target || {}).profile === canonical);
+  const runs = STATE.runs;
 
   detail.innerHTML = `
     <div class="model-detail-head">
@@ -401,81 +485,127 @@ function benchSection(model, defaultProvider) {
 
 // ── Registry actions ────────────────────────────────────────────────────────
 
+let EDIT_TARGET = null;   // logical name of the model being edited
+
 function editRegistry(logical, benchmark, providerMappings, activeRelease, benchmarkRelease) {
-  const newBenchmark = prompt('Benchmark key:', benchmark);
-  if (newBenchmark === null) return;
-  const newActiveRelease = prompt('Provider version (e.g. 2026-08-13; leave blank for latest):', activeRelease || '');
-  if (newActiveRelease === null) return;
-  const newBenchmarkRelease = prompt('Benchmark date (leaderboard snapshot, e.g. 2026-06-25; leave blank to clear):', benchmarkRelease || '');
-  if (newBenchmarkRelease === null) return;
-  const mappings = providerMappings || {};
-  const mappingStr = Object.entries(mappings).map(([p, m]) => p + '=' + m).join(', ');
-  const newMappings = prompt(
-    'Providers (provider=model, comma-separated):\n' +
-    'e.g. deepseek=deepseek-v4-pro, opencode=deepseek-v4-pro, commandcode=deepseek/deepseek-v4-pro\n\n' +
-    'Leave blank to clear.',
-    mappingStr
-  );
-  if (newMappings === null) return;
+  EDIT_TARGET = logical;
+  document.getElementById('editLogicalName').value = logical;
+  document.getElementById('editBenchmarkKey').value = benchmark || logical;
+  document.getElementById('editActiveRelease').value = activeRelease || '';
+  document.getElementById('editBenchmarkRelease').value = benchmarkRelease || '';
+  document.getElementById('editModelError').textContent = '';
+  renderMappingRows(providerMappings || {});
+  openDialog('editModelModal');
+}
 
-  const providerMappingsOut = {};
-  for (const part of newMappings.split(',')) {
-    const [p, m] = part.split('=').map(s => (s || '').trim());
-    if (p && m) providerMappingsOut[p] = m;
+function renderMappingRows(mappings) {
+  const wrap = document.getElementById('mappingRows');
+  const entries = Object.entries(mappings || {});
+  wrap.innerHTML = entries.map(([p, m], i) => `
+    <div class="mapping-editor-row" data-index="${i}">
+      <input class="form-input" data-role="provider" placeholder="provider" value="${esc(p)}">
+      <input class="form-input" data-role="model" placeholder="model id" value="${esc(m)}">
+      <button class="mapping-remove" type="button" data-remove="${i}" title="Remove">✕</button>
+    </div>`).join('');
+  if (!entries.length) {
+    wrap.innerHTML = '<div class="form-help">No providers mapped yet.</div>';
   }
+}
 
-  API.upsertRegistry({
-    logical_name: logical,
-    benchmark_key: newBenchmark.trim(),
-    provider_mappings: providerMappingsOut,
-    active_release: newActiveRelease.trim() || null,
-    benchmark_release: newBenchmarkRelease.trim() || null,
-  }).then(r => {
-    if (r.error) { alert('Error: ' + r.error); return; }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function readMappingRows() {
+  const out = {};
+  document.querySelectorAll('#mappingRows .mapping-editor-row').forEach(row => {
+    const p = row.querySelector('[data-role="provider"]').value.trim();
+    const m = row.querySelector('[data-role="model"]').value.trim();
+    if (p && m) out[p] = m;
+  });
+  return out;
+}
+
+function saveEditModel() {
+  const err = document.getElementById('editModelError');
+  const benchmark = document.getElementById('editBenchmarkKey').value.trim();
+  if (!benchmark) { err.textContent = 'Benchmark key is required.'; return; }
+  const payload = {
+    logical_name: EDIT_TARGET,
+    benchmark_key: benchmark,
+    provider_mappings: readMappingRows(),
+    active_release: document.getElementById('editActiveRelease').value.trim() || null,
+    benchmark_release: document.getElementById('editBenchmarkRelease').value.trim() || null,
+  };
+  API.upsertRegistry(payload).then(r => {
+    if (r.error) { err.textContent = 'Error: ' + r.error; return; }
+    closeEditModel();
     loadAll();
   });
 }
 
-// ── Manual score entry ─────────────────────────────────────────────────────
+function closeEditModel() {
+  EDIT_TARGET = null;
+  closeDialog('editModelModal');
+}
+
+// ── Manual score entry (modal) ─────────────────────────────────────────────
 
 const SCORE_TASKS = [
   'code_generation', 'reasoning_chain', 'debugging', 'agentic_multi_step',
   'planning', 'research_deep', 'casual_chat',
 ];
 
+let SCORE_TARGET = null;
+
 function openManualScore(model) {
-  const reg = STATE.registry[model];
-  const activeRelease = reg ? (reg.active_release || '') : '';
+  SCORE_TARGET = canonicalName(model);
+  const reg = STATE.registry[SCORE_TARGET] || {};
   const today = new Date().toISOString().slice(0, 10);
-  const release = prompt('Release label (e.g. 2026-08-13, or leave blank for today):', activeRelease || today);
-  if (release === null) return;
+  document.getElementById('scoreModalTitle').textContent = 'Add score — ' + SCORE_TARGET;
+  document.getElementById('scoreRelease').value = reg.active_release || today;
+  document.getElementById('scoreError').textContent = '';
 
-  const rows = SCORE_TASKS.map(t => {
-    const existing = (STATE.matrix.tasks || {})[t]?.[model];
+  const grid = document.getElementById('scoreGrid');
+  grid.innerHTML = SCORE_TASKS.map(t => {
+    const existing = (STATE.matrix.tasks || {})[t]?.[SCORE_TARGET];
     const val = existing !== undefined ? (existing * 100).toFixed(1) : '';
-    return t + '=' + val;
-  });
-  const input = prompt(
-    'Scores as 0-100, comma-separated.\nTasks: ' + SCORE_TASKS.join(', ') + '\n\n' +
-    'Example:\n' + SCORE_TASKS.map(t => t + '=85').join(', ') + '\n\n' +
-    'Leave a task blank to skip it.',
-    rows.join(', ')
-  );
-  if (input === null) return;
+    return `<div class="score-field">
+      <label class="form-label" for="score-${t}">${t.replace(/_/g, ' ')}
+        <input class="form-input" id="score-${t}" type="number" min="0" max="100" step="0.1" placeholder="—" value="${val}">
+      </label>
+    </div>`;
+  }).join('');
+  openDialog('scoreModal');
+}
 
+function saveScore() {
+  const err = document.getElementById('scoreError');
+  const release = document.getElementById('scoreRelease').value.trim();
   const scores = {};
-  for (const part of input.split(',')) {
-    const [task, value] = part.split('=').map(s => (s || '').trim());
-    if (!task || value === '' || isNaN(Number(value))) continue;
-    scores[task] = Number(value);
+  for (const t of SCORE_TASKS) {
+    const input = document.getElementById('score-' + t);
+    const v = input.value.trim();
+    if (v === '') continue;
+    const n = Number(v);
+    if (isNaN(n) || n < 0 || n > 100) { err.textContent = 'Scores must be between 0 and 100.'; return; }
+    scores[t] = n;
   }
-  if (!Object.keys(scores).length) { alert('No valid scores entered.'); return; }
-
-  API.manualScores(model, scores, release).then(r => {
-    if (r.error) { alert('Error: ' + r.error); return; }
+  if (!Object.keys(scores).length) { err.textContent = 'Enter at least one score.'; return; }
+  API.manualScores(SCORE_TARGET, scores, release).then(r => {
+    if (r.error) { err.textContent = 'Error: ' + r.error; return; }
+    closeScoreModal();
     loadAll();
   });
 }
+
+function closeScoreModal() {
+  SCORE_TARGET = null;
+  closeDialog('scoreModal');
+}
+
+// ── Add / delete registry ──────────────────────────────────────────────────
 
 function addRegistry() {
   const logical = prompt('Logical name (e.g. deepseek-v4-pro):');
@@ -493,13 +623,29 @@ function addRegistry() {
   });
 }
 
+let DELETE_TARGET = null;
+
 function deleteRegistry(logical) {
-  if (!confirm('Delete model "' + logical + '" from the registry?')) return;
-  API.deleteRegistry(logical).then(r => {
-    if (r.error) { alert('Error: ' + r.error); return; }
-    STATE.selected = null;
+  DELETE_TARGET = logical;
+  document.getElementById('deleteModelText').textContent =
+    'Delete "' + logical + '" from the model registry? This does not remove its benchmark runs or scores.';
+  document.getElementById('deleteModelError').textContent = '';
+  openDialog('deleteModelModal');
+}
+
+function confirmDeleteModel() {
+  const err = document.getElementById('deleteModelError');
+  API.deleteRegistry(DELETE_TARGET).then(r => {
+    if (r.error) { err.textContent = 'Error: ' + r.error; return; }
+    closeDeleteModel();
+    if (STATE.selected === DELETE_TARGET) STATE.selected = null;
     loadAll();
   });
+}
+
+function closeDeleteModel() {
+  DELETE_TARGET = null;
+  closeDialog('deleteModelModal');
 }
 
 // ── Benchmark live log ─────────────────────────────────────────────────────
@@ -591,6 +737,33 @@ document.getElementById('modelFilter').addEventListener('input', function() {
   renderModelList();
 });
 document.getElementById('addRegistryBtn').addEventListener('click', addRegistry);
+document.getElementById('addMappingRowBtn').addEventListener('click', function () {
+  const wrap = document.getElementById('mappingRows');
+  // Replace the "no providers yet" help with a row.
+  if (!wrap.querySelector('.mapping-editor-row')) wrap.innerHTML = '';
+  const idx = wrap.querySelectorAll('.mapping-editor-row').length;
+  const row = document.createElement('div');
+  row.className = 'mapping-editor-row';
+  row.dataset.index = idx;
+  row.innerHTML = `
+    <input class="form-input" data-role="provider" placeholder="provider">
+    <input class="form-input" data-role="model" placeholder="model id">
+    <button class="mapping-remove" type="button" title="Remove">✕</button>`;
+  wrap.appendChild(row);
+  row.querySelector('[data-role="provider"]').focus();
+});
+document.getElementById('mappingRows').addEventListener('click', function (e) {
+  const btn = e.target.closest('.mapping-remove');
+  if (!btn) return;
+  const row = btn.closest('.mapping-editor-row');
+  if (row) row.remove();
+  if (!document.querySelector('#mappingRows .mapping-editor-row')) {
+    document.getElementById('mappingRows').innerHTML = '<div class="form-help">No providers mapped yet.</div>';
+  }
+});
+document.getElementById('saveModelBtn').addEventListener('click', saveEditModel);
+document.getElementById('saveScoreBtn').addEventListener('click', saveScore);
+document.getElementById('confirmDeleteModelBtn').addEventListener('click', confirmDeleteModel);
 
 loadAll();
 </script>
