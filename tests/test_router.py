@@ -129,9 +129,9 @@ def test_logical_model_name_case_insensitive(registry_db):
     assert logical_model_name("DeepSeek-V4-Pro", registry_db) == "deepseek-v4-pro"
 
 def test_benchmark_model_name_resolves_rolling_alias(registry_db):
-    # Rolling 'deepseek-v4-flash' alias scores as the latest benchmarked
-    # snapshot (0731), not the stale bare name.
-    assert benchmark_model_name("deepseek-v4-flash", registry_db) == "deepseek-v4-flash-0731"
+    # The benchmark key is the stable logical name; the dated 0731 snapshot
+    # is a RELEASE of it, not a separate identity.
+    assert benchmark_model_name("deepseek-v4-flash", registry_db) == "deepseek-v4-flash"
 
 def test_benchmark_model_name_passthrough_without_pin(registry_db):
     # deepseek-v4-pro has no dated snapshot in the registry

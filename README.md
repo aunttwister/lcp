@@ -335,6 +335,16 @@ is what routing and pricing use. It has:
 The router resolves `alias → logical → benchmark_key`, applies the active
 release, and scores the single resulting identity.
 
+**Identity vs. release.** `benchmark_key` is the *stable, release-independent*
+name (e.g. `deepseek-v4-flash`). A dated leaderboard name such as
+`deepseek-v4-flash-0731` is a **release** of that same identity — it is stored
+as rows tagged `release_label="2026-07-31"`, and `active_release` (default:
+the newest available release) decides which release's scores are live. So a
+model benchmarked on 2026-06-25 that has since been re-released as `0731`
+keeps ONE list entry, and the UI/`router` both show `0731` as the active
+release — while the provider still receives whatever ID `provider_mappings`
+says is current.
+
 ### Module install path
 
 All runtime-installed modules live under the **module root** controlled by

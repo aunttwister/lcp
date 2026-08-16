@@ -155,8 +155,9 @@ _MODEL_PRICES: dict[str, float] = {
 #
 #   logical_name:  the canonical gateway name (also the key in _MODEL_PRICES
 #                  and pricing configs — used for pricing and aggregation).
-#   benchmark_key: the model key inside the seeded capability matrix
-#                  (LiveBench / Arena data).
+#   benchmark_key: the STABLE, release-independent model key inside the seeded
+#                  capability matrix (LiveBench / Arena data). Dated snapshot
+#                  names are releases, not keys.
 #   aliases:       every provider-side ID that means the same logical model.
 #
 # The curated defaults live in seed_capabilities.DEFAULT_MODEL_REGISTRY and are

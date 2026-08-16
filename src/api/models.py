@@ -164,14 +164,16 @@ class ModelRegistryEntry(Base):
     """Explicit model registry: canonical logical model ↔ provider aliases ↔ benchmark key.
 
     Providers use different model-ID conventions (Command Code prefixes
-    ``deepseek/...``, OpenCode uses bare names) and benchmarks publish dated
-    snapshots (``deepseek-v4-flash-0731``). This table pins those relationships
-    explicitly so the router never has to guess from string patterns.
+    ``deepseek/...``, OpenCode uses bare names). This table pins those
+    relationships explicitly so the router never has to guess from string
+    patterns.
 
-    Each logical model has exactly one row. Its provider aliases are stored as
-    a JSON array, ``benchmark_key`` names the snapshot to score against, and
-    ``active_release`` selects which release's scores feed the router (default
-    ``latest`` = the most recently-updated release).
+    Each logical model has exactly one row. ``benchmark_key`` is the STABLE,
+    release-independent key used inside ``model_capabilities`` (e.g.
+    ``deepseek-v4-flash``). Dated leaderboard names (``deepseek-v4-flash-0731``)
+    are RELEASES of that identity — they are rows tagged with a
+    ``release_label`` (``2026-07-31``), and ``active_release`` selects which
+    release's scores feed the router (default: the newest available release).
 
     ``provider_mappings_json`` pins the exact provider-side model ID for each
     provider, e.g. ``{"opencode": "deepseek-v4-pro", "commandcode":
@@ -183,7 +185,7 @@ class ModelRegistryEntry(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     logical_name = Column(String, unique=True, nullable=False, index=True)
-    benchmark_key = Column(String, nullable=False)  # key in model_capabilities
+    benchmark_key = Column(String, nullable=False)  # stable key in model_capabilities
     aliases_json = Column(Text, nullable=False, default="[]")  # JSON array of provider-side IDs
     provider_mappings_json = Column(Text, nullable=False, default="{}")  # {provider: provider-side model ID}
     active_release = Column(String, nullable=True)  # release_label to route by; None/latest = newest

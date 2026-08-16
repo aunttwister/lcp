@@ -1813,10 +1813,12 @@ class DashboardEndpoints:
         """GET /api/models/capability — return the capability matrix as JSON.
 
         Optional ``?release=<label>`` filters to one release; without it each
-        model's rows are returned (the client/registry resolves active).
+        model's ACTIVE release is returned (``active_release`` pin → newest
+        release), matching the router's ``load_capability_matrix`` exactly.
         """
         from urllib.parse import parse_qs, urlparse
         from ..api.models import ModelCapability, get_session as _gs
+        from ..api.seed_capabilities import resolve_active_rows
 
         qs = parse_qs(urlparse(self.path).query)
         source_filter = qs.get("source", [None])[0]
@@ -1827,9 +1829,25 @@ class DashboardEndpoints:
                 q = session.query(ModelCapability)
                 if source_filter:
                     q = q.filter(ModelCapability.source == source_filter)
-                if release_filter:
-                    q = q.filter(ModelCapability.release_label == release_filter)
                 rows = q.all()
+
+            active_releases: dict[str, str] = {}
+            if release_filter:
+                rows = [r for r in rows if r.release_label == release_filter or r.release_label is None]
+            else:
+                from ..api.seed_capabilities import load_model_registry, effective_releases
+                db_path = "data/costs.db"
+                try:
+                    if getattr(self.engine, "url", None) is not None:
+                        db_path = str(self.engine.url.database) or db_path
+                except Exception:
+                    pass
+                registry = load_model_registry(db_path)
+                all_rows = rows
+                rows = resolve_active_rows(all_rows, registry)
+                # Report the release actually in effect per model (pinned or
+                # newest), computed deterministically over ALL rows.
+                active_releases = effective_releases(all_rows, registry)
 
             tasks: dict[str, dict[str, float]] = {}
             sources: dict[str, dict[str, str]] = {}
@@ -1849,6 +1867,7 @@ class DashboardEndpoints:
                 "sources": sources,
                 "benchmark_categories": benchmarks,
                 "releases": releases,
+                "active_releases": active_releases,
                 "count": len(rows),
             })
         except Exception as e:

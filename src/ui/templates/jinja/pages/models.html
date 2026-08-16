@@ -246,7 +246,9 @@ function renderDetail(model) {
   const reg = STATE.registry[canonical] || STATE.registry[model];
   const aliases = reg ? reg.aliases : [];
   const benchmarkKey = reg ? reg.benchmark_key : model;
-  const activeRelease = reg ? (reg.active_release || 'latest') : 'latest';
+  const pinnedRelease = reg ? (reg.active_release || '') : '';
+  // Release actually in effect (resolved server-side: pin → newest).
+  const effectiveRelease = (STATE.matrix.active_releases || {})[canonical] || pinnedRelease || 'latest';
   const providerMappings = reg ? (reg.provider_mappings || {}) : {};
   const updatedAt = reg ? (reg.updated_at || '').replace('T', ' ').slice(0, 19) : null;
   const provs = providerModels()[canonical] || [];
@@ -284,7 +286,8 @@ function renderDetail(model) {
         <dt>Benchmark key</dt><dd class="mono">${benchmarkKey}</dd>
         <dt>Provider aliases</dt>
         <dd>${aliases.length ? aliases.map(a => `<code class="mono">${a}</code>`).join(' ') : '<span class="muted">none — unregistered</span>'}</dd>
-        <dt>Active release</dt><dd class="mono">${activeRelease}</dd>
+        <dt>Active release</dt>
+        <dd class="mono">${effectiveRelease}${pinnedRelease && effectiveRelease === pinnedRelease ? ' <span class="muted">(pinned)</span>' : ' <span class="muted">(latest)</span>'}</dd>
         ${Object.keys(providerMappings).length ? `
         <dt>Provider → model</dt>
         <dd>${Object.entries(providerMappings).map(([p, m]) => `<code class="mono">${p}</code> → <code class="mono">${m}</code>`).join(' &nbsp; ')}</dd>` : ''}
