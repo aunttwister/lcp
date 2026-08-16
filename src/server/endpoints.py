@@ -1899,6 +1899,7 @@ class DashboardEndpoints:
                     "aliases": aliases,
                     "provider_mappings": provider_mappings,
                     "active_release": r.active_release,
+                    "benchmark_release": r.benchmark_release,
                     "updated_at": r.updated_at,
                 })
             self._send_json({"registry": entries, "count": len(entries)})
@@ -1974,7 +1975,8 @@ class DashboardEndpoints:
     def _serve_registry_upsert_api(self):
         """POST /api/models/registry — create or update a registry entry.
 
-        Body: {logical_name, benchmark_key, aliases: [..], active_release?}
+        Body: {logical_name, benchmark_key, aliases: [..], active_release?,
+               benchmark_release?}
         """
         import json
         from datetime import datetime, timezone
@@ -1991,6 +1993,7 @@ class DashboardEndpoints:
         benchmark = (body.get("benchmark_key") or "").strip().lower()
         aliases = body.get("aliases") or []
         active_release = (body.get("active_release") or "").strip() or None
+        benchmark_release = (body.get("benchmark_release") or "").strip() or None
         provider_mappings = body.get("provider_mappings") or {}
         if not logical:
             self._send_json({"error": "missing 'logical_name'"}, 400)
@@ -2023,6 +2026,8 @@ class DashboardEndpoints:
                     entry.provider_mappings_json = json.dumps(provider_mappings)
                     if active_release is not None:
                         entry.active_release = active_release
+                    if benchmark_release is not None:
+                        entry.benchmark_release = benchmark_release
                     entry.updated_at = now
                     action = "updated"
                 else:
@@ -2032,6 +2037,7 @@ class DashboardEndpoints:
                         aliases_json=json.dumps(aliases),
                         provider_mappings_json=json.dumps(provider_mappings),
                         active_release=active_release,
+                        benchmark_release=benchmark_release,
                         updated_at=now,
                     ))
                     action = "created"

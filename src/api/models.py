@@ -170,10 +170,11 @@ class ModelRegistryEntry(Base):
 
     Each logical model has exactly one row. ``benchmark_key`` is the STABLE,
     release-independent key used inside ``model_capabilities`` (e.g.
-    ``deepseek-v4-flash``). Dated leaderboard names (``deepseek-v4-flash-0731``)
-    are RELEASES of that identity — they are rows tagged with a
-    ``release_label`` (``2026-07-31``), and ``active_release`` selects which
-    release's scores feed the router (default: the newest available release).
+    ``deepseek-v4-flash``). ``active_release`` names the CURRENT model version
+    (``2026-08-13`` for DeepSeek V4 Pro 0813) whose scores feed the router,
+    while ``benchmark_release`` names the LiveBench leaderboard snapshot those
+    scores were taken from (``2026-06-25``) — the benchmark date is separate
+    from the model version.
 
     ``provider_mappings_json`` pins the exact provider-side model ID for each
     provider, e.g. ``{"opencode": "deepseek-v4-pro", "commandcode":
@@ -188,7 +189,8 @@ class ModelRegistryEntry(Base):
     benchmark_key = Column(String, nullable=False)  # stable key in model_capabilities
     aliases_json = Column(Text, nullable=False, default="[]")  # JSON array of provider-side IDs
     provider_mappings_json = Column(Text, nullable=False, default="{}")  # {provider: provider-side model ID}
-    active_release = Column(String, nullable=True)  # release_label to route by; None/latest = newest
+    active_release = Column(String, nullable=True)  # CURRENT model version (e.g. 2026-08-13); None = newest
+    benchmark_release = Column(String, nullable=True)  # leaderboard snapshot date (e.g. 2026-06-25)
     updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
 
 

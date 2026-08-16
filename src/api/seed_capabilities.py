@@ -30,27 +30,23 @@ LB_TO_LCP: dict[str, str] = {
 # Hand-typed leaderboard snapshots (source: livebench.ai). Kept as an OPT-IN
 # convenience for the setup wizard / a CLI: this is NOT loaded on boot.
 #
-# Shape: {logical_model: {release_label: {category: raw_0_100}}}. A dated
-# leaderboard name (``deepseek-v4-flash-0731``) is a RELEASE of the logical
-# model, NOT a separate identity — the June 25 leaderboard measured the
-# ``deepseek-v4-flash`` build as it was on 2026-06-25, and the ``0731``
-# snapshot is the same logical model re-benchmarked on 2026-07-31.
+# Shape: {logical_model: {release_label: {category: raw_0_100}}}. Only the
+# LATEST snapshot is kept per model — ``release_label`` is the model VERSION
+# (``2026-08-13`` = DeepSeek V4 Pro 0813, ``2026-07-31`` = Flash 0731) for
+# DeepSeek, and the leaderboard date for models without a dated build. The
+# leaderboard snapshot date itself lives in ``benchmark_release`` on the
+# registry entry, so version and benchmark date stay separate.
 LIVEBENCH_RELEASE = "2026-06-25"
 
 LIVEBENCH_DATA: dict[str, dict[str, dict[str, float]]] = {
     "deepseek-v4-pro": {
-        "2026-06-25": {
-            "reasoning": 82.7, "coding": 70.0, "agentic_coding": 42.6,
-            "math": 90.7, "data_analysis": 74.5, "language": 78.1,
-            "instruction_following": 62.4, "overall": 71.6,
+        "2026-08-13": {
+            "reasoning": 85.8, "coding": 77.2, "agentic_coding": 54.9,
+            "math": 95.1, "data_analysis": 79.2, "language": 82.1,
+            "instruction_following": 67.7, "overall": 77.4,
         },
     },
     "deepseek-v4-flash": {
-        "2026-06-25": {
-            "reasoning": 70.6, "coding": 69.2, "agentic_coding": 37.6,
-            "math": 79.6, "data_analysis": 68.0, "language": 70.1,
-            "instruction_following": 63.1, "overall": 65.5,
-        },
         "2026-07-31": {
             "reasoning": 86.6, "coding": 75.0, "agentic_coding": 46.8,
             "math": 86.8, "data_analysis": 79.3, "language": 79.2,
@@ -184,6 +180,17 @@ def seed_livebench(db_path: str, release: Optional[str] = None) -> int:
         ModelCapability.source == "livebench",
         ModelCapability.release_label.is_(None),
     ).delete(synchronize_session=False)
+
+    # Migration: drop dated snapshots that are no longer the latest release.
+    # We keep ONLY the newest snapshot per model — historical rows (e.g.
+    # deepseek-v4-pro@2026-06-25 now superseded by @2026-08-13) are removed.
+    for model, releases in LIVEBENCH_DATA.items():
+        keep = list(releases.keys())
+        session.query(ModelCapability).filter(
+            ModelCapability.model == model,
+            ModelCapability.source == "livebench",
+            ModelCapability.release_label.notin_(keep),
+        ).delete(synchronize_session=False)
 
     session.commit()
     session.close()
@@ -363,12 +370,14 @@ DEFAULT_MODEL_REGISTRY: list[dict] = [
     {
         "logical_name": "deepseek-v4-pro",
         "benchmark_key": "deepseek-v4-pro",
-        "aliases": ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
+        "aliases": ["deepseek-v4-pro", "deepseek/deepseek-v4-pro", "deepseek-v4-pro-0813"],
         "provider_mappings": {
             "deepseek": "deepseek-v4-pro",
             "opencode": "deepseek-v4-pro",
             "commandcode": "deepseek/deepseek-v4-pro",
         },
+        "active_release": "2026-08-13",
+        "benchmark_release": "2026-06-25",
     },
     {
         "logical_name": "deepseek-v4-flash",
@@ -379,6 +388,8 @@ DEFAULT_MODEL_REGISTRY: list[dict] = [
             "opencode": "deepseek-v4-flash",
             "commandcode": "deepseek/deepseek-v4-flash",
         },
+        "active_release": "2026-07-31",
+        "benchmark_release": "2026-06-25",
     },
     {
         "logical_name": "claude-sonnet-5",
@@ -452,8 +463,9 @@ def seed_model_registry(db_path: str, sync: bool = False) -> int:
     Insert-only by default: existing rows are NOT overwritten — the DB is the
     source of truth once seeded. With ``sync=True``, curated defaults are
     re-applied to existing rows (aliases, provider_mappings, benchmark_key,
-    active_release) so a code-level identity→release migration can be pushed
-    out without wiping admin edits to unmanaged columns.
+    active_release, benchmark_release) so a code-level identity→release
+    migration can be pushed out without wiping admin edits to unmanaged
+    columns.
     """
     from src.api.models import ModelRegistryEntry
 
@@ -471,6 +483,7 @@ def seed_model_registry(db_path: str, sync: bool = False) -> int:
                 existing.aliases_json = json.dumps(entry["aliases"])
                 existing.provider_mappings_json = json.dumps(entry.get("provider_mappings", {}))
                 existing.active_release = entry.get("active_release")
+                existing.benchmark_release = entry.get("benchmark_release")
                 existing.updated_at = now
                 count += 1
             continue
@@ -480,6 +493,7 @@ def seed_model_registry(db_path: str, sync: bool = False) -> int:
             aliases_json=json.dumps(entry["aliases"]),
             provider_mappings_json=json.dumps(entry.get("provider_mappings", {})),
             active_release=entry.get("active_release"),
+            benchmark_release=entry.get("benchmark_release"),
             updated_at=now,
         ))
         count += 1
@@ -493,9 +507,10 @@ def seed_model_registry(db_path: str, sync: bool = False) -> int:
 def load_model_registry(db_path: str) -> dict[str, dict]:
     """Load the model registry as {logical_name: {...}}.
 
-    Each entry: {benchmark_key, aliases, provider_mappings, active_release}.
-    ``active_release`` is None until an admin pins a release; the router then
-    falls back to the latest-scored release for that model.
+    Each entry: {benchmark_key, aliases, provider_mappings, active_release,
+    benchmark_release}. ``active_release`` is the CURRENT model version
+    (e.g. ``2026-08-13``); ``benchmark_release`` is the leaderboard snapshot
+    date the scores came from (e.g. ``2026-06-25``).
     """
     from src.api.models import ModelRegistryEntry
 
@@ -516,6 +531,7 @@ def load_model_registry(db_path: str) -> dict[str, dict]:
             "aliases": aliases,
             "provider_mappings": provider_mappings,
             "active_release": row.active_release,
+            "benchmark_release": row.benchmark_release,
         }
 
     session.close()

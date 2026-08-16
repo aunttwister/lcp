@@ -247,7 +247,8 @@ function renderDetail(model) {
   const aliases = reg ? reg.aliases : [];
   const benchmarkKey = reg ? reg.benchmark_key : model;
   const pinnedRelease = reg ? (reg.active_release || '') : '';
-  // Release actually in effect (resolved server-side: pin → newest).
+  const benchmarkRelease = reg ? (reg.benchmark_release || '') : '';
+  // Version actually in effect (resolved server-side: pin → newest).
   const effectiveRelease = (STATE.matrix.active_releases || {})[canonical] || pinnedRelease || 'latest';
   const providerMappings = reg ? (reg.provider_mappings || {}) : {};
   const updatedAt = reg ? (reg.updated_at || '').replace('T', ' ').slice(0, 19) : null;
@@ -286,8 +287,9 @@ function renderDetail(model) {
         <dt>Benchmark key</dt><dd class="mono">${benchmarkKey}</dd>
         <dt>Provider aliases</dt>
         <dd>${aliases.length ? aliases.map(a => `<code class="mono">${a}</code>`).join(' ') : '<span class="muted">none — unregistered</span>'}</dd>
-        <dt>Active release</dt>
-        <dd class="mono">${effectiveRelease}${pinnedRelease && effectiveRelease === pinnedRelease ? ' <span class="muted">(pinned)</span>' : ' <span class="muted">(latest)</span>'}</dd>
+        <dt>Version</dt>
+        <dd class="mono">${effectiveRelease}${pinnedRelease && effectiveRelease === pinnedRelease ? ' <span class="muted">(active)</span>' : ' <span class="muted">(latest)</span>'}</dd>
+        ${benchmarkRelease ? `<dt>Benchmark date</dt><dd class="mono">${benchmarkRelease}</dd>` : ''}
         ${Object.keys(providerMappings).length ? `
         <dt>Provider → model</dt>
         <dd>${Object.entries(providerMappings).map(([p, m]) => `<code class="mono">${p}</code> → <code class="mono">${m}</code>`).join(' &nbsp; ')}</dd>` : ''}
@@ -339,7 +341,7 @@ function renderDetail(model) {
       </div>
     </div>`;
 
-  document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, aliases, providerMappings));
+  document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, aliases, providerMappings, pinnedRelease, benchmarkRelease));
   document.getElementById('deleteModelBtn')?.addEventListener('click', () => deleteRegistry(model));
   document.getElementById('runBenchBtn')?.addEventListener('click', () => runBenchmark(model));
   document.getElementById('addScoreBtn')?.addEventListener('click', () => openManualScore(model));
@@ -367,11 +369,15 @@ function benchSection(model, defaultProvider) {
 
 // ── Registry actions ────────────────────────────────────────────────────────
 
-function editRegistry(logical, benchmark, aliases, providerMappings) {
+function editRegistry(logical, benchmark, aliases, providerMappings, activeRelease, benchmarkRelease) {
   const newBenchmark = prompt('Benchmark key:', benchmark);
   if (newBenchmark === null) return;
   const newAliases = prompt('Provider aliases (comma-separated):', (aliases || []).join(', '));
   if (newAliases === null) return;
+  const newActiveRelease = prompt('Version (active release, e.g. 2026-08-13; leave blank for latest):', activeRelease || '');
+  if (newActiveRelease === null) return;
+  const newBenchmarkRelease = prompt('Benchmark date (leaderboard snapshot, e.g. 2026-06-25; leave blank to clear):', benchmarkRelease || '');
+  if (newBenchmarkRelease === null) return;
   const mappings = providerMappings || {};
   const mappingStr = Object.entries(mappings).map(([p, m]) => p + '=' + m).join(', ');
   const newMappings = prompt(
@@ -393,6 +399,8 @@ function editRegistry(logical, benchmark, aliases, providerMappings) {
     benchmark_key: newBenchmark.trim(),
     aliases: newAliases.split(',').map(a => a.trim()).filter(Boolean),
     provider_mappings: providerMappingsOut,
+    active_release: newActiveRelease.trim() || null,
+    benchmark_release: newBenchmarkRelease.trim() || null,
   }).then(r => {
     if (r.error) { alert('Error: ' + r.error); return; }
     loadAll();
