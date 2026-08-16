@@ -368,7 +368,6 @@ DEFAULT_MODEL_REGISTRY: list[dict] = [
             "opencode": "deepseek-v4-flash",
             "commandcode": "deepseek/deepseek-v4-flash",
         },
-        "active_release": "2026-07-31",
     },
     {
         "logical_name": "claude-sonnet-5",
