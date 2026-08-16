@@ -185,6 +185,45 @@ def test_parse_csv_empty():
     assert parse_livebench_csv("", "m") == {}
 
 
+def test_parse_tasks_csv_groups_by_category():
+    from src.api.benchmark import parse_livebench_tasks_csv
+    csv = (
+        "model,theory_of_mind,zebra_puzzle,spatial,logic_with_navigation\n"
+        "qwen3.6-27b,65.4,53.8,100.0,62.0\n"
+    )
+    tasks = parse_livebench_tasks_csv(csv, "qwen3.6-27b")
+    assert set(tasks.keys()) == {"reasoning"}
+    assert tasks["reasoning"]["theory_of_mind"] == 65.4
+    assert tasks["reasoning"]["spatial"] == 100.0
+
+
+def test_parse_tasks_csv_unknown_task_goes_to_all():
+    from src.api.benchmark import parse_livebench_tasks_csv
+    csv = (
+        "model,some_brand_new_task\n"
+        "m,42.0\n"
+    )
+    tasks = parse_livebench_tasks_csv(csv, "m")
+    assert tasks["_all"]["some_brand_new_task"] == 42.0
+
+
+def test_parse_tasks_csv_skips_non_numeric_and_missing():
+    from src.api.benchmark import parse_livebench_tasks_csv
+    csv = (
+        "model,code_generation,code_completion\n"
+        "m,75.0,N/A\n"
+    )
+    tasks = parse_livebench_tasks_csv(csv, "m")
+    assert tasks["coding"]["code_generation"] == 75.0
+    assert "code_completion" not in tasks["coding"]
+
+
+def test_parse_tasks_csv_model_not_found():
+    from src.api.benchmark import parse_livebench_tasks_csv
+    csv = "model,theory_of_mind\nother-model,1.0\n"
+    assert parse_livebench_tasks_csv(csv, "m") == {}
+
+
 # ── Log file persistence + stale-run recovery ───────────────────────────────
 
 def test_log_written_to_file_and_read_back(tmp_path, monkeypatch):

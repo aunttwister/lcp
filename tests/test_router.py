@@ -7,6 +7,7 @@ import sys
 from src.api.router import (
     DynamicRouter, CapabilityRouter, classify_task, get_dynamic_router,
     logical_model_name, benchmark_model_name,
+    normalize_model_id, detect_quantization,
 )
 from src.api.seed_capabilities import DEFAULT_MODEL_REGISTRY
 
@@ -139,6 +140,62 @@ def test_benchmark_model_name_passthrough_without_pin(registry_db):
 def test_registry_logical_names_unique():
     names = [entry["logical_name"].lower() for entry in DEFAULT_MODEL_REGISTRY]
     assert len(names) == len(set(names)), "logical names duplicated in registry"
+
+
+# ── Model-ID normalization + quantization detection ────────────────────────
+
+def test_normalize_model_id_strips_models_prefix_and_gguf():
+    assert normalize_model_id("/models/qwen3.6-27b-q4_k_m.gguf") == "qwen3.6-27b-q4_k_m"
+    assert normalize_model_id("/models/deepseek-v4-flash.gguf") == "deepseek-v4-flash"
+    assert normalize_model_id("deepseek-v4-pro") == "deepseek-v4-pro"
+
+def test_normalize_model_id_strips_leading_slash_and_path():
+    assert normalize_model_id("/qwen3.6-27b-q4_k_m.gguf") == "qwen3.6-27b-q4_k_m"
+    assert normalize_model_id("moonshotai/Kimi-K3") == "kimi-k3"
+
+def test_normalize_model_id_lowercases_and_trims():
+    assert normalize_model_id("  DeepSeek-V4-Pro ") == "deepseek-v4-pro"
+    assert normalize_model_id("Qwen/Qwen3.8-Max") == "qwen3.8-max"
+
+def test_normalize_model_id_empty():
+    assert normalize_model_id("") == ""
+    assert normalize_model_id(None) is None
+
+def test_detect_quantization_gguf_tags():
+    assert detect_quantization("/models/qwen3.6-27b-q4_k_m.gguf") == "Q4_K_M"
+    assert detect_quantization("llama-3.1-8b-instruct-q8_0") == "Q8_0"
+    assert detect_quantization("qwen3.6-27b-q4_0") == "Q4_0"
+    assert detect_quantization("model-f16") == "F16"
+
+def test_detect_quantization_none_for_regular_models():
+    assert detect_quantization("deepseek-v4-pro") is None
+    assert detect_quantization("qwen3.8-max") is None
+    assert detect_quantization("gpt-5.6-sol") is None
+    assert detect_quantization("kimi-k3") is None
+
+def test_logical_model_name_normalizes_llamacpp_path(registry_db):
+    # An unregistered llama.cpp path is normalized even without a registry entry.
+    assert logical_model_name("/models/qwen3.6-27b-q4_k_m.gguf", registry_db) == "qwen3.6-27b-q4_k_m"
+
+
+def test_load_model_registry_includes_quantization(registry_db):
+    from src.api.seed_capabilities import load_model_registry, seed_model_registry
+    # Insert a quantized entry and re-read.
+    from src.api.models import ModelRegistryEntry, get_engine, get_session
+    import json
+    engine = get_engine(registry_db)
+    with get_session(engine) as session:
+        session.add(ModelRegistryEntry(
+            logical_name="qwen3.6-27b-q4_k_m",
+            benchmark_key="qwen3.6-27b-q4_k_m",
+            provider_mappings_json=json.dumps({"llamacpp": "/models/qwen3.6-27b-q4_k_m.gguf"}),
+            quantization="Q4_K_M",
+        ))
+        session.commit()
+    registry = load_model_registry(registry_db)
+    entry = registry["qwen3.6-27b-q4_k_m"]
+    assert entry["quantization"] == "Q4_K_M"
+    assert entry["provider_mappings"]["llamacpp"] == "/models/qwen3.6-27b-q4_k_m.gguf"
 
 
 # ── Provider → model mappings ─────────────────────────────────────────────
