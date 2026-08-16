@@ -246,20 +246,24 @@ function renderDetail(model) {
       <h4>Benchmark</h4>
       ${benchSection(model, defaultProvider)}
       <div class="table-wrap" style="margin-top:0.75rem">
-        <table class="capability-table">
+        <table class="capability-table bench-table">
           <thead><tr><th>ID</th><th>Categories</th><th>Status</th><th>Started</th><th>Result</th><th></th></tr></thead>
           <tbody>
           ${runs.length ? runs.map(r => {
+            const cats = r.categories || ['all'];
+            const catChips = cats.length > 3
+              ? cats.slice(0, 3).map(c => `<span class="chip">${c}</span>`).join('') + `<span class="chip">+${cats.length - 3}</span>`
+              : cats.map(c => `<span class="chip">${c}</span>`).join('');
             const result = r.status === 'done' && r.result
               ? Object.entries(r.result.categories || {}).map(([c, s]) => `${c}: ${s.toFixed(1)}`).join(', ')
               : (r.error || '—');
-            const short = result.length > 80 ? result.slice(0, 80) + '…' : result;
+            const short = result.length > 60 ? result.slice(0, 60) + '…' : result;
             return `<tr>
               <td class="mono">${r.id}</td>
-              <td>${r.categories ? r.categories.join(', ') : 'all'}</td>
+              <td><div class="chip-row" title="${cats.join(', ')}">${catChips}</div></td>
               <td><span class="badge badge-${r.status === 'done' ? 'success' : r.status === 'failed' ? 'error' : r.status === 'running' ? 'fallback' : 'cache'}">${r.status}</span></td>
-              <td class="mono">${(r.started_at || '—').replace('T', ' ').slice(0, 16)}</td>
-              <td style="max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${result.replace(/"/g, '&quot;')}">${short}</td>
+              <td class="mono nowrap">${(r.started_at || '—').replace('T', ' ').slice(0, 16)}</td>
+              <td class="result-cell" title="${result.replace(/"/g, '&quot;')}">${short}</td>
               <td><button class="btn btn-outline btn-sm" data-benchlog="${r.id}">Logs</button></td>
             </tr>`;
           }).join('') : '<tr><td colspan="6" class="empty">No benchmark runs for this model.</td></tr>'}

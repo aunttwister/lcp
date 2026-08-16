@@ -313,13 +313,41 @@ _worker_lock = threading.Lock()
 
 # Per-run streaming output. The worker appends subprocess stdout/stderr lines
 # as they arrive; the UI polls GET /api/models/benchmark/{id}/log for live
-# progress. Bounded to avoid unbounded memory growth on long runs.
+# progress. Lines are also appended to a per-run log FILE under the data dir
+# so they survive process restarts without bloating the DB.
 _run_logs: dict[int, list[str]] = {}
 _LOG_MAX_LINES = 1000
 
+# Directory + engine resolved lazily from the first queue_benchmark call.
+_log_dir: Optional[str] = None
+
+
+def _bind_log_engine(engine: Any) -> None:
+    """Resolve the log directory from the engine's DB URL (best-effort).
+
+    Logs live next to the database (e.g. /app/data/benchmark-logs/) so they
+    ride the same bind mount as costs.db.
+    """
+    global _log_dir
+    try:
+        url = str(getattr(engine, "url", "") or "")
+        # sqlite:///path/costs.db → path/
+        path = url.split("///", 1)[1] if "///" in url else ""
+        if path:
+            parent = os.path.dirname(path)
+            _log_dir = os.path.join(parent, "benchmark-logs") if parent else "benchmark-logs"
+    except Exception:
+        pass
+
+
+def _log_path(run_id: int) -> Optional[str]:
+    if not _log_dir:
+        return None
+    return os.path.join(_log_dir, f"run-{run_id}.log")
+
 
 def _log(run_id: int, line: str) -> None:
-    """Append a line to a run's live log buffer (bounded)."""
+    """Append a line to a run's live buffer and its log file."""
     clean = (line.rstrip("\n") if isinstance(line, str) else str(line)).strip("\r")
     if not clean:
         return
@@ -328,10 +356,34 @@ def _log(run_id: int, line: str) -> None:
     if len(buf) > _LOG_MAX_LINES:
         del buf[: len(buf) - _LOG_MAX_LINES]
 
+    path = _log_path(run_id)
+    if path:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a") as f:
+                f.write(clean + "\n")
+        except OSError:
+            pass
 
-def get_run_log(run_id: int) -> list[str]:
-    """Return the live log buffer for a benchmark run (copy)."""
-    return list(_run_logs.get(run_id, []))
+
+def get_run_log(engine, run_id: int) -> list[str]:
+    """Return the run log: live buffer, else the persisted log file.
+
+    The live buffer is authoritative while the worker holds it in memory; on a
+    restart the buffer is empty and we read the file instead (bounded tail).
+    """
+    if run_id in _run_logs and _run_logs[run_id]:
+        return list(_run_logs[run_id])
+    if _log_dir is None and engine is not None:
+        _bind_log_engine(engine)
+    path = _log_path(run_id)
+    if path and os.path.isfile(path):
+        try:
+            with open(path, errors="replace") as f:
+                return [ln.rstrip("\n") for ln in f.readlines()][-_LOG_MAX_LINES:]
+        except OSError:
+            pass
+    return []
 
 
 def _ensure_worker() -> None:
@@ -366,6 +418,35 @@ def _mark_failed(run_id: int, engine, error: str) -> None:
             run.error = error[:4000]
             run.finished_at = datetime.now(timezone.utc).isoformat()
             session.commit()
+
+
+def recover_stale_runs(engine) -> int:
+    """Mark orphaned 'queued'/'running' runs as failed at startup.
+
+    The worker is an in-process daemon thread; after a restart any run left in
+    queued/running will never progress. Mark them failed with a clear message
+    so the UI doesn't show a phantom 'running' row forever. Returns the count.
+    """
+    from .models import BenchmarkRun, get_session
+
+    now = datetime.now(timezone.utc).isoformat()
+    recovered = 0
+    with get_session(engine) as session:
+        stale = session.query(BenchmarkRun).filter(
+            BenchmarkRun.status.in_(["queued", "running"])
+        ).all()
+        for run in stale:
+            run.status = "failed"
+            run.error = (
+                "Run was interrupted by a gateway restart — its in-memory "
+                "worker no longer exists. Re-run it to benchmark again."
+            )
+            run.finished_at = now
+            recovered += 1
+        session.commit()
+    if recovered:
+        logger.info("benchmark_stale_recovered", count=recovered)
+    return recovered
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -489,6 +570,8 @@ def _resolve_provider_target(engine, config, target: dict) -> tuple[str, str, st
 
 def _execute_run(run_id: int, engine, config) -> None:
     from .models import BenchmarkRun, get_session
+
+    _bind_log_engine(engine)
 
     # Load the run record.
     with get_session(engine) as session:

@@ -51,6 +51,15 @@ def main():
     t0 = _startup_step("db_init", t0)
     logger.info("db_initialized", path=db_path)
 
+    # Recover benchmark runs left queued/running by a previous process.
+    try:
+        from .api.benchmark import recover_stale_runs
+        recovered = recover_stale_runs(engine)
+        if recovered:
+            logger.info("benchmark_recovered", count=recovered)
+    except Exception as exc:  # noqa: BLE001 — never block boot
+        logger.warning("benchmark_recovery_failed", error=str(exc))
+
     # Initialize cost tracking plugins (imports auto-register via __init__.py)
     from .api.cost_plugins import init_plugins
     init_plugins(engine=engine)

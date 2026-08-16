@@ -878,6 +878,17 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .capability-table th {
   position: sticky; top: 0; background: hsl(var(--card));
 }
+.bench-table th, .bench-table td { vertical-align: middle; }
+.bench-table .nowrap { white-space: nowrap; }
+.bench-table .result-cell {
+  max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chip-row { display: flex; flex-wrap: wrap; gap: 0.25rem; max-width: 220px; }
+.chip {
+  display: inline-block; padding: 0.1rem 0.4rem; border-radius: 999px;
+  background: hsl(var(--secondary)); color: hsl(var(--foreground));
+  font-size: 0.625rem; line-height: 1.2;
+}
 .models-footer {
   margin-top: 2rem; display: flex; align-items: center; gap: 0.75rem;
 }

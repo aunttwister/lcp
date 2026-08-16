@@ -2080,7 +2080,7 @@ class DashboardEndpoints:
         except ValueError:
             self._send_json({"error": "invalid run id"}, 400)
             return
-        self._send_json({"run_id": rid, "log": get_run_log(rid)})
+        self._send_json({"run_id": rid, "log": get_run_log(self.engine, rid)})
 
     def _serve_benchmark_create_api(self):
         """POST /api/models/benchmark — queue a LiveBench run.

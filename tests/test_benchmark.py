@@ -185,6 +185,53 @@ def test_parse_csv_empty():
     assert parse_livebench_csv("", "m") == {}
 
 
+# ── Log file persistence + stale-run recovery ───────────────────────────────
+
+def test_log_written_to_file_and_read_back(tmp_path, monkeypatch):
+    import src.api.benchmark as bm
+
+    engine = None
+    bm._bind_log_engine(None)
+    monkeypatch.setattr(bm, "_log_dir", str(tmp_path))
+    # Clear any prior in-memory buffer.
+    bm._run_logs.clear()
+
+    bm._log(42, "first line")
+    bm._log(42, "second line")
+
+    path = tmp_path / "run-42.log"
+    assert path.is_file()
+    assert "first line\nsecond line\n" == path.read_text()
+
+    # Simulate a restart: clear the live buffer; file should still be read.
+    bm._run_logs.clear()
+    lines = bm.get_run_log(None, 42)
+    assert lines == ["first line", "second line"]
+
+
+def test_recover_stale_runs(tmp_path):
+    from src.api.benchmark import recover_stale_runs, get_run
+    from src.api.models import Base, get_engine, get_session, BenchmarkRun
+
+    engine = get_engine(str(tmp_path / "stale.db"))
+    Base.metadata.create_all(engine)
+
+    with get_session(engine) as session:
+        session.add(BenchmarkRun(target_kind="provider", target_json='{"model":"m"}', status="running"))
+        session.add(BenchmarkRun(target_kind="provider", target_json='{"model":"m"}', status="queued"))
+        session.add(BenchmarkRun(target_kind="provider", target_json='{"model":"m"}', status="done"))
+        session.commit()
+
+    recovered = recover_stale_runs(engine)
+    assert recovered == 2
+
+    for run_id in (1, 2):
+        run = get_run(engine, run_id)
+        assert run["status"] == "failed"
+        assert "restart" in run["error"]
+    assert get_run(engine, 3)["status"] == "done"
+
+
 # ── Queue + run flow (with mocked subprocess) ───────────────────────────────
 
 def test_queue_and_run_flow(tmp_path, monkeypatch):
