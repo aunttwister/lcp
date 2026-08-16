@@ -559,11 +559,27 @@ def _resolve_provider_target(engine, config, target: dict) -> tuple[str, str, st
         api_key = config.get_provider_key(provider)
 
     # Translate logical model → provider API model ID.
+    # Priority: explicit registry provider_mappings > cost-plugin heuristic.
     api_model = model
+    if engine is not None:
+        db_path = "data/costs.db"
+        try:
+            if getattr(engine, "url", None) is not None:
+                db_path = str(engine.url.database) or db_path
+        except Exception:
+            pass
+        from .router import provider_model_name, logical_model_name
+        logical = logical_model_name(model, db_path)
+        api_model = provider_model_name(logical, provider, db_path)
+
     from .cost_plugins import get_registry
     plugin = get_registry().for_provider(provider)
     if plugin is not None:
-        api_model = plugin.get_api_model(model)
+        translated = plugin.get_api_model(model)
+        # Plugin heuristic wins when there's no engine/registry, or when the
+        # registry had no explicit mapping for this provider (api_model == model).
+        if api_model == model:
+            api_model = translated
 
     return api_model, api_base, api_key
 

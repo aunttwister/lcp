@@ -139,10 +139,52 @@ def seed_livebench(db_path: str, release: Optional[str] = None) -> int:
 
 
 def _get_session(db_path: str):
-    from src.api.models import get_engine, get_session
+    from src.api.models import get_engine, get_session, Base
 
     engine = get_engine(db_path)
+    Base.metadata.create_all(engine)
     return get_session(engine)
+
+
+def _default_db_path() -> str:
+    """Resolve the DB path the same way the gateway does (COST_DB or data/costs.db)."""
+    import os
+    return os.environ.get("COST_DB", "data/costs.db")
+
+
+def main() -> None:
+    """CLI: seed the model registry + bulk LiveBench snapshot.
+
+    Usage:
+        python -m src.api.seed_capabilities                 # seed registry + LiveBench
+        python -m src.api.seed_capabilities --release 2026-06-25
+        python -m src.api.seed_capabilities --registry-only
+        python -m src.api.seed_capabilities --livebench-only --db /app/data/costs.db
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Seed LCP model data")
+    parser.add_argument("--db", default=_default_db_path(), help="path to SQLite DB")
+    parser.add_argument("--release", default=None, help="release label for LiveBench snapshot (default LIVEBENCH_RELEASE)")
+    parser.add_argument("--registry-only", action="store_true", help="only seed the model registry")
+    parser.add_argument("--livebench-only", action="store_true", help="only seed the LiveBench snapshot")
+    args = parser.parse_args()
+
+    db_path = args.db
+
+    if args.livebench_only:
+        n = seed_livebench(db_path, release=args.release)
+        print(f"Seeded {n} LiveBench capability rows (release={args.release or LIVEBENCH_RELEASE})")
+        return
+
+    if args.registry_only:
+        n = seed_model_registry(db_path)
+        print(f"Seeded {n} registry entries")
+        return
+
+    r = seed_model_registry(db_path)
+    l = seed_livebench(db_path, release=args.release)
+    print(f"Seeded {r} registry entries + {l} LiveBench capability rows (release={args.release or LIVEBENCH_RELEASE})")
 
 
 def load_capability_matrix(db_path: str, release: Optional[str] = None) -> dict[str, dict[str, float]]:
@@ -223,16 +265,19 @@ DEFAULT_MODEL_REGISTRY: list[dict] = [
         "logical_name": "claude-sonnet-5",
         "benchmark_key": "claude-sonnet-5",
         "aliases": ["claude-sonnet-5"],
+        "provider_mappings": {"commandcode": "claude-sonnet-5"},
     },
     {
         "logical_name": "claude-fable-5",
         "benchmark_key": "claude-fable-5",
         "aliases": ["claude-fable-5"],
+        "provider_mappings": {"commandcode": "claude-fable-5"},
     },
     {
         "logical_name": "claude-opus-5",
         "benchmark_key": "claude-opus-5",
         "aliases": ["claude-opus-5"],
+        "provider_mappings": {"commandcode": "claude-opus-5"},
     },
     {
         "logical_name": "gpt-5.6-sol",
@@ -243,26 +288,31 @@ DEFAULT_MODEL_REGISTRY: list[dict] = [
         "logical_name": "gpt-5.6-terra",
         "benchmark_key": "gpt-5.6-terra",
         "aliases": ["gpt-5.6-terra"],
+        "provider_mappings": {"commandcode": "gpt-5.6-terra"},
     },
     {
         "logical_name": "gpt-5.6-luna",
         "benchmark_key": "gpt-5.6-luna",
         "aliases": ["gpt-5.6-luna"],
+        "provider_mappings": {"commandcode": "gpt-5.6-luna"},
     },
     {
         "logical_name": "kimi-k3",
         "benchmark_key": "kimi-k3",
         "aliases": ["kimi-k3", "moonshotai/Kimi-K3"],
+        "provider_mappings": {"commandcode": "moonshotai/Kimi-K3"},
     },
     {
         "logical_name": "minimax-m3",
         "benchmark_key": "minimax-m3",
         "aliases": ["minimax-m3", "MiniMaxAI/MiniMax-M3"],
+        "provider_mappings": {"commandcode": "MiniMaxAI/MiniMax-M3"},
     },
     {
         "logical_name": "qwen3.8-max",
         "benchmark_key": "qwen-3.8-max",
         "aliases": ["qwen3.8-max", "Qwen/Qwen3.8-Max"],
+        "provider_mappings": {"commandcode": "Qwen/Qwen3.8-Max"},
     },
     {
         "logical_name": "grok-4.5",
@@ -340,4 +390,8 @@ def load_model_registry(db_path: str) -> dict[str, dict]:
 
     session.close()
     return registry
+
+
+if __name__ == "__main__":
+    main()
 

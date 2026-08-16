@@ -293,6 +293,48 @@ pip install -r code_runner/requirements_eval.txt
 
 LCP also falls back to `run_livebench.py` on `PATH`.
 
+### Seeding scores without running benchmarks
+
+Running full 150-question LiveBench on every model is expensive. LCP therefore
+supports **three tiers** of model data:
+
+1. **Bulk seed (free, baseline).** A hand-typed snapshot of the public
+   LiveBench leaderboard (`2026-06-25`) ships in `seed_capabilities.py`. Seed it
+   in milliseconds for a zero-cost baseline score per model:
+
+   ```bash
+   # in the container: seed registry + LiveBench snapshot
+   python -m src.api.seed_capabilities --db /app/data/costs.db
+   # registry only / LiveBench only
+   python -m src.api.seed_capabilities --db /app/data/costs.db --registry-only
+   python -m src.api.seed_capabilities --db /app/data/costs.db --livebench-only --release 2026-06-25
+   ```
+
+2. **Incremental benchmark (accurate, opt-in).** Run LiveBench for a single
+   model + release when a new model appears or a new release ships (e.g.
+   `deepseek-v4-pro` 2026-08-13). This is the "Run benchmark" button — it
+   targets one provider/model, never all models at once.
+
+3. **Manual override (your own numbers).** The "+ Add score" button on the
+   Models page stores `source="manual"` scores that always outrank the other
+   tiers.
+
+### Model identity, releases & provider mapping
+
+A model is identified by its **logical name** (e.g. `deepseek-v4-pro`), which
+is what routing and pricing use. It has:
+
+- **aliases** — every provider-side spelling of the name;
+- **provider_mappings** — the exact provider-side model ID per provider, so
+  `deepseek-v4-pro` served by `deepseek`, `opencode`, and `commandcode`
+  (`deepseek/deepseek-v4-pro`) resolves to ONE identity and ONE scoring;
+- **releases** — dated snapshots (`release_label` in `model_capabilities`), with
+  `model_registry.active_release` selecting which release feeds the router.
+  Re-benchmarking a new release keeps history instead of overwriting it.
+
+The router resolves `alias → logical → benchmark_key`, applies the active
+release, and scores the single resulting identity.
+
 ### Module install path
 
 All runtime-installed modules live under the **module root** controlled by

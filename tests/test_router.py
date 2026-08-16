@@ -144,3 +144,22 @@ def test_registry_aliases_are_unique():
             key = alias.lower()
             assert key not in seen, f"alias {alias!r} duplicated in registry"
             seen[key] = entry["logical_name"]
+
+
+# ── Provider → model mappings ─────────────────────────────────────────────
+
+def test_provider_model_name_explicit_mapping(registry_db):
+    from src.api.router import provider_model_name
+    # Command Code uses catalog IDs; registry pins the exact mapping.
+    assert provider_model_name("deepseek-v4-pro", "commandcode", registry_db) == "deepseek/deepseek-v4-pro"
+    # OpenCode/DeepSeek use bare names.
+    assert provider_model_name("deepseek-v4-pro", "opencode", registry_db) == "deepseek-v4-pro"
+
+def test_provider_model_name_falls_back_to_alias(registry_db):
+    from src.api.router import provider_model_name
+    # Kimi: explicit mapping wins over the alias heuristic.
+    assert provider_model_name("kimi-k3", "commandcode", registry_db) == "moonshotai/Kimi-K3"
+
+def test_provider_model_name_unknown_provider_passthrough(registry_db):
+    from src.api.router import provider_model_name
+    assert provider_model_name("deepseek-v4-pro", "someprovider", registry_db) == "deepseek-v4-pro"
