@@ -73,8 +73,13 @@ const API = {
     const r = await fetch('/api/models/registry/' + encodeURIComponent(logical), {method: 'DELETE'});
     return r.json();
   },
-  async benchmarks() {
-    const r = await fetch('/api/models/benchmark');
+  async benchmarks(offset, limit, model) {
+    const q = new URLSearchParams();
+    if (offset) q.set('offset', offset);
+    if (limit) q.set('limit', limit);
+    if (model) q.set('model', model);
+    const qs = q.toString();
+    const r = await fetch('/api/models/benchmark' + (qs ? '?' + qs : ''));
     return r.json();
   },
   async benchmarkStatus() {
@@ -102,7 +107,7 @@ const API = {
 };
 
 // ── State ──────────────────────────────────────────────────────────────────
-let STATE = { registry: {}, providers: {}, matrix: {}, runs: [], bench: null, selected: null, filter: '', activeModels: new Set(), configuredOnly: false };
+let STATE = { registry: {}, providers: {}, matrix: {}, runs: [], bench: null, selected: null, filter: '', activeModels: new Set(), configuredOnly: false, runsOffset: 0, runsTotal: 0, runsLimit: 20 };
 
 // model → list of providers that expose it (from gateway.yaml providers.models)
 function providerModels() {
@@ -151,12 +156,11 @@ function allModels() {
 }
 
 async function loadAll() {
-  const [matrix, providers, reg, runs, bench] = await Promise.all([
-    API.matrix(), API.providers(), API.registry(), API.benchmarks(), API.benchmarkStatus()
+  const [matrix, providers, reg, bench] = await Promise.all([
+    API.matrix(), API.providers(), API.registry(), API.benchmarkStatus()
   ]);
   STATE.matrix = matrix;
   STATE.providers = providers.providers || {};
-  STATE.runs = runs.runs || [];
   STATE.bench = bench;
 
   const registryMap = {};
@@ -182,6 +186,28 @@ async function loadAll() {
   } else if (allModels().length) {
     selectModel(allModels()[0]);
   }
+}
+
+// Load benchmark runs for the selected model (paginated).
+async function loadRunsForSelected() {
+  const canonical = canonicalName(STATE.selected);
+  const data = await API.benchmarks(STATE.runsOffset, STATE.runsLimit, canonical);
+  STATE.runs = data.runs || [];
+  STATE.runsTotal = data.total || STATE.runs.length;
+  renderDetail(STATE.selected);
+}
+
+function runsPaginationInfo() {
+  const start = STATE.runsTotal === 0 ? 0 : STATE.runsOffset + 1;
+  const end = Math.min(STATE.runsOffset + STATE.runs.length, STATE.runsTotal);
+  return `${start}–${end} of ${STATE.runsTotal}`;
+}
+
+async function pageBenchmarkRuns(delta) {
+  const next = STATE.runsOffset + delta * STATE.runsLimit;
+  if (next < 0 || (delta > 0 && next >= STATE.runsTotal)) return;
+  STATE.runsOffset = next;
+  await loadRunsForSelected();
 }
 
 function bestScore(model) {
@@ -236,8 +262,10 @@ function toggleConfiguredOnly() {
 
 function selectModel(model) {
   STATE.selected = model;
+  STATE.runsOffset = 0;
   renderModelList();
   renderDetail(model);
+  loadRunsForSelected();
 }
 
 function renderDetail(model) {
@@ -292,7 +320,7 @@ function renderDetail(model) {
         ${benchmarkRelease ? `<dt>Benchmark date</dt><dd class="mono">${benchmarkRelease}</dd>` : ''}
         ${Object.keys(providerMappings).length ? `
         <dt>Provider → model</dt>
-        <dd>${Object.entries(providerMappings).map(([p, m]) => `<code class="mono">${p}</code> → <code class="mono">${m}</code>`).join(' &nbsp; ')}</dd>` : ''}
+        <dd class="provider-mapping-row">${Object.entries(providerMappings).map(([p, m]) => `<span class="provider-pill"><span class="provider-pill-name">${p}</span><code class="mono">${m}</code></span>`).join('')}</dd>` : ''}
         ${updatedAt ? `<dt>Updated</dt><dd>${updatedAt}</dd>` : ''}
       </dl>
     </div>
@@ -339,12 +367,19 @@ function renderDetail(model) {
           </tbody>
         </table>
       </div>
+      <div class="bench-pagination">
+        <button class="btn btn-outline btn-sm" id="benchPrevBtn" ${STATE.runsOffset <= 0 ? 'disabled' : ''}>‹ Prev</button>
+        <span class="bench-page-info">${runsPaginationInfo()}</span>
+        <button class="btn btn-outline btn-sm" id="benchNextBtn" ${STATE.runsOffset + STATE.runs.length >= STATE.runsTotal ? 'disabled' : ''}>Next ›</button>
+      </div>
     </div>`;
 
   document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, aliases, providerMappings, pinnedRelease, benchmarkRelease));
   document.getElementById('deleteModelBtn')?.addEventListener('click', () => deleteRegistry(model));
   document.getElementById('runBenchBtn')?.addEventListener('click', () => runBenchmark(model));
   document.getElementById('addScoreBtn')?.addEventListener('click', () => openManualScore(model));
+  document.getElementById('benchPrevBtn')?.addEventListener('click', () => pageBenchmarkRuns(-1));
+  document.getElementById('benchNextBtn')?.addEventListener('click', () => pageBenchmarkRuns(1));
   document.querySelectorAll('[data-benchlog]').forEach(btn => {
     btn.addEventListener('click', () => openBenchmarkLog(btn.dataset.benchlog));
   });
@@ -552,7 +587,7 @@ async function runBenchmark(model) {
   try {
     const data = await API.runBenchmark(provider, model);
     if (data.error) status.textContent = 'Error: ' + data.error;
-    else { status.textContent = `Queued run #${data.run.id}.`; loadAll(); }
+    else { status.textContent = `Queued run #${data.run.id}.`; loadAll(); loadRunsForSelected(); }
   } catch (e) { status.textContent = 'Error: ' + e.message; }
   btn.disabled = false;
 }

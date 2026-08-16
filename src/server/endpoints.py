@@ -2068,10 +2068,25 @@ class DashboardEndpoints:
             self._send_json({"error": str(e)}, 500)
 
     def _serve_benchmark_list_api(self):
-        """GET /api/models/benchmark — list benchmark runs."""
+        """GET /api/models/benchmark — list benchmark runs (paginated).
+
+        Query params: ``?limit=`` (default 50, max 200), ``?offset=``, and
+        ``?model=`` (filter runs by target model/profile).
+        """
+        from urllib.parse import parse_qs, urlparse
         from ..api.benchmark import list_runs
+        qs = parse_qs(urlparse(self.path).query)
         try:
-            self._send_json({"runs": list_runs(self.engine)})
+            limit = int(qs.get("limit", ["50"])[0])
+        except ValueError:
+            limit = 50
+        try:
+            offset = int(qs.get("offset", ["0"])[0])
+        except ValueError:
+            offset = 0
+        model = qs.get("model", [None])[0]
+        try:
+            self._send_json(list_runs(self.engine, limit=limit, offset=offset, model=model))
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 

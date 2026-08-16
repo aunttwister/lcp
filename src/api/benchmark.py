@@ -493,11 +493,33 @@ def queue_benchmark(
     return get_run(engine, run_id)
 
 
-def list_runs(engine, limit: int = 50) -> list[dict]:
+def list_runs(engine, limit: int = 50, offset: int = 0, model: Optional[str] = None) -> dict:
+    """Return a page of benchmark runs (newest first) plus total count.
+
+    ``model`` (optional) filters to runs whose target model/profile equals it.
+    Returns ``{"runs": [...], "total": int, "limit": int, "offset": int}`` so
+    the UI can render pagination. ``limit`` is clamped to 1..200.
+    """
     from .models import BenchmarkRun, get_session
+    limit = max(1, min(int(limit or 50), 200))
+    offset = max(0, int(offset or 0))
     with get_session(engine) as session:
-        rows = session.query(BenchmarkRun).order_by(BenchmarkRun.id.desc()).limit(limit).all()
-        return [_run_to_dict(r) for r in rows]
+        q = session.query(BenchmarkRun)
+        if model:
+            q = q.filter(BenchmarkRun.target_json.like(f'%"{model}"%'))
+        total = q.count()
+        rows = (
+            q.order_by(BenchmarkRun.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return {
+            "runs": [_run_to_dict(r) for r in rows],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
 
 def get_run(engine, run_id: int) -> Optional[dict]:

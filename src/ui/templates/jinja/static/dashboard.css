@@ -889,6 +889,26 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   background: hsl(var(--secondary)); color: hsl(var(--foreground));
   font-size: 0.625rem; line-height: 1.2;
 }
+/* Provider → model tag pills */
+.provider-mapping-row { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.provider-pill {
+  display: inline-flex; align-items: center; gap: 0.375rem;
+  padding: 0.125rem 0.5rem; border-radius: 999px;
+  background: hsl(var(--secondary)); border: 1px solid hsl(var(--card-border));
+  font-size: 0.6875rem;
+}
+.provider-pill-name {
+  font-weight: 600; color: hsl(var(--primary));
+  text-transform: lowercase; letter-spacing: 0.01em;
+}
+.provider-pill .mono { font-size: 0.6875rem; }
+/* Benchmark run pagination */
+.bench-pagination {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin-top: 0.75rem; justify-content: flex-end;
+}
+.bench-pagination .btn-sm:disabled { opacity: 0.4; cursor: not-allowed; }
+.bench-page-info { font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
 .models-footer {
   margin-top: 2rem; display: flex; align-items: center; gap: 0.75rem;
 }

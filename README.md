@@ -473,7 +473,7 @@ Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 | `POST /api/keys` | Create API key |
 | `GET /api/keys` | List API keys |
 | `GET /api/models/benchmark/status` | Whether the benchmark runner is installed |
-| `GET /api/models/benchmark` | List benchmark runs |
+| `GET /api/models/benchmark` | List benchmark runs (paginated: `?limit=&offset=&model=`) |
 | `POST /api/models/benchmark` | Queue a LiveBench run (direct-to-provider) |
 | `GET /api/models/benchmark/{id}` | Benchmark run detail |
 
