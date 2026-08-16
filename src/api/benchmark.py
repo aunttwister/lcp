@@ -41,6 +41,38 @@ LIVEBENCH_CATEGORIES = [
     "data_analysis", "language", "instruction_following",
 ]
 
+# LiveBench task name → category. Used to group all_tasks.csv subtask scores.
+# Based on the 2026-06-25 question release; unknown tasks fall under "_all".
+LIVEBENCH_TASK_CATEGORIES: dict[str, str] = {
+    "theory_of_mind": "reasoning",
+    "zebra_puzzle": "reasoning",
+    "spatial": "reasoning",
+    "logic_with_navigation": "reasoning",
+    "web_of_lies_v2": "reasoning",
+    "house_traversal": "reasoning",
+    "code_generation": "coding",
+    "code_completion": "coding",
+    "lcb_generation": "coding",
+    "javascript": "agentic_coding",
+    "typescript": "agentic_coding",
+    "python": "agentic_coding",
+    "amps_hard": "math",
+    "integrals_with_game": "math",
+    "math_comp": "math",
+    "olympiad": "math",
+    "consecutive_events": "data_analysis",
+    "table_join": "data_analysis",
+    "table_reformat": "data_analysis",
+    "cta": "data_analysis",
+    "connections": "language",
+    "plot_unscrambling": "language",
+    "typos": "language",
+    "paraphrase": "instruction_following",
+    "simplify": "instruction_following",
+    "story_generation": "instruction_following",
+    "summarize": "instruction_following",
+}
+
 # LiveBench question release to evaluate. The latest public release is
 # 2024-11-25; the website shows 2026-06-25 but not all questions are public.
 DEFAULT_LIVEBENCH_RELEASE = os.environ.get("LCP_LIVEBENCH_RELEASE", "2024-11-25")
@@ -302,6 +334,39 @@ def parse_livebench_csv(csv_text: str, model: str) -> dict[str, float]:
             except ValueError:
                 continue
         return scores
+    return {}
+
+
+def parse_livebench_tasks_csv(csv_text: str, model: str) -> dict[str, dict[str, float]]:
+    """Parse LiveBench's ``all_tasks.csv`` into subtask scores.
+
+    ``all_tasks.csv`` has a ``model`` column plus one column per TASK
+    (e.g. ``theory_of_mind``, ``zebra_puzzle``). Scores are 0-100 floats,
+    averaged per task. Returns ``{category: {task_name: score}}`` when a
+    category→task mapping is known (via ``LIVEBENCH_TASK_CATEGORIES``), else
+    ``{"_all": {task: score}}``. Returns ``{}`` when the model row is absent.
+    """
+    reader = csv.DictReader(io.StringIO(csv_text))
+    if reader.fieldnames is None:
+        return {}
+
+    for row in reader:
+        if (row.get("model") or "").strip().lower() != model.strip().lower():
+            continue
+        by_cat: dict[str, dict[str, float]] = {}
+        for task, col in row.items():
+            if task.lower() == "model":
+                continue
+            raw = (col or "").strip()
+            if raw in ("", "-", "N/A"):
+                continue
+            try:
+                score = float(raw)
+            except ValueError:
+                continue
+            cat = LIVEBENCH_TASK_CATEGORIES.get(task.lower(), "_all")
+            by_cat.setdefault(cat, {})[task.lower()] = score
+        return by_cat
     return {}
 
 
@@ -716,6 +781,13 @@ def _execute_run(run_id: int, engine, config) -> None:
         else:
             logger.warning("benchmark_no_csv", run_id=run_id, path=csv_path)
 
+        # Also parse all_tasks.csv (subtask breakdown) when present.
+        task_scores: dict[str, dict[str, float]] = {}
+        tasks_csv_path = os.path.join(workdir, "all_tasks.csv")
+        if os.path.isfile(tasks_csv_path):
+            with open(tasks_csv_path) as f:
+                task_scores = parse_livebench_tasks_csv(f.read(), api_model)
+
         if not category_scores:
             raise RuntimeError("LiveBench produced no parseable category scores")
 
@@ -730,6 +802,7 @@ def _execute_run(run_id: int, engine, config) -> None:
             run.result_json = json.dumps({
                 "model": api_model,
                 "categories": category_scores,
+                "tasks": task_scores,
             })
             run.error = None
             session.commit()

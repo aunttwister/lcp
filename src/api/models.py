@@ -191,6 +191,7 @@ class ModelRegistryEntry(Base):
     provider_mappings_json = Column(Text, nullable=False, default="{}")  # {provider: provider-side model ID}
     active_release = Column(String, nullable=True)  # CURRENT model version (e.g. 2026-08-13); None = newest
     benchmark_release = Column(String, nullable=True)  # leaderboard snapshot date (e.g. 2026-06-25)
+    quantization = Column(String, nullable=True)  # e.g. "Q4_K_M"; None = unquantized
     updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
 
 

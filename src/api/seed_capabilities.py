@@ -475,6 +475,7 @@ def seed_model_registry(db_path: str, sync: bool = False) -> int:
                 existing.provider_mappings_json = json.dumps(entry.get("provider_mappings", {}))
                 existing.active_release = entry.get("active_release")
                 existing.benchmark_release = entry.get("benchmark_release")
+                existing.quantization = entry.get("quantization")
                 existing.updated_at = now
                 count += 1
             continue
@@ -484,6 +485,7 @@ def seed_model_registry(db_path: str, sync: bool = False) -> int:
             provider_mappings_json=json.dumps(entry.get("provider_mappings", {})),
             active_release=entry.get("active_release"),
             benchmark_release=entry.get("benchmark_release"),
+            quantization=entry.get("quantization"),
             updated_at=now,
         ))
         count += 1
@@ -498,9 +500,9 @@ def load_model_registry(db_path: str) -> dict[str, dict]:
     """Load the model registry as {logical_name: {...}}.
 
     Each entry: {benchmark_key, provider_mappings, active_release,
-    benchmark_release}. ``active_release`` is the CURRENT model version
-    (e.g. ``2026-08-13``); ``benchmark_release`` is the leaderboard snapshot
-    date the scores came from (e.g. ``2026-06-25``).
+    benchmark_release, quantization}. ``active_release`` is the CURRENT model
+    version (e.g. ``2026-08-13``); ``benchmark_release`` is the leaderboard
+    snapshot date the scores came from (e.g. ``2026-06-25``).
     """
     from src.api.models import ModelRegistryEntry
 
@@ -517,6 +519,7 @@ def load_model_registry(db_path: str) -> dict[str, dict]:
             "provider_mappings": provider_mappings,
             "active_release": row.active_release,
             "benchmark_release": row.benchmark_release,
+            "quantization": row.quantization,
         }
 
     session.close()

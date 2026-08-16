@@ -22,6 +22,59 @@ from .logging_config import get_logger
 logger = get_logger("lcp.router")
 
 
+# ── Model-ID normalization (llama.cpp gguf paths, quantization) ──────────────
+
+# Common GGUF quantization tags, matched as the last path segment.
+_QUANT_RE = __import__("re").compile(
+    r"(q\d+[a-z]*(?:_[a-z0-9]+)*|f16|f32|bf16|fp16|fp32|i?q\d+_\d+|[a-z]+\d+(?:\.\d+)?b)"
+)
+
+
+def normalize_model_id(model: str) -> str:
+    """Normalize a raw provider-side model ID into a clean logical name.
+
+    - strips ``/models/`` and leading slashes (llama.cpp file paths)
+    - strips the ``.gguf`` extension
+    - lowercases and collapses whitespace
+
+    e.g. ``/models/qwen3.6-27b-q4_k_m.gguf`` → ``qwen3.6-27b-q4_k_m``.
+    """
+    if not model:
+        return model
+    name = str(model).strip()
+    # Strip path prefix like /models/ or leading slash
+    if name.startswith("/models/"):
+        name = name[len("/models/"):]
+    elif name.startswith("/"):
+        name = name.lstrip("/")
+    # Take the last path segment
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1]
+    if name.lower().endswith(".gguf"):
+        name = name[:-5]
+    return name.strip().lower()
+
+
+def detect_quantization(model: str) -> Optional[str]:
+    """Return a quantization tag like ``Q4_K_M``, or None.
+
+    Looks for GGUF quantization tokens (``q4_k_m``, ``q4_0``, ``f16``, …) in
+    the model ID. Returns the canonical uppercase form when found.
+    """
+    if not model:
+        return None
+    name = str(model).strip().lower()
+    if name.endswith(".gguf"):
+        name = name[:-5]
+    # Strip any path so we look at the filename stem.
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1]
+    m = _QUANT_RE.search(name)
+    if not m:
+        return None
+    return m.group(1).upper()
+
+
 # ── Task classification (keyword/heuristic, no ML dependency) ────────────────
 
 TASK_SIGNALS: dict[str, list[str]] = {
@@ -209,13 +262,18 @@ def _alias_to_logical(registry: dict[str, dict]) -> dict[str, str]:
 def logical_model_name(model: str, db_path: str = "data/costs.db") -> str:
     """Map any model ID to its logical gateway name via the DB registry.
 
-    Unknown names pass through unchanged (lowercased) so the router still
-    works for models not yet listed in the registry.
+    Unknown names are normalized (strips ``/models/`` prefix and ``.gguf``
+    extension, lowercased) so a llama.cpp path like
+    ``/models/qwen3.6-27b-q4_k_m.gguf`` resolves to ``qwen3.6-27b-q4_k_m``.
     """
     if not model:
         return model
     registry = get_model_registry(db_path)
-    return _alias_to_logical(registry).get(model.strip().lower(), model.strip().lower())
+    key = model.strip().lower()
+    mapped = _alias_to_logical(registry).get(key)
+    if mapped:
+        return mapped
+    return normalize_model_id(key)
 
 
 def benchmark_model_name(logical: str, db_path: str = "data/costs.db") -> str:

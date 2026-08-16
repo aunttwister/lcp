@@ -55,6 +55,11 @@
       </div>
     </div>
     <div class="form-field">
+      <label class="form-label" for="editQuantization">Quantization</label>
+      <input class="form-input" id="editQuantization" type="text" placeholder="e.g. Q4_K_M (blank = unquantized)">
+      <div class="form-help">Set when this model is a quantized build (e.g. llama.cpp GGUF).</div>
+    </div>
+    <div class="form-field">
       <label class="form-label">Providers</label>
       <div id="mappingRows"></div>
       <button class="btn btn-outline btn-sm" type="button" id="addMappingRowBtn">+ Add provider</button>
@@ -206,10 +211,24 @@ function providerModels() {
 
 // Map any spelling (provider-side model ID) to the registry's logical name,
 // so deepseek/deepseek-v4-pro and deepseek-v4-pro collapse to ONE entry.
+// Unknown names are normalized (strip /models/ + .gguf) like the backend.
 function canonicalName(model) {
   if (!model) return model;
   const aliasMap = STATE.aliasMap || {};
-  return aliasMap[model.toLowerCase()] || model.toLowerCase();
+  const key = String(model).toLowerCase();
+  const mapped = aliasMap[key];
+  if (mapped) return mapped;
+  return normalizeModelId(key);
+}
+
+// Strip /models/ prefix, .gguf extension, and collapse to a clean name.
+function normalizeModelId(name) {
+  let n = String(name || '').trim();
+  if (n.startsWith('/models/')) n = n.slice('/models/'.length);
+  else if (n.startsWith('/')) n = n.slice(1);
+  if (n.includes('/')) n = n.split('/').pop();
+  if (n.toLowerCase().endsWith('.gguf')) n = n.slice(0, -5);
+  return n.toLowerCase();
 }
 
 function buildAliasMap() {
@@ -219,7 +238,10 @@ function buildAliasMap() {
     if (entry.benchmark_key) map[String(entry.benchmark_key).toLowerCase()] = logical;
     for (const m of Object.values(entry.provider_mappings || {})) {
       map[String(m).toLowerCase()] = logical;
+      map[normalizeModelId(m)] = logical;
     }
+    // Also map the normalized logical name back to itself.
+    map[normalizeModelId(logical)] = logical;
   }
   return map;
 }
@@ -359,6 +381,7 @@ function renderDetail(model) {
   const benchmarkKey = reg ? reg.benchmark_key : model;
   const pinnedRelease = reg ? (reg.active_release || '') : '';
   const benchmarkRelease = reg ? (reg.benchmark_release || '') : '';
+  const quantization = reg ? (reg.quantization || '') : '';
   // Version actually in effect (resolved server-side: pin → newest).
   const effectiveRelease = (STATE.matrix.active_releases || {})[canonical] || pinnedRelease || 'latest';
   const providerMappings = reg ? (reg.provider_mappings || {}) : {};
@@ -366,6 +389,10 @@ function renderDetail(model) {
   const updatedAt = reg ? (reg.updated_at || '').replace('T', ' ').slice(0, 19) : null;
   const provs = providerModels()[canonical] || [];
   const defaultProvider = provs[0] || '';
+
+  const displayName = quantization && !canonical.toUpperCase().includes(quantization.toUpperCase())
+    ? `${canonical}-${quantization.toLowerCase()}`
+    : canonical;
 
   const scores = [];
   for (const [task, models] of Object.entries(STATE.matrix.tasks || {})) {
@@ -381,11 +408,15 @@ function renderDetail(model) {
   }
   scores.sort((a, b) => b.score - a.score);
 
+  // Subtask breakdown from the most recent done benchmark run.
+  const doneRun = [...STATE.runs].reverse().find(r => r.status === 'done' && r.result && r.result.tasks);
+  const taskBreakdown = doneRun ? doneRun.result.tasks : null;
+
   const runs = STATE.runs;
 
   detail.innerHTML = `
     <div class="model-detail-head">
-      <h3 class="mono">${model}</h3>
+      <h3 class="mono">${displayName}</h3>
       <div class="model-detail-actions">
         <button class="btn btn-outline" id="addScoreBtn">+ Add score</button>
         <button class="btn btn-outline" id="editModelBtn">Edit</button>
@@ -400,6 +431,7 @@ function renderDetail(model) {
         <dt>Provider version</dt>
         <dd class="mono">${effectiveRelease}${pinnedRelease && effectiveRelease === pinnedRelease ? ' <span class="muted">(active)</span>' : ' <span class="muted">(latest)</span>'}</dd>
         ${benchmarkRelease ? `<dt>Benchmark date</dt><dd class="mono">${benchmarkRelease}</dd>` : ''}
+        ${quantization ? `<dt>Quantization</dt><dd><span class="badge badge-cache">${quantization}</span></dd>` : ''}
         <dt>Providers</dt>
         <dd class="provider-mapping-row">${providerNames.length ? providerNames.map(p => `<span class="provider-pill">${p}</span>`).join('') : '<span class="muted">none — unregistered</span>'}</dd>
         ${updatedAt ? `<dt>Updated</dt><dd>${updatedAt}</dd>` : ''}
@@ -419,6 +451,23 @@ function renderDetail(model) {
           </div>`).join('')}
       </div>` : '<p class="empty">No scores yet — run a benchmark below or add scores manually.</p>'}
     </div>
+
+    ${taskBreakdown ? `
+    <div class="model-section">
+      <h4>Subtask breakdown</h4>
+      <div class="subtask-breakdown">
+        ${Object.entries(taskBreakdown).map(([cat, tasks]) => `
+          <div class="subtask-category">
+            <div class="subtask-cat-head">${cat === '_all' ? 'tasks' : cat.replace(/_/g, ' ')}</div>
+            ${Object.entries(tasks).map(([task, sc]) => `
+              <div class="subtask-row">
+                <span class="subtask-name">${task.replace(/_/g, ' ')}</span>
+                <div class="score-track"><div class="score-fill ${sc >= 80 ? 'hi' : sc >= 60 ? 'mid' : 'lo'}" style="width:${sc.toFixed(0)}%"></div></div>
+                <span class="score-pct">${sc.toFixed(1)}%</span>
+              </div>`).join('')}
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
 
     <div class="model-section">
       <h4>Benchmark</h4>
@@ -455,7 +504,7 @@ function renderDetail(model) {
       </div>
     </div>`;
 
-  document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, providerMappings, pinnedRelease, benchmarkRelease));
+  document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, providerMappings, pinnedRelease, benchmarkRelease, quantization));
   document.getElementById('deleteModelBtn')?.addEventListener('click', () => deleteRegistry(model));
   document.getElementById('runBenchBtn')?.addEventListener('click', () => runBenchmark(model));
   document.getElementById('addScoreBtn')?.addEventListener('click', () => openManualScore(model));
@@ -487,12 +536,13 @@ function benchSection(model, defaultProvider) {
 
 let EDIT_TARGET = null;   // logical name of the model being edited
 
-function editRegistry(logical, benchmark, providerMappings, activeRelease, benchmarkRelease) {
+function editRegistry(logical, benchmark, providerMappings, activeRelease, benchmarkRelease, quantization) {
   EDIT_TARGET = logical;
   document.getElementById('editLogicalName').value = logical;
   document.getElementById('editBenchmarkKey').value = benchmark || logical;
   document.getElementById('editActiveRelease').value = activeRelease || '';
   document.getElementById('editBenchmarkRelease').value = benchmarkRelease || '';
+  document.getElementById('editQuantization').value = quantization || '';
   document.getElementById('editModelError').textContent = '';
   renderMappingRows(providerMappings || {});
   openDialog('editModelModal');
@@ -536,6 +586,7 @@ function saveEditModel() {
     benchmark_key: benchmark,
     provider_mappings: readMappingRows(),
     active_release: document.getElementById('editActiveRelease').value.trim() || null,
+    quantization: document.getElementById('editQuantization').value.trim() || null,
     benchmark_release: document.getElementById('editBenchmarkRelease').value.trim() || null,
   };
   API.upsertRegistry(payload).then(r => {

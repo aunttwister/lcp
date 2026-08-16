@@ -1896,6 +1896,7 @@ class DashboardEndpoints:
                     "provider_mappings": provider_mappings,
                     "active_release": r.active_release,
                     "benchmark_release": r.benchmark_release,
+                    "quantization": r.quantization,
                     "updated_at": r.updated_at,
                 })
             self._send_json({"registry": entries, "count": len(entries)})
@@ -1972,12 +1973,12 @@ class DashboardEndpoints:
         """POST /api/models/registry — create or update a registry entry.
 
         Body: {logical_name, benchmark_key, provider_mappings: {..},
-               active_release?, benchmark_release?}
+               active_release?, benchmark_release?, quantization?}
         """
         import json
         from datetime import datetime, timezone
         from ..api.models import ModelRegistryEntry, get_session as _gs
-        from ..api.router import invalidate_registry_cache
+        from ..api.router import invalidate_registry_cache, normalize_model_id, detect_quantization
 
         try:
             body = self._read_body()
@@ -1989,6 +1990,7 @@ class DashboardEndpoints:
         benchmark = (body.get("benchmark_key") or "").strip().lower()
         active_release = (body.get("active_release") or "").strip() or None
         benchmark_release = (body.get("benchmark_release") or "").strip() or None
+        quantization = (body.get("quantization") or "").strip() or None
         provider_mappings = body.get("provider_mappings") or {}
         if not logical:
             self._send_json({"error": "missing 'logical_name'"}, 400)
@@ -2001,6 +2003,15 @@ class DashboardEndpoints:
         ):
             self._send_json({"error": "'provider_mappings' must be a {provider: model} object"}, 400)
             return
+
+        # Auto-detect quantization from the benchmark key when not provided.
+        if quantization is None:
+            quantization = detect_quantization(benchmark) or detect_quantization(logical)
+
+        # Normalize llama.cpp-style paths (/models/x.gguf → x) unless the
+        # admin explicitly opted out via an explicit quantization-less name.
+        logical = normalize_model_id(logical)
+        benchmark = normalize_model_id(benchmark)
 
         now = datetime.now(timezone.utc).isoformat()
         try:
@@ -2015,6 +2026,8 @@ class DashboardEndpoints:
                         entry.active_release = active_release
                     if benchmark_release is not None:
                         entry.benchmark_release = benchmark_release
+                    if quantization is not None:
+                        entry.quantization = quantization
                     entry.updated_at = now
                     action = "updated"
                 else:
@@ -2024,6 +2037,7 @@ class DashboardEndpoints:
                         provider_mappings_json=json.dumps(provider_mappings),
                         active_release=active_release,
                         benchmark_release=benchmark_release,
+                        quantization=quantization,
                         updated_at=now,
                     ))
                     action = "created"
