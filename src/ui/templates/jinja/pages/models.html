@@ -107,7 +107,7 @@ const API = {
 };
 
 // ── State ──────────────────────────────────────────────────────────────────
-let STATE = { registry: {}, providers: {}, matrix: {}, runs: [], bench: null, selected: null, filter: '', activeModels: new Set(), configuredOnly: false, runsOffset: 0, runsTotal: 0, runsLimit: 20 };
+let STATE = { registry: {}, providers: {}, matrix: {}, runs: [], bench: null, selected: null, filter: '', activeModels: new Set(), configuredOnly: false, runsOffset: 0, runsTotal: 0, runsLimit: 5 };
 
 // model → list of providers that expose it (from gateway.yaml providers.models)
 function providerModels() {
