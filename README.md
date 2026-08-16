@@ -319,31 +319,24 @@ supports **three tiers** of model data:
    Models page stores `source="manual"` scores that always outrank the other
    tiers.
 
-### Model identity, releases & provider mapping
+### Model identity, version & provider mapping
 
 A model is identified by its **logical name** (e.g. `deepseek-v4-pro`), which
 is what routing and pricing use. It has:
 
-- **aliases** — every provider-side spelling of the name;
+- **benchmark_key** — the stable, release-independent key used in
+  `model_capabilities`;
 - **provider_mappings** — the exact provider-side model ID per provider, so
   `deepseek-v4-pro` served by `deepseek`, `opencode`, and `commandcode`
-  (`deepseek/deepseek-v4-pro`) resolves to ONE identity and ONE scoring;
-- **releases** — dated snapshots (`release_label` in `model_capabilities`), with
-  `model_registry.active_release` selecting which release feeds the router.
-  Re-benchmarking a new release keeps history instead of overwriting it.
+  (`deepseek/deepseek-v4-pro`) resolves to ONE identity and ONE scoring. The
+  provider keys are also the model's "providers" list in the UI;
+- **active_release** — the CURRENT model version (e.g. `2026-08-13` for
+  DeepSeek V4 Pro 0813) whose scores feed the router;
+- **benchmark_release** — the LiveBench leaderboard snapshot date the scores
+  came from (e.g. `2026-06-25`).
 
-The router resolves `alias → logical → benchmark_key`, applies the active
-release, and scores the single resulting identity.
-
-**Identity vs. release.** `benchmark_key` is the *stable, release-independent*
-name (e.g. `deepseek-v4-flash`). A dated leaderboard name such as
-`deepseek-v4-flash-0731` is a **release** of that same identity — it is stored
-as rows tagged `release_label="2026-07-31"`, and `active_release` (default:
-the newest available release) decides which release's scores are live. So a
-model benchmarked on 2026-06-25 that has since been re-released as `0731`
-keeps ONE list entry, and the UI/`router` both show `0731` as the active
-release — while the provider still receives whatever ID `provider_mappings`
-says is current.
+The router resolves `provider-side model ID → logical → benchmark_key`, applies
+the active version's scores, and routes the single resulting identity.
 
 ### Module install path
 

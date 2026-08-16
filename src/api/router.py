@@ -150,15 +150,16 @@ _MODEL_PRICES: dict[str, float] = {
 # Each provider uses its own model-ID convention, and each benchmark publishes
 # its own (often dated) names. Instead of guessing from string patterns, we
 # keep ONE explicit registry (persisted in the ``model_registry`` table) that
-# maps every alias back to a logical name and pins that logical name to the
-# benchmark snapshot it should be scored by.
+# maps every provider-side model ID back to a logical name and pins that
+# logical name to the benchmark snapshot it should be scored by.
 #
-#   logical_name:  the canonical gateway name (also the key in _MODEL_PRICES
-#                  and pricing configs — used for pricing and aggregation).
-#   benchmark_key: the STABLE, release-independent model key inside the seeded
-#                  capability matrix (LiveBench / Arena data). Dated snapshot
-#                  names are releases, not keys.
-#   aliases:       every provider-side ID that means the same logical model.
+#   logical_name:   the canonical gateway name (also the key in _MODEL_PRICES
+#                   and pricing configs — used for pricing and aggregation).
+#   benchmark_key:  the STABLE, release-independent model key inside the seeded
+#                   capability matrix (LiveBench / Arena data).
+#   provider_mappings: {provider: provider-side model ID}. The mapping VALUES
+#                   are the provider-side spellings the reverse index is
+#                   built from.
 #
 # The curated defaults live in seed_capabilities.DEFAULT_MODEL_REGISTRY and are
 # seeded into the DB on first run. After seeding, the DB is the source of truth
@@ -193,12 +194,14 @@ def invalidate_registry_cache() -> None:
 
 
 def _alias_to_logical(registry: dict[str, dict]) -> dict[str, str]:
-    """Build reverse index: alias (lowercased) → logical name."""
-    return {
-        alias.lower(): logical
-        for logical, entry in registry.items()
-        for alias in entry.get("aliases", [])
-    }
+    """Build reverse index: provider-side model ID (lowercased) → logical name."""
+    index: dict[str, str] = {}
+    for logical, entry in registry.items():
+        index[logical.lower()] = logical
+        for provider_side in (entry.get("provider_mappings") or {}).values():
+            if provider_side:
+                index.setdefault(provider_side.lower(), logical)
+    return index
 
 
 def logical_model_name(model: str, db_path: str = "data/costs.db") -> str:
@@ -227,8 +230,7 @@ def provider_model_name(logical: str, provider: str, db_path: str = "data/costs.
 
     Uses the registry's explicit ``provider_mappings`` (e.g. Command Code's
     ``deepseek/deepseek-v4-pro`` vs OpenCode's bare ``deepseek-v4-pro``).
-    Falls back to the first alias containing the provider, then to the
-    logical name unchanged.
+    Falls back to the logical name unchanged when the provider is unmapped.
     """
     registry = get_model_registry(db_path)
     entry = registry.get(logical)
@@ -236,9 +238,6 @@ def provider_model_name(logical: str, provider: str, db_path: str = "data/costs.
         mapping = entry.get("provider_mappings") or {}
         if provider in mapping:
             return mapping[provider]
-        for alias in entry.get("aliases", []):
-            if alias.lower().startswith(provider.lower() + "/"):
-                return alias
     return logical
 
 

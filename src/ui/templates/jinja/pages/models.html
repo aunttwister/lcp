@@ -121,8 +121,8 @@ function providerModels() {
   return map;
 }
 
-// Map any spelling (catalog alias, provider-side ID) to the registry's logical
-// name, so deepseek/deepseek-v4-pro and deepseek-v4-pro collapse to ONE entry.
+// Map any spelling (provider-side model ID) to the registry's logical name,
+// so deepseek/deepseek-v4-pro and deepseek-v4-pro collapse to ONE entry.
 function canonicalName(model) {
   if (!model) return model;
   const aliasMap = STATE.aliasMap || {};
@@ -133,8 +133,8 @@ function buildAliasMap() {
   const map = {};
   for (const [logical, entry] of Object.entries(STATE.registry || {})) {
     map[logical.toLowerCase()] = logical;
-    for (const a of (entry.aliases || [])) {
-      map[String(a).toLowerCase()] = logical;
+    for (const m of Object.values(entry.provider_mappings || {})) {
+      map[String(m).toLowerCase()] = logical;
     }
   }
   return map;
@@ -272,13 +272,13 @@ function renderDetail(model) {
   const detail = document.getElementById('modelDetail');
   const canonical = canonicalName(model);
   const reg = STATE.registry[canonical] || STATE.registry[model];
-  const aliases = reg ? reg.aliases : [];
   const benchmarkKey = reg ? reg.benchmark_key : model;
   const pinnedRelease = reg ? (reg.active_release || '') : '';
   const benchmarkRelease = reg ? (reg.benchmark_release || '') : '';
   // Version actually in effect (resolved server-side: pin → newest).
   const effectiveRelease = (STATE.matrix.active_releases || {})[canonical] || pinnedRelease || 'latest';
   const providerMappings = reg ? (reg.provider_mappings || {}) : {};
+  const providerNames = reg ? (reg.providers || Object.keys(providerMappings)) : [];
   const updatedAt = reg ? (reg.updated_at || '').replace('T', ' ').slice(0, 19) : null;
   const provs = providerModels()[canonical] || [];
   const defaultProvider = provs[0] || '';
@@ -313,14 +313,11 @@ function renderDetail(model) {
       <h4>Identity</h4>
       <dl class="model-kv">
         <dt>Benchmark key</dt><dd class="mono">${benchmarkKey}</dd>
-        <dt>Provider aliases</dt>
-        <dd>${aliases.length ? aliases.map(a => `<code class="mono">${a}</code>`).join(' ') : '<span class="muted">none — unregistered</span>'}</dd>
-        <dt>Version</dt>
+        <dt>Provider version</dt>
         <dd class="mono">${effectiveRelease}${pinnedRelease && effectiveRelease === pinnedRelease ? ' <span class="muted">(active)</span>' : ' <span class="muted">(latest)</span>'}</dd>
         ${benchmarkRelease ? `<dt>Benchmark date</dt><dd class="mono">${benchmarkRelease}</dd>` : ''}
-        ${Object.keys(providerMappings).length ? `
-        <dt>Provider → model</dt>
-        <dd class="provider-mapping-row">${Object.entries(providerMappings).map(([p, m]) => `<span class="provider-pill"><span class="provider-pill-name">${p}</span><code class="mono">${m}</code></span>`).join('')}</dd>` : ''}
+        <dt>Providers</dt>
+        <dd class="provider-mapping-row">${providerNames.length ? providerNames.map(p => `<span class="provider-pill">${p}</span>`).join('') : '<span class="muted">none — unregistered</span>'}</dd>
         ${updatedAt ? `<dt>Updated</dt><dd>${updatedAt}</dd>` : ''}
       </dl>
     </div>
@@ -374,7 +371,7 @@ function renderDetail(model) {
       </div>
     </div>`;
 
-  document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, aliases, providerMappings, pinnedRelease, benchmarkRelease));
+  document.getElementById('editModelBtn')?.addEventListener('click', () => editRegistry(model, benchmarkKey, providerMappings, pinnedRelease, benchmarkRelease));
   document.getElementById('deleteModelBtn')?.addEventListener('click', () => deleteRegistry(model));
   document.getElementById('runBenchBtn')?.addEventListener('click', () => runBenchmark(model));
   document.getElementById('addScoreBtn')?.addEventListener('click', () => openManualScore(model));
@@ -404,19 +401,17 @@ function benchSection(model, defaultProvider) {
 
 // ── Registry actions ────────────────────────────────────────────────────────
 
-function editRegistry(logical, benchmark, aliases, providerMappings, activeRelease, benchmarkRelease) {
+function editRegistry(logical, benchmark, providerMappings, activeRelease, benchmarkRelease) {
   const newBenchmark = prompt('Benchmark key:', benchmark);
   if (newBenchmark === null) return;
-  const newAliases = prompt('Provider aliases (comma-separated):', (aliases || []).join(', '));
-  if (newAliases === null) return;
-  const newActiveRelease = prompt('Version (active release, e.g. 2026-08-13; leave blank for latest):', activeRelease || '');
+  const newActiveRelease = prompt('Provider version (e.g. 2026-08-13; leave blank for latest):', activeRelease || '');
   if (newActiveRelease === null) return;
   const newBenchmarkRelease = prompt('Benchmark date (leaderboard snapshot, e.g. 2026-06-25; leave blank to clear):', benchmarkRelease || '');
   if (newBenchmarkRelease === null) return;
   const mappings = providerMappings || {};
   const mappingStr = Object.entries(mappings).map(([p, m]) => p + '=' + m).join(', ');
   const newMappings = prompt(
-    'Provider → model mappings (provider=model, comma-separated):\n' +
+    'Providers (provider=model, comma-separated):\n' +
     'e.g. deepseek=deepseek-v4-pro, opencode=deepseek-v4-pro, commandcode=deepseek/deepseek-v4-pro\n\n' +
     'Leave blank to clear.',
     mappingStr
@@ -432,7 +427,6 @@ function editRegistry(logical, benchmark, aliases, providerMappings, activeRelea
   API.upsertRegistry({
     logical_name: logical,
     benchmark_key: newBenchmark.trim(),
-    aliases: newAliases.split(',').map(a => a.trim()).filter(Boolean),
     provider_mappings: providerMappingsOut,
     active_release: newActiveRelease.trim() || null,
     benchmark_release: newBenchmarkRelease.trim() || null,
@@ -488,12 +482,10 @@ function addRegistry() {
   if (!logical) return;
   const benchmark = prompt('Benchmark key:', logical);
   if (benchmark === null) return;
-  const aliases = prompt('Provider aliases (comma-separated):', logical);
-  if (aliases === null) return;
   API.upsertRegistry({
     logical_name: logical.trim(),
     benchmark_key: benchmark.trim(),
-    aliases: aliases.split(',').map(a => a.trim()).filter(Boolean),
+    provider_mappings: {},
   }).then(r => {
     if (r.error) { alert('Error: ' + r.error); return; }
     STATE.selected = logical.trim();

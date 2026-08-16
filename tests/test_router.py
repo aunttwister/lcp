@@ -120,7 +120,6 @@ def test_logical_model_name_maps_provider_alias(registry_db):
     assert logical_model_name("deepseek/deepseek-v4-pro", registry_db) == "deepseek-v4-pro"
     assert logical_model_name("moonshotai/Kimi-K3", registry_db) == "kimi-k3"
     assert logical_model_name("Qwen/Qwen3.8-Max", registry_db) == "qwen3.8-max"
-    assert logical_model_name("google/gemini-3.6-flash", registry_db) == "gemini-3.6-flash"
 
 def test_logical_model_name_passthrough_unknown(registry_db):
     assert logical_model_name("some-brand-new-model", registry_db) == "some-brand-new-model"
@@ -137,13 +136,9 @@ def test_benchmark_model_name_passthrough_without_pin(registry_db):
     # deepseek-v4-pro has no dated snapshot in the registry
     assert benchmark_model_name("deepseek-v4-pro", registry_db) == "deepseek-v4-pro"
 
-def test_registry_aliases_are_unique():
-    seen = {}
-    for entry in DEFAULT_MODEL_REGISTRY:
-        for alias in entry["aliases"]:
-            key = alias.lower()
-            assert key not in seen, f"alias {alias!r} duplicated in registry"
-            seen[key] = entry["logical_name"]
+def test_registry_logical_names_unique():
+    names = [entry["logical_name"].lower() for entry in DEFAULT_MODEL_REGISTRY]
+    assert len(names) == len(set(names)), "logical names duplicated in registry"
 
 
 # ── Provider → model mappings ─────────────────────────────────────────────
@@ -155,9 +150,9 @@ def test_provider_model_name_explicit_mapping(registry_db):
     # OpenCode/DeepSeek use bare names.
     assert provider_model_name("deepseek-v4-pro", "opencode", registry_db) == "deepseek-v4-pro"
 
-def test_provider_model_name_falls_back_to_alias(registry_db):
+def test_provider_model_name_falls_back_to_logical(registry_db):
     from src.api.router import provider_model_name
-    # Kimi: explicit mapping wins over the alias heuristic.
+    # Kimi: explicit mapping supplies the prefixed catalog ID.
     assert provider_model_name("kimi-k3", "commandcode", registry_db) == "moonshotai/Kimi-K3"
 
 def test_provider_model_name_unknown_provider_passthrough(registry_db):

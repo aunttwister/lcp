@@ -3,8 +3,8 @@
 Capability scores are produced only by running LiveBench against a model
 (direct-to-provider) via ``src.api.benchmark`` — there is no bulk seeding
 from public datasets. The model registry maps each logical model name to its
-stable benchmark key and provider-side aliases; dated leaderboard names are
-releases (``release_label``), selected via ``active_release``.
+stable benchmark key and provider-side model IDs; the provider keys double as
+the model's provider list in the UI.
 """
 
 from __future__ import annotations
@@ -265,11 +265,12 @@ def resolve_active_rows(rows, registry: dict, release: Optional[str] = None):
         return [r for r in rows if r.release_label == release or r.release_label is None]
 
     # Reverse index: capability row model key → registry entry. Rows are keyed
-    # by the model's benchmark_key (and sometimes by a bare logical name or an
-    # alias), so map every reachable spelling back to its entry.
+    # by the model's benchmark_key (and sometimes by a provider-side model ID),
+    # so map every reachable spelling back to its entry.
     by_key: dict[str, dict] = {}
     for entry in registry.values():
-        for key in [entry.get("benchmark_key"), *entry.get("aliases", [])]:
+        keys = [entry.get("benchmark_key"), *((entry.get("provider_mappings") or {}).values())]
+        for key in keys:
             if key:
                 by_key.setdefault(key.lower(), entry)
 
@@ -303,7 +304,8 @@ def effective_releases(rows, registry: dict) -> dict[str, str]:
     """
     by_key: dict[str, dict] = {}
     for entry in registry.values():
-        for key in [entry.get("benchmark_key"), *entry.get("aliases", [])]:
+        keys = [entry.get("benchmark_key"), *((entry.get("provider_mappings") or {}).values())]
+        for key in keys:
             if key:
                 by_key.setdefault(key.lower(), entry)
 
@@ -362,7 +364,7 @@ def load_capability_matrix(db_path: str, release: Optional[str] = None) -> dict[
     return dict(matrix)
 
 
-# ── Model registry (alias → logical → benchmark) ────────────────────────────
+# ── Model registry (logical → benchmark → providers) ────────────────────────
 
 # Curated default registry. Seeded into the model_registry table on first run;
 # subsequent changes are made via the DB (dashboard / API), NOT this dict.
@@ -370,7 +372,6 @@ DEFAULT_MODEL_REGISTRY: list[dict] = [
     {
         "logical_name": "deepseek-v4-pro",
         "benchmark_key": "deepseek-v4-pro",
-        "aliases": ["deepseek-v4-pro", "deepseek/deepseek-v4-pro", "deepseek-v4-pro-0813"],
         "provider_mappings": {
             "deepseek": "deepseek-v4-pro",
             "opencode": "deepseek-v4-pro",
@@ -382,7 +383,6 @@ DEFAULT_MODEL_REGISTRY: list[dict] = [
     {
         "logical_name": "deepseek-v4-flash",
         "benchmark_key": "deepseek-v4-flash",
-        "aliases": ["deepseek-v4-flash", "deepseek/deepseek-v4-flash", "deepseek-v4-flash-0731"],
         "provider_mappings": {
             "deepseek": "deepseek-v4-flash",
             "opencode": "deepseek-v4-flash",
@@ -394,65 +394,57 @@ DEFAULT_MODEL_REGISTRY: list[dict] = [
     {
         "logical_name": "claude-sonnet-5",
         "benchmark_key": "claude-sonnet-5",
-        "aliases": ["claude-sonnet-5"],
         "provider_mappings": {"commandcode": "claude-sonnet-5"},
     },
     {
         "logical_name": "claude-fable-5",
         "benchmark_key": "claude-fable-5",
-        "aliases": ["claude-fable-5"],
         "provider_mappings": {"commandcode": "claude-fable-5"},
     },
     {
         "logical_name": "claude-opus-5",
         "benchmark_key": "claude-opus-5",
-        "aliases": ["claude-opus-5"],
         "provider_mappings": {"commandcode": "claude-opus-5"},
     },
     {
         "logical_name": "gpt-5.6-sol",
         "benchmark_key": "gpt-5.6-sol",
-        "aliases": ["gpt-5.6-sol"],
+        "provider_mappings": {},
     },
     {
         "logical_name": "gpt-5.6-terra",
         "benchmark_key": "gpt-5.6-terra",
-        "aliases": ["gpt-5.6-terra"],
         "provider_mappings": {"commandcode": "gpt-5.6-terra"},
     },
     {
         "logical_name": "gpt-5.6-luna",
         "benchmark_key": "gpt-5.6-luna",
-        "aliases": ["gpt-5.6-luna"],
         "provider_mappings": {"commandcode": "gpt-5.6-luna"},
     },
     {
         "logical_name": "kimi-k3",
         "benchmark_key": "kimi-k3",
-        "aliases": ["kimi-k3", "moonshotai/Kimi-K3"],
         "provider_mappings": {"commandcode": "moonshotai/Kimi-K3"},
     },
     {
         "logical_name": "minimax-m3",
         "benchmark_key": "minimax-m3",
-        "aliases": ["minimax-m3", "MiniMaxAI/MiniMax-M3"],
         "provider_mappings": {"commandcode": "MiniMaxAI/MiniMax-M3"},
     },
     {
         "logical_name": "qwen3.8-max",
         "benchmark_key": "qwen-3.8-max",
-        "aliases": ["qwen3.8-max", "Qwen/Qwen3.8-Max"],
         "provider_mappings": {"commandcode": "Qwen/Qwen3.8-Max"},
     },
     {
         "logical_name": "grok-4.5",
         "benchmark_key": "grok-4.5",
-        "aliases": ["grok-4.5", "xai/grok-4.5"],
+        "provider_mappings": {},
     },
     {
         "logical_name": "gemini-3.6-flash",
         "benchmark_key": "gemini-3.6-flash",
-        "aliases": ["gemini-3.6-flash", "google/gemini-3.6-flash"],
+        "provider_mappings": {},
     },
 ]
 
@@ -462,7 +454,7 @@ def seed_model_registry(db_path: str, sync: bool = False) -> int:
 
     Insert-only by default: existing rows are NOT overwritten — the DB is the
     source of truth once seeded. With ``sync=True``, curated defaults are
-    re-applied to existing rows (aliases, provider_mappings, benchmark_key,
+    re-applied to existing rows (provider_mappings, benchmark_key,
     active_release, benchmark_release) so a code-level identity→release
     migration can be pushed out without wiping admin edits to unmanaged
     columns.
@@ -480,7 +472,6 @@ def seed_model_registry(db_path: str, sync: bool = False) -> int:
         if existing:
             if sync:
                 existing.benchmark_key = entry["benchmark_key"]
-                existing.aliases_json = json.dumps(entry["aliases"])
                 existing.provider_mappings_json = json.dumps(entry.get("provider_mappings", {}))
                 existing.active_release = entry.get("active_release")
                 existing.benchmark_release = entry.get("benchmark_release")
@@ -490,7 +481,6 @@ def seed_model_registry(db_path: str, sync: bool = False) -> int:
         session.add(ModelRegistryEntry(
             logical_name=entry["logical_name"],
             benchmark_key=entry["benchmark_key"],
-            aliases_json=json.dumps(entry["aliases"]),
             provider_mappings_json=json.dumps(entry.get("provider_mappings", {})),
             active_release=entry.get("active_release"),
             benchmark_release=entry.get("benchmark_release"),
@@ -507,7 +497,7 @@ def seed_model_registry(db_path: str, sync: bool = False) -> int:
 def load_model_registry(db_path: str) -> dict[str, dict]:
     """Load the model registry as {logical_name: {...}}.
 
-    Each entry: {benchmark_key, aliases, provider_mappings, active_release,
+    Each entry: {benchmark_key, provider_mappings, active_release,
     benchmark_release}. ``active_release`` is the CURRENT model version
     (e.g. ``2026-08-13``); ``benchmark_release`` is the leaderboard snapshot
     date the scores came from (e.g. ``2026-06-25``).
@@ -519,16 +509,11 @@ def load_model_registry(db_path: str) -> dict[str, dict]:
 
     for row in session.query(ModelRegistryEntry).all():
         try:
-            aliases = json.loads(row.aliases_json or "[]")
-        except (json.JSONDecodeError, TypeError):
-            aliases = []
-        try:
             provider_mappings = json.loads(row.provider_mappings_json or "{}")
         except (json.JSONDecodeError, TypeError):
             provider_mappings = {}
         registry[row.logical_name] = {
             "benchmark_key": row.benchmark_key,
-            "aliases": aliases,
             "provider_mappings": provider_mappings,
             "active_release": row.active_release,
             "benchmark_release": row.benchmark_release,

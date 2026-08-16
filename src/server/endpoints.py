@@ -1886,17 +1886,13 @@ class DashboardEndpoints:
             entries = []
             for r in rows:
                 try:
-                    aliases = json.loads(r.aliases_json or "[]")
-                except json.JSONDecodeError:
-                    aliases = []
-                try:
                     provider_mappings = json.loads(r.provider_mappings_json or "{}")
                 except json.JSONDecodeError:
                     provider_mappings = {}
                 entries.append({
                     "logical_name": r.logical_name,
                     "benchmark_key": r.benchmark_key,
-                    "aliases": aliases,
+                    "providers": list(provider_mappings.keys()),
                     "provider_mappings": provider_mappings,
                     "active_release": r.active_release,
                     "benchmark_release": r.benchmark_release,
@@ -1975,8 +1971,8 @@ class DashboardEndpoints:
     def _serve_registry_upsert_api(self):
         """POST /api/models/registry — create or update a registry entry.
 
-        Body: {logical_name, benchmark_key, aliases: [..], active_release?,
-               benchmark_release?}
+        Body: {logical_name, benchmark_key, provider_mappings: {..},
+               active_release?, benchmark_release?}
         """
         import json
         from datetime import datetime, timezone
@@ -1991,7 +1987,6 @@ class DashboardEndpoints:
 
         logical = (body.get("logical_name") or "").strip().lower()
         benchmark = (body.get("benchmark_key") or "").strip().lower()
-        aliases = body.get("aliases") or []
         active_release = (body.get("active_release") or "").strip() or None
         benchmark_release = (body.get("benchmark_release") or "").strip() or None
         provider_mappings = body.get("provider_mappings") or {}
@@ -2001,18 +1996,11 @@ class DashboardEndpoints:
         if not benchmark:
             self._send_json({"error": "missing 'benchmark_key'"}, 400)
             return
-        if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
-            self._send_json({"error": "'aliases' must be a list of strings"}, 400)
-            return
         if not isinstance(provider_mappings, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in provider_mappings.items()
         ):
             self._send_json({"error": "'provider_mappings' must be a {provider: model} object"}, 400)
             return
-
-        # Ensure logical_name is always one of its own aliases
-        if logical not in [a.lower() for a in aliases]:
-            aliases = [logical] + aliases
 
         now = datetime.now(timezone.utc).isoformat()
         try:
@@ -2022,7 +2010,6 @@ class DashboardEndpoints:
                 ).first()
                 if entry:
                     entry.benchmark_key = benchmark
-                    entry.aliases_json = json.dumps(aliases)
                     entry.provider_mappings_json = json.dumps(provider_mappings)
                     if active_release is not None:
                         entry.active_release = active_release
@@ -2034,7 +2021,6 @@ class DashboardEndpoints:
                     session.add(ModelRegistryEntry(
                         logical_name=logical,
                         benchmark_key=benchmark,
-                        aliases_json=json.dumps(aliases),
                         provider_mappings_json=json.dumps(provider_mappings),
                         active_release=active_release,
                         benchmark_release=benchmark_release,
