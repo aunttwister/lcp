@@ -160,6 +160,28 @@ class ModelCapability(Base):
     updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
 
 
+class ModelCapabilitySubtask(Base):
+    """Per-subtask LiveBench scores (e.g. theory_of_mind, zebra_puzzle).
+
+    LiveBench's ``all_tasks.csv`` / ``table_<release>.csv`` grades each model
+    down to individual tasks (23 tasks across 7 categories). These rows back
+    the "Subtask breakdown" panel on the Models page, keyed by the model's
+    ``benchmark_key`` with the same ``source`` + ``release_label`` semantics
+    as ``ModelCapability``.
+    """
+    __tablename__ = "model_capability_subtasks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    model = Column(String, nullable=False, index=True)  # benchmark_key (logical)
+    category = Column(String, nullable=False, index=True)  # reasoning, coding, math, …
+    task = Column(String, nullable=False, index=True)  # theory_of_mind, zebra_puzzle, …
+    score = Column(Float, nullable=False)  # 0.0–1.0 normalized
+    source = Column(String, nullable=False, default="livebench")  # livebench | lcp_benchmark
+    raw_score = Column(Float, nullable=True)  # original 0–100
+    release_label = Column(String, nullable=True, index=True)
+    updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
 class ModelRegistryEntry(Base):
     """Explicit model registry: canonical logical model ↔ benchmark key ↔ providers.
 

@@ -197,6 +197,46 @@ def seed_livebench(db_path: str, release: Optional[str] = None) -> int:
     return count
 
 
+def seed_livebench_tasks(db_path: str, release: str = LIVEBENCH_RELEASE) -> int:
+    """Seed model_capability_subtasks from the LiveBench 2026-06-25 table.
+
+    Stores per-subtask scores (e.g. theory_of_mind, zebra_puzzle) under
+    ``source="livebench"`` + ``release_label=<release>``, keyed by each
+    model's ``benchmark_key`` (logical). Idempotent per (model, category,
+    task, release).
+    """
+    from src.api.models import ModelCapabilitySubtask
+    from .livebench_tasks import LIVEBENCH_TASKS
+
+    session = _get_session(db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    count = 0
+
+    for model, categories in LIVEBENCH_TASKS.items():
+        for category, tasks in categories.items():
+            for task, raw in tasks.items():
+                normalized = round(raw / 100.0, 4)
+                session.query(ModelCapabilitySubtask).filter_by(
+                    model=model, category=category, task=task,
+                    source="livebench", release_label=release,
+                ).delete()
+                session.add(ModelCapabilitySubtask(
+                    model=model,
+                    category=category,
+                    task=task,
+                    score=normalized,
+                    source="livebench",
+                    raw_score=raw,
+                    release_label=release,
+                    updated_at=now,
+                ))
+                count += 1
+
+    session.commit()
+    session.close()
+    return count
+
+
 def _get_session(db_path: str):
     from src.api.models import get_engine, get_session, Base
 
@@ -235,7 +275,8 @@ def main() -> None:
 
     if args.livebench_only:
         n = seed_livebench(db_path, release=args.release)
-        print(f"Seeded {n} LiveBench capability rows (release={args.release or 'all'})")
+        t = seed_livebench_tasks(db_path, release=args.release or LIVEBENCH_RELEASE)
+        print(f"Seeded {n} LiveBench capability rows + {t} subtask rows (release={args.release or 'all'})")
         return
 
     if args.registry_only:
@@ -245,7 +286,8 @@ def main() -> None:
 
     r = seed_model_registry(db_path, sync=args.sync)
     l = seed_livebench(db_path, release=args.release)
-    print(f"Seeded {r} registry entries + {l} LiveBench capability rows (release={args.release or 'all'})")
+    t = seed_livebench_tasks(db_path, release=args.release or LIVEBENCH_RELEASE)
+    print(f"Seeded {r} registry entries + {l} LiveBench capability rows + {t} subtask rows (release={args.release or 'all'})")
 
 
 def resolve_active_rows(rows, registry: dict, release: Optional[str] = None):

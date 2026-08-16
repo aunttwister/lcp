@@ -319,8 +319,10 @@ async function pageBenchmarkRuns(delta) {
 function bestScore(model) {
   let best = null;
   const canonical = canonicalName(model);
+  const reg = STATE.registry[canonical] || {};
+  const bkey = reg.benchmark_key || canonical;
   for (const [task, models] of Object.entries(STATE.matrix.tasks || {})) {
-    const s = models[canonical];
+    const s = models[bkey] !== undefined ? models[bkey] : models[canonical];
     if (s !== undefined && (best === null || s > best.score)) best = {task, score: s};
   }
   return best ? `${(best.score * 100).toFixed(0)}% ${best.task.replace(/_/g, ' ')}` : null;
@@ -383,7 +385,10 @@ function renderDetail(model) {
   const benchmarkRelease = reg ? (reg.benchmark_release || '') : '';
   const quantization = reg ? (reg.quantization || '') : '';
   // Version actually in effect (resolved server-side: pin → newest).
-  const effectiveRelease = (STATE.matrix.active_releases || {})[canonical] || pinnedRelease || 'latest';
+  // active_releases is keyed by capability model key (= benchmark_key).
+  const effectiveRelease = (STATE.matrix.active_releases || {})[benchmarkKey]
+    || (STATE.matrix.active_releases || {})[canonical]
+    || pinnedRelease || 'latest';
   const providerMappings = reg ? (reg.provider_mappings || {}) : {};
   const providerNames = reg ? (reg.providers || Object.keys(providerMappings)) : [];
   const updatedAt = reg ? (reg.updated_at || '').replace('T', ' ').slice(0, 19) : null;
@@ -396,21 +401,29 @@ function renderDetail(model) {
 
   const scores = [];
   for (const [task, models] of Object.entries(STATE.matrix.tasks || {})) {
-    if (models[canonical] !== undefined) {
+    // Scores are keyed by benchmark_key in the matrix; fall back to logical.
+    const score = models[benchmarkKey] !== undefined ? models[benchmarkKey] : models[canonical];
+    if (score !== undefined) {
       scores.push({
         task,
-        score: models[canonical],
-        source: (STATE.matrix.sources || {})[task]?.[canonical] || '—',
-        category: (STATE.matrix.benchmark_categories || {})[task]?.[canonical] || '—',
-        release: (STATE.matrix.releases || {})[task]?.[canonical] || null,
+        score,
+        source: (STATE.matrix.sources || {})[task]?.[benchmarkKey] || (STATE.matrix.sources || {})[task]?.[canonical] || '—',
+        category: (STATE.matrix.benchmark_categories || {})[task]?.[benchmarkKey] || (STATE.matrix.benchmark_categories || {})[task]?.[canonical] || '—',
+        release: (STATE.matrix.releases || {})[task]?.[benchmarkKey] || (STATE.matrix.releases || {})[task]?.[canonical] || null,
       });
     }
   }
   scores.sort((a, b) => b.score - a.score);
 
-  // Subtask breakdown from the most recent done benchmark run.
-  const doneRun = [...STATE.runs].reverse().find(r => r.status === 'done' && r.result && r.result.tasks);
-  const taskBreakdown = doneRun ? doneRun.result.tasks : null;
+  // Subtask breakdown: prefer the API's seeded subtasks keyed by benchmark_key
+  // (which may differ from the logical name, e.g. qwen-3.8-max vs qwen3.8-max),
+  // then fall back to the most recent done benchmark run's all_tasks.csv parse.
+  const subtaskApi = (STATE.matrix.subtasks || {});
+  let taskBreakdown = subtaskApi[benchmarkKey] || subtaskApi[canonical] || null;
+  if (!taskBreakdown) {
+    const doneRun = [...STATE.runs].reverse().find(r => r.status === 'done' && r.result && r.result.tasks);
+    if (doneRun) taskBreakdown = doneRun.result.tasks;
+  }
 
   const runs = STATE.runs;
 
@@ -613,6 +626,7 @@ let SCORE_TARGET = null;
 function openManualScore(model) {
   SCORE_TARGET = canonicalName(model);
   const reg = STATE.registry[SCORE_TARGET] || {};
+  const bkey = reg.benchmark_key || SCORE_TARGET;
   const today = new Date().toISOString().slice(0, 10);
   document.getElementById('scoreModalTitle').textContent = 'Add score — ' + SCORE_TARGET;
   document.getElementById('scoreRelease').value = reg.active_release || today;
@@ -620,7 +634,8 @@ function openManualScore(model) {
 
   const grid = document.getElementById('scoreGrid');
   grid.innerHTML = SCORE_TASKS.map(t => {
-    const existing = (STATE.matrix.tasks || {})[t]?.[SCORE_TARGET];
+    const byTask = (STATE.matrix.tasks || {})[t] || {};
+    const existing = byTask[bkey] !== undefined ? byTask[bkey] : byTask[SCORE_TARGET];
     const val = existing !== undefined ? (existing * 100).toFixed(1) : '';
     return `<div class="score-field">
       <label class="form-label" for="score-${t}">${t.replace(/_/g, ' ')}

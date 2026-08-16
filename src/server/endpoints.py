@@ -1862,12 +1862,25 @@ class DashboardEndpoints:
                 if r.release_label:
                     releases.setdefault(r.task_type, {})[r.model] = r.release_label
 
+            # Per-subtask breakdown (LiveBench all_tasks.csv), keyed by
+            # benchmark_key. The UI canonicalizes these through the registry.
+            subtasks: dict[str, dict[str, dict[str, float]]] = {}
+            try:
+                from ..api.models import ModelCapabilitySubtask
+                with _gs(self.engine) as session:
+                    sub_rows = session.query(ModelCapabilitySubtask).all()
+                for r in sub_rows:
+                    subtasks.setdefault(r.model, {}).setdefault(r.category, {})[r.task] = r.score
+            except Exception:
+                subtasks = {}
+
             self._send_json({
                 "tasks": tasks,
                 "sources": sources,
                 "benchmark_categories": benchmarks,
                 "releases": releases,
                 "active_releases": active_releases,
+                "subtasks": subtasks,
                 "count": len(rows),
             })
         except Exception as e:
