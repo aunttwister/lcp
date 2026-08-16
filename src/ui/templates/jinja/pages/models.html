@@ -13,7 +13,10 @@
   <div class="models-sidebar">
     <div class="models-sidebar-head">
       <input type="text" id="modelFilter" placeholder="Filter models…" class="capability-filter" style="width:100%">
-      <button id="addRegistryBtn" class="btn btn-outline" title="Register a model alias">+ Register model</button>
+      <div style="display:flex; gap:0.5rem">
+        <button id="addRegistryBtn" class="btn btn-outline" title="Register a model alias">+ Register model</button>
+        <button id="configuredOnlyBtn" class="btn btn-outline" title="Show only models wired into a profile" onclick="toggleConfiguredOnly()">Configured</button>
+      </div>
     </div>
     <div id="modelList" class="model-list"></div>
   </div>
@@ -99,7 +102,7 @@ const API = {
 };
 
 // ── State ──────────────────────────────────────────────────────────────────
-let STATE = { registry: {}, providers: {}, matrix: {}, runs: [], bench: null, selected: null, filter: '' };
+let STATE = { registry: {}, providers: {}, matrix: {}, runs: [], bench: null, selected: null, filter: '', activeModels: new Set(), configuredOnly: false };
 
 // model → list of providers that expose it (from gateway.yaml providers.models)
 function providerModels() {
@@ -110,6 +113,11 @@ function providerModels() {
     }
   }
   return map;
+}
+
+// models actually wired into at least one profile chain ("selected/top" models)
+function activeModels() {
+  return STATE.activeModels;
 }
 
 function allModels() {
@@ -129,6 +137,14 @@ async function loadAll() {
   STATE.providers = providers.providers || {};
   STATE.runs = runs.runs || [];
   STATE.bench = bench;
+  // Models wired into profiles = the "top/selected" set.
+  const active = new Set();
+  for (const chain of Object.values(providers.profile_chains || {})) {
+    for (const step of (chain || [])) {
+      if (step && step.model) active.add(step.model);
+    }
+  }
+  STATE.activeModels = active;
   const registryMap = {};
   for (const e of (reg.registry || [])) registryMap[e.logical_name] = e;
   STATE.registry = registryMap;
@@ -152,16 +168,21 @@ function bestScore(model) {
 function renderModelList() {
   const container = document.getElementById('modelList');
   const pmap = providerModels();
-  const models = allModels().filter(m => m.toLowerCase().includes(STATE.filter.toLowerCase()));
+  let models = allModels().filter(m => m.toLowerCase().includes(STATE.filter.toLowerCase()));
+  const configuredOnly = STATE.configuredOnly;
+  if (configuredOnly) {
+    models = models.filter(m => activeModels().has(m));
+  }
   if (!models.length) {
-    container.innerHTML = '<div class="empty">No provider models found.</div>';
+    container.innerHTML = '<div class="empty">' + (configuredOnly ? 'No configured models match.' : 'No provider models found.') + '</div>';
     return;
   }
   container.innerHTML = models.map(m => {
     const active = m === STATE.selected ? 'active' : '';
+    const configured = activeModels().has(m) ? 'configured' : '';
     const best = bestScore(m);
     const provs = pmap[m] || [];
-    return `<div class="model-list-item ${active}" data-model="${m}">
+    return `<div class="model-list-item ${active} ${configured}" data-model="${m}">
       <div class="mli-name" title="${m}">${m}</div>
       <div class="mli-meta">${best ? '<span class="mli-best">' + best + '</span>' : ''}${provs.length ? '<span class="mli-prov">' + provs.join(', ') + '</span>' : ''}</div>
     </div>`;
@@ -169,6 +190,13 @@ function renderModelList() {
   container.querySelectorAll('.model-list-item').forEach(el => {
     el.addEventListener('click', () => selectModel(el.dataset.model));
   });
+}
+
+function toggleConfiguredOnly() {
+  STATE.configuredOnly = !STATE.configuredOnly;
+  const btn = document.getElementById('configuredOnlyBtn');
+  if (btn) btn.classList.toggle('active', STATE.configuredOnly);
+  renderModelList();
 }
 
 function selectModel(model) {

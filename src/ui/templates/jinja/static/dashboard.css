@@ -917,6 +917,24 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 .model-list-item:hover { background: hsl(var(--secondary) / 0.5); }
 .model-list-item.active { background: hsl(var(--secondary)); border-color: hsl(var(--primary) / 0.3); }
+.model-list-item.configured {
+  border-color: hsl(var(--primary) / 0.6);
+  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.15) inset;
+  position: relative;
+}
+.model-list-item.configured::before {
+  content: ''; position: absolute; left: -1px; top: 20%; bottom: 20%;
+  width: 3px; border-radius: 2px; background: hsl(var(--primary));
+}
+.model-list-item.configured.active {
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.3) inset;
+}
+#configuredOnlyBtn.active {
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border-color: hsl(var(--primary));
+}
 .mli-name {
   font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.75rem;
   color: hsl(var(--foreground)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
