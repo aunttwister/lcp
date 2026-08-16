@@ -115,7 +115,8 @@ function providerModels() {
   return map;
 }
 
-// models actually wired into at least one profile chain ("selected/top" models)
+// models registered with at least one provider (from providers.models) —
+// the "top/selected" set that gets an enhanced border and sorts first.
 function activeModels() {
   return STATE.activeModels;
 }
@@ -137,8 +138,10 @@ async function loadAll() {
   STATE.providers = providers.providers || {};
   STATE.runs = runs.runs || [];
   STATE.bench = bench;
-  // Models wired into profiles = the "top/selected" set.
-  const active = new Set();
+  // Highlighted set = any model registered in a provider's `models` list
+  // (this includes llama.cpp / providers not wired into a profile chain),
+  // plus anything referenced by a profile chain as a safety net.
+  const active = new Set(Object.keys(providerModels()));
   for (const chain of Object.values(providers.profile_chains || {})) {
     for (const step of (chain || [])) {
       if (step && step.model) active.add(step.model);
@@ -173,6 +176,12 @@ function renderModelList() {
   if (configuredOnly) {
     models = models.filter(m => activeModels().has(m));
   }
+  // Highlighted models first, then alphabetical within each group.
+  models = models.sort((a, b) => {
+    const ac = activeModels().has(a) ? 0 : 1;
+    const bc = activeModels().has(b) ? 0 : 1;
+    return ac - bc || a.localeCompare(b);
+  });
   if (!models.length) {
     container.innerHTML = '<div class="empty">' + (configuredOnly ? 'No configured models match.' : 'No provider models found.') + '</div>';
     return;
