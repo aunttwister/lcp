@@ -174,6 +174,17 @@ def seed_livebench(db_path: str, release: Optional[str] = None) -> int:
         ModelCapability.source == "livebench",
     ).delete(synchronize_session=False)
 
+    # Migration: drop LEGACY unversioned livebench rows (release_label NULL)
+    # for every seeded model. They predate release-aware seeding and would
+    # otherwise tie-break against the freshly-tagged rows (same source
+    # priority, arbitrary row order).
+    seeded_models = list(LIVEBENCH_DATA.keys())
+    session.query(ModelCapability).filter(
+        ModelCapability.model.in_(seeded_models),
+        ModelCapability.source == "livebench",
+        ModelCapability.release_label.is_(None),
+    ).delete(synchronize_session=False)
+
     session.commit()
     session.close()
     return count
