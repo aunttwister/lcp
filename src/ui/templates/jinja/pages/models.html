@@ -376,6 +376,69 @@ function selectModel(model) {
   loadRunsForSelected();
 }
 
+// LiveBench category → LCP task type (reverse of seed_capabilities.LB_TO_LCP).
+// A single LCP task can aggregate several LiveBench categories (reasoning and
+// math both feed reasoning_chain), so each expanded group keeps its LiveBench
+// category labelled separately, exactly as stated on livebench.ai.
+const LCP_TO_LB = {
+  reasoning_chain: ['reasoning', 'math'],
+  code_generation: ['coding'],
+  agentic_multi_step: ['agentic_coding'],
+  research_deep: ['data_analysis'],
+  casual_chat: ['language'],
+  planning: ['instruction_following'],
+  debugging: [],
+};
+
+function groupLabel(lb) { return lb === '_all' ? 'tasks' : lb.replace(/_/g, ' '); }
+
+// Seeded subtasks are normalized 0–1; locally-run all_tasks.csv rows are 0–100.
+function subtaskPct(sc) { return sc > 1 ? sc : sc * 100; }
+
+function subtaskPanelHtml(groups) {
+  return `<div class="subtask-expand">
+    ${groups.map(g => `
+      <div class="subtask-group">
+        <div class="subtask-group-head">${groupLabel(g.lb)}</div>
+        ${Object.entries(g.tasks).map(([task, sc]) => {
+          const pct = subtaskPct(sc);
+          return `
+          <div class="subtask-row">
+            <span class="subtask-name" title="${task.replace(/_/g, ' ')}">${task.replace(/_/g, ' ')}</span>
+            <div class="score-track"><div class="score-fill ${pct >= 80 ? 'hi' : pct >= 60 ? 'mid' : 'lo'}" style="width:${Math.min(pct, 100).toFixed(0)}%"></div></div>
+            <span class="score-pct">${pct.toFixed(1)}%</span>
+          </div>`;
+        }).join('')}
+      </div>`).join('')}
+  </div>`;
+}
+
+// LiveBench categories whose subtasks belong to this LCP task type.
+function expandGroupsFor(task, breakdown) {
+  if (!breakdown) return [];
+  const groups = [];
+  for (const lb of (LCP_TO_LB[task] || [])) {
+    const tasks = breakdown[lb];
+    if (tasks && Object.keys(tasks).length) groups.push({lb, tasks});
+  }
+  const all = breakdown._all;
+  if (all && Object.keys(all).length) groups.push({lb: '_all', tasks: all});
+  return groups;
+}
+
+// Subtask categories not reachable from any score row (e.g. unknown tasks).
+function leftoverSubtaskGroups(breakdown, scoreTasks) {
+  if (!breakdown) return [];
+  const used = new Set();
+  for (const t of scoreTasks) for (const g of expandGroupsFor(t, breakdown)) used.add(g.lb);
+  const groups = [];
+  for (const [lb, tasks] of Object.entries(breakdown)) {
+    if (used.has(lb)) continue;
+    if (tasks && Object.keys(tasks).length) groups.push({lb, tasks});
+  }
+  return groups;
+}
+
 function renderDetail(model) {
   const detail = document.getElementById('modelDetail');
   const canonical = canonicalName(model);
@@ -426,6 +489,8 @@ function renderDetail(model) {
   }
 
   const runs = STATE.runs;
+  const scoreTaskKeys = scores.map(s => s.task);
+  const leftoverGroups = leftoverSubtaskGroups(taskBreakdown, scoreTaskKeys);
 
   detail.innerHTML = `
     <div class="model-detail-head">
@@ -455,29 +520,39 @@ function renderDetail(model) {
       <h4>Capability scores</h4>
       ${scores.length ? `
       <div class="score-list">
-        ${scores.map(s => `
-          <div class="score-row">
-            <span class="score-task" title="${s.task}">${s.task.replace(/_/g, ' ')}</span>
-            <div class="score-track"><div class="score-fill ${s.score >= 0.8 ? 'hi' : s.score >= 0.6 ? 'mid' : 'lo'}" style="width:${(s.score * 100).toFixed(0)}%"></div></div>
-            <span class="score-pct">${(s.score * 100).toFixed(1)}%</span>
-            <span class="score-src" title="source: ${s.source}, category: ${s.category}${s.release ? ', release: ' + s.release : ''}">${s.source}${s.release ? ' @ ' + s.release : ''}</span>
-          </div>`).join('')}
+        ${scores.map(s => {
+          const groups = expandGroupsFor(s.task, taskBreakdown);
+          const clickable = groups.length ? ' clickable' : '';
+          const chev = groups.length ? '<span class="score-chev">▸</span>' : '';
+          return `
+          <div class="score-item">
+            <div class="score-row${clickable}" data-task="${s.task}" tabindex="0">
+              <span class="score-task" title="${s.task}">${s.task.replace(/_/g, ' ')}</span>
+              <div class="score-track"><div class="score-fill ${s.score >= 0.8 ? 'hi' : s.score >= 0.6 ? 'mid' : 'lo'}" style="width:${(s.score * 100).toFixed(0)}%"></div></div>
+              <span class="score-pct">${(s.score * 100).toFixed(1)}%</span>
+              <span class="score-src" title="source: ${s.source}, category: ${s.category}${s.release ? ', release: ' + s.release : ''}">${s.source}${s.release ? ' @ ' + s.release : ''}</span>
+              ${chev}
+            </div>
+            ${groups.length ? subtaskPanelHtml(groups) : ''}
+          </div>`;
+        }).join('')}
       </div>` : '<p class="empty">No scores yet — run a benchmark below or add scores manually.</p>'}
     </div>
 
-    ${taskBreakdown ? `
+    ${leftoverGroups.length ? `
     <div class="model-section">
-      <h4>Subtask breakdown</h4>
-      <div class="subtask-breakdown">
-        ${Object.entries(taskBreakdown).map(([cat, tasks]) => `
-          <div class="subtask-category">
-            <div class="subtask-cat-head">${cat === '_all' ? 'tasks' : cat.replace(/_/g, ' ')}</div>
-            ${Object.entries(tasks).map(([task, sc]) => `
-              <div class="subtask-row">
-                <span class="subtask-name">${task.replace(/_/g, ' ')}</span>
-                <div class="score-track"><div class="score-fill ${sc >= 80 ? 'hi' : sc >= 60 ? 'mid' : 'lo'}" style="width:${sc.toFixed(0)}%"></div></div>
-                <span class="score-pct">${sc.toFixed(1)}%</span>
-              </div>`).join('')}
+      <h4>Other subtasks</h4>
+      <div class="score-list">
+        ${leftoverGroups.map(g => `
+          <div class="score-item">
+            <div class="score-row clickable" data-task="${groupLabel(g.lb)}" tabindex="0">
+              <span class="score-task" title="${groupLabel(g.lb)}">${groupLabel(g.lb)}</span>
+              <div class="score-track"></div>
+              <span class="score-pct"></span>
+              <span class="score-src"></span>
+              <span class="score-chev">▸</span>
+            </div>
+            ${subtaskPanelHtml([g])}
           </div>`).join('')}
       </div>
     </div>` : ''}
@@ -525,6 +600,13 @@ function renderDetail(model) {
   document.getElementById('benchNextBtn')?.addEventListener('click', () => pageBenchmarkRuns(1));
   document.querySelectorAll('[data-benchlog]').forEach(btn => {
     btn.addEventListener('click', () => openBenchmarkLog(btn.dataset.benchlog));
+  });
+  detail.querySelectorAll('.score-row.clickable').forEach(row => {
+    const toggle = () => row.classList.toggle('open');
+    row.addEventListener('click', toggle);
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    });
   });
 }
 
