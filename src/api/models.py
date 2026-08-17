@@ -182,6 +182,30 @@ class ModelCapabilitySubtask(Base):
     updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
 
 
+class CapabilityMetric(Base):
+    """Imported benchmark metrics — the source of truth for capability scores.
+
+    One row per (schema, release, model, category, task) datum. Top-level
+    category scores have ``category`` set and ``task`` NULL; per-subtask
+    scores (e.g. theory_of_mind) have both set. Values are 0–100.
+
+    The typed query tables (``model_capabilities``,
+    ``model_capability_subtasks``) are MATERIALIZED from these rows on import
+    so the router and Models page keep their existing fast query paths.
+    """
+    __tablename__ = "capability_metrics"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    schema_id = Column(String, nullable=False, index=True)  # dataset id, e.g. "livebench"
+    release_label = Column(String, nullable=False, index=True)  # snapshot date, e.g. "2026-06-25"
+    model = Column(String, nullable=False, index=True)  # logical / benchmark key
+    category = Column(String, nullable=True, index=True)  # NULL = top-level rollup
+    task = Column(String, nullable=True, index=True)  # NULL = category-level datum
+    value = Column(Float, nullable=False)  # 0–100
+    source = Column(String, nullable=False, default="livebench")
+    updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
 class ModelRegistryEntry(Base):
     """Explicit model registry: canonical logical model ↔ benchmark key ↔ providers.
 

@@ -193,127 +193,79 @@ def resolved_livebench_data() -> dict[str, dict[str, dict[str, float]]]:
 
 
 def seed_livebench(db_path: str, release: Optional[str] = None) -> int:
-    """Seed model_capabilities from the bulk LiveBench snapshots (opt-in).
+    """Seed model_capabilities from the bundled LiveBench JSON dataset.
 
-    Rows are tagged ``source="livebench"`` and ``release_label=<that
-    release>``. When ``release`` is given, only that release is seeded;
-    otherwise every release in the resolved LiveBench data is seeded.
-
-    Hand-typed ``LIVEBENCH_DATA`` rows are authoritative where present; models
-    that only have subtask data get top-level scores derived from those
-    subtasks (see ``resolved_livebench_data``).
-
-    Idempotent: replaces prior rows for the same (model, task, source,
-    release), and removes rows seeded under the retired dated snapshot key
-    (``deepseek-v4-flash-0731``) that predates release-aware seeding.
+    Delegates to the JSON import pipeline (``benchmark_import``) which writes
+    ``capability_metrics`` and materializes typed ``model_capabilities`` rows.
+    Then runs legacy cleanup migrations (retired snapshot keys, unversioned
+    rows, superseded dated snapshots).
     """
-    from src.api.models import ModelCapability
+    from . import benchmark_import
 
-    data = resolved_livebench_data()
+    count = benchmark_import.import_bundled(
+        db_path, release=release,
+        materialize_capabilities=True, materialize_subtasks=False,
+    )
+    _cleanup_legacy_capabilities(db_path)
+    return count
+
+
+def seed_livebench_tasks(db_path: str, release: str = LIVEBENCH_RELEASE) -> int:
+    """Seed model_capability_subtasks from the bundled LiveBench JSON dataset.
+
+    Delegates to the JSON import pipeline; materializes only the subtask rows.
+    """
+    from . import benchmark_import
+
+    return benchmark_import.import_bundled(
+        db_path, release=release,
+        materialize_capabilities=False, materialize_subtasks=True,
+    )
+
+
+def _cleanup_legacy_capabilities(db_path: str) -> None:
+    """Remove legacy capability rows that predate the import pipeline.
+
+    * rows keyed to the retired dated snapshot name (``deepseek-v4-flash-0731``)
+    * unversioned (release_label NULL) livebench rows for imported models
+    * dated snapshots that are no longer the newest release for a model
+    """
+    from src.api.models import CapabilityMetric, ModelCapability
 
     session = _get_session(db_path)
-    now = datetime.now(timezone.utc).isoformat()
-    count = 0
 
-    for model, releases in data.items():
-        for rel, categories in releases.items():
-            if release is not None and rel != release:
-                continue
-            for lb_cat, raw in categories.items():
-                if lb_cat == "overall":
-                    continue
-                lcp_task = LB_TO_LCP.get(lb_cat, "casual_chat")
-                normalized = round(raw / 100.0, 4)
+    top_rows = session.query(CapabilityMetric).filter(
+        CapabilityMetric.schema_id == "livebench",
+        CapabilityMetric.task.is_(None),
+    ).all()
+    seeded_models = {r.model for r in top_rows}
+    keep_releases: dict[str, set[str]] = defaultdict(set)
+    for r in top_rows:
+        if r.release_label:
+            keep_releases[r.model].add(r.release_label)
 
-                session.query(ModelCapability).filter_by(
-                    model=model, task_type=lcp_task, source="livebench",
-                    release_label=rel,
-                ).delete()
-                session.add(ModelCapability(
-                    model=model,
-                    task_type=lcp_task,
-                    score=normalized,
-                    source="livebench",
-                    benchmark_category=lb_cat,
-                    raw_score=raw,
-                    release_label=rel,
-                    updated_at=now,
-                ))
-                count += 1
-
-    # Migration: drop rows keyed to the old dated snapshot name. They now live
-    # under the logical name with release_label "2026-07-31".
     retired_snapshot_keys = ("deepseek-v4-flash-0731",)
     session.query(ModelCapability).filter(
         ModelCapability.model.in_(retired_snapshot_keys),
         ModelCapability.source == "livebench",
     ).delete(synchronize_session=False)
 
-    # Migration: drop LEGACY unversioned livebench rows (release_label NULL)
-    # for every seeded model. They predate release-aware seeding and would
-    # otherwise tie-break against the freshly-tagged rows (same source
-    # priority, arbitrary row order).
-    seeded_models = list(data.keys())
-    session.query(ModelCapability).filter(
-        ModelCapability.model.in_(seeded_models),
-        ModelCapability.source == "livebench",
-        ModelCapability.release_label.is_(None),
-    ).delete(synchronize_session=False)
+    if seeded_models:
+        session.query(ModelCapability).filter(
+            ModelCapability.model.in_(list(seeded_models)),
+            ModelCapability.source == "livebench",
+            ModelCapability.release_label.is_(None),
+        ).delete(synchronize_session=False)
 
-    # Migration: drop dated snapshots that are no longer the latest release.
-    # We keep ONLY the newest snapshot per model — historical rows (e.g.
-    # deepseek-v4-pro@2026-06-25 now superseded by @2026-08-13) are removed.
-    for model, releases in data.items():
-        keep = list(releases.keys())
+    for model, keep in keep_releases.items():
         session.query(ModelCapability).filter(
             ModelCapability.model == model,
             ModelCapability.source == "livebench",
-            ModelCapability.release_label.notin_(keep),
+            ModelCapability.release_label.notin_(list(keep)),
         ).delete(synchronize_session=False)
 
     session.commit()
     session.close()
-    return count
-
-
-def seed_livebench_tasks(db_path: str, release: str = LIVEBENCH_RELEASE) -> int:
-    """Seed model_capability_subtasks from the LiveBench 2026-06-25 table.
-
-    Stores per-subtask scores (e.g. theory_of_mind, zebra_puzzle) under
-    ``source="livebench"`` + ``release_label=<release>``, keyed by each
-    model's ``benchmark_key`` (logical). Idempotent per (model, category,
-    task, release).
-    """
-    from src.api.models import ModelCapabilitySubtask
-    from .livebench_tasks import LIVEBENCH_TASKS
-
-    session = _get_session(db_path)
-    now = datetime.now(timezone.utc).isoformat()
-    count = 0
-
-    for model, categories in LIVEBENCH_TASKS.items():
-        for category, tasks in categories.items():
-            for task, raw in tasks.items():
-                normalized = round(raw / 100.0, 4)
-                session.query(ModelCapabilitySubtask).filter_by(
-                    model=model, category=category, task=task,
-                    source="livebench", release_label=release,
-                ).delete()
-                session.add(ModelCapabilitySubtask(
-                    model=model,
-                    category=category,
-                    task=task,
-                    score=normalized,
-                    source="livebench",
-                    raw_score=raw,
-                    release_label=release,
-                    updated_at=now,
-                ))
-                count += 1
-
-    session.commit()
-    session.close()
-    return count
 
 
 def _get_session(db_path: str):

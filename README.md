@@ -298,12 +298,15 @@ LCP also falls back to `run_livebench.py` on `PATH`.
 Running full 150-question LiveBench on every model is expensive. LCP therefore
 supports **three tiers** of model data:
 
-1. **Bulk seed (free, baseline).** A hand-typed snapshot of the public
-   LiveBench leaderboard (`2026-06-25`) ships in `seed_capabilities.py`.
-   Models that only have subtask-level data (e.g. `gpt-5.6-terra`,
-   `gpt-5.6-luna`, `minimax-m3`) get their top-level category scores derived
-   from their subtask rows. Seed it in milliseconds for a zero-cost baseline
-   score per model:
+1. **Bulk seed (free, baseline).** A JSON snapshot of the public
+   LiveBench leaderboard (`2026-06-25`) ships in
+   `src/api/data/livebench_2026_06_25.json`. The import pipeline
+   (`src/api/benchmark_import.py`) reads it into the `capability_metrics`
+   table and materializes the typed `model_capabilities` +
+   `model_capability_subtasks` rows the router and Models page query. Models
+   that only have subtask-level data (e.g. `gpt-5.6-terra`, `gpt-5.6-luna`,
+   `minimax-m3`) get their top-level category scores derived from their
+   subtask rows. Seed it in milliseconds for a zero-cost baseline per model:
 
    ```bash
    # in the container: seed registry + LiveBench snapshot
@@ -311,7 +314,16 @@ supports **three tiers** of model data:
    # registry only / LiveBench only
    python -m src.api.seed_capabilities --db /app/data/costs.db --registry-only
    python -m src.api.seed_capabilities --db /app/data/costs.db --livebench-only --release 2026-06-25
+   # import a JSON dataset directly (modular installable-module path)
+   python -m src.api.benchmark_import --db /app/data/costs.db --file path/to/dataset.json
    ```
+
+   **Modular datasets.** The importer reads JSON from two places: bundled
+   files under `src/api/data/*.json`, and any installable module under
+   `LCP_MODULES_DIR` (default `/opt/lcp-modules`) that ships a
+   `data/*.json` file. A module dataset with the same `schema_id` overrides
+   the bundled one, so benchmark plugins can drop in their own leaderboard
+   data without forking LCP.
 
 2. **Incremental benchmark (accurate, opt-in).** Run LiveBench for a single
    model + release when a new model appears or a new release ships (e.g.
