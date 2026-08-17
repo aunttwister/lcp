@@ -1,10 +1,11 @@
 """Model capability storage and the model registry.
 
-Capability scores are produced only by running LiveBench against a model
-(direct-to-provider) via ``src.api.benchmark`` — there is no bulk seeding
-from public datasets. The model registry maps each logical model name to its
-stable benchmark key and provider-side model IDs; the provider keys double as
-the model's provider list in the UI.
+Capability scores come from LiveBench — either hand-typed leaderboard
+snapshots (``LIVEBENCH_DATA``), subtask-derived top-level scores
+(``resolved_livebench_data``), or benchmark runs the user executes
+direct-to-provider via ``src.api.benchmark``. The model registry maps each
+logical model name to its stable benchmark key and provider-side model IDs;
+the provider keys double as the model's provider list in the UI.
 """
 
 from __future__ import annotations
@@ -133,12 +134,74 @@ LIVEBENCH_DATA: dict[str, dict[str, dict[str, float]]] = {
 }
 
 
+def derive_category_scores(tasks: dict[str, dict[str, float]]) -> dict[str, float]:
+    """Aggregate per-subtask scores into per-category averages (0–100, 1 dp).
+
+    LiveBench grades each model down to individual tasks (``LIVEBENCH_TASKS``).
+    The top-level leaderboard category score is the mean of that category's
+    subtask scores; ``overall`` is the mean of the category averages. This
+    function reproduces the livebench.ai aggregation exactly (verified against
+    the 2026-06-25 leaderboard), so any model that only has subtask data can
+    still receive top-level scores.
+
+    Categories are emitted in the canonical leaderboard order so downstream
+    seeding resolves the ``reasoning_chain`` LCP task the same way the
+    hand-typed ``LIVEBENCH_DATA`` does (``math`` after ``reasoning`` — the
+    last writer wins, matching the existing hand-typed behavior).
+    """
+    CATEGORY_ORDER = (
+        "reasoning", "coding", "agentic_coding", "math",
+        "data_analysis", "language", "instruction_following",
+    )
+    out: dict[str, float] = {}
+    for category in CATEGORY_ORDER:
+        subtasks = tasks.get(category)
+        if not subtasks:
+            continue
+        values = list(subtasks.values())
+        if values:
+            out[category] = round(sum(values) / len(values), 1)
+    for category, subtasks in tasks.items():
+        if category not in out and subtasks:
+            values = list(subtasks.values())
+            if values:
+                out[category] = round(sum(values) / len(values), 1)
+    if out:
+        out["overall"] = round(sum(out.values()) / len(out), 1)
+    return out
+
+
+def resolved_livebench_data() -> dict[str, dict[str, dict[str, float]]]:
+    """Merge hand-typed ``LIVEBENCH_DATA`` with subtask-derived top-level scores.
+
+    Returns ``{model: {release_label: {category: raw_0_100}}}``. Models present
+    in ``LIVEBENCH_TASKS`` but absent from ``LIVEBENCH_DATA`` (e.g. gpt-5.6-terra,
+    gpt-5.6-luna, minimax-m3) have their top-level category scores DERIVED from
+    their subtask rows so no model falls through the gap between the two tables.
+    """
+    from .livebench_tasks import LIVEBENCH_TASKS
+
+    data: dict[str, dict[str, dict[str, float]]] = {
+        model: {rel: dict(categories) for rel, categories in releases.items()}
+        for model, releases in LIVEBENCH_DATA.items()
+    }
+    for model, tasks in LIVEBENCH_TASKS.items():
+        if model in data:
+            continue
+        data[model] = {LIVEBENCH_RELEASE: derive_category_scores(tasks)}
+    return data
+
+
 def seed_livebench(db_path: str, release: Optional[str] = None) -> int:
     """Seed model_capabilities from the bulk LiveBench snapshots (opt-in).
 
     Rows are tagged ``source="livebench"`` and ``release_label=<that
     release>``. When ``release`` is given, only that release is seeded;
-    otherwise every release in ``LIVEBENCH_DATA`` is seeded.
+    otherwise every release in the resolved LiveBench data is seeded.
+
+    Hand-typed ``LIVEBENCH_DATA`` rows are authoritative where present; models
+    that only have subtask data get top-level scores derived from those
+    subtasks (see ``resolved_livebench_data``).
 
     Idempotent: replaces prior rows for the same (model, task, source,
     release), and removes rows seeded under the retired dated snapshot key
@@ -146,11 +209,13 @@ def seed_livebench(db_path: str, release: Optional[str] = None) -> int:
     """
     from src.api.models import ModelCapability
 
+    data = resolved_livebench_data()
+
     session = _get_session(db_path)
     now = datetime.now(timezone.utc).isoformat()
     count = 0
 
-    for model, releases in LIVEBENCH_DATA.items():
+    for model, releases in data.items():
         for rel, categories in releases.items():
             if release is not None and rel != release:
                 continue
@@ -188,7 +253,7 @@ def seed_livebench(db_path: str, release: Optional[str] = None) -> int:
     # for every seeded model. They predate release-aware seeding and would
     # otherwise tie-break against the freshly-tagged rows (same source
     # priority, arbitrary row order).
-    seeded_models = list(LIVEBENCH_DATA.keys())
+    seeded_models = list(data.keys())
     session.query(ModelCapability).filter(
         ModelCapability.model.in_(seeded_models),
         ModelCapability.source == "livebench",
@@ -198,7 +263,7 @@ def seed_livebench(db_path: str, release: Optional[str] = None) -> int:
     # Migration: drop dated snapshots that are no longer the latest release.
     # We keep ONLY the newest snapshot per model — historical rows (e.g.
     # deepseek-v4-pro@2026-06-25 now superseded by @2026-08-13) are removed.
-    for model, releases in LIVEBENCH_DATA.items():
+    for model, releases in data.items():
         keep = list(releases.keys())
         session.query(ModelCapability).filter(
             ModelCapability.model == model,

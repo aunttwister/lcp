@@ -299,8 +299,11 @@ Running full 150-question LiveBench on every model is expensive. LCP therefore
 supports **three tiers** of model data:
 
 1. **Bulk seed (free, baseline).** A hand-typed snapshot of the public
-   LiveBench leaderboard (`2026-06-25`) ships in `seed_capabilities.py`. Seed it
-   in milliseconds for a zero-cost baseline score per model:
+   LiveBench leaderboard (`2026-06-25`) ships in `seed_capabilities.py`.
+   Models that only have subtask-level data (e.g. `gpt-5.6-terra`,
+   `gpt-5.6-luna`, `minimax-m3`) get their top-level category scores derived
+   from their subtask rows. Seed it in milliseconds for a zero-cost baseline
+   score per model:
 
    ```bash
    # in the container: seed registry + LiveBench snapshot
