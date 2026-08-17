@@ -213,6 +213,35 @@ class TestAuthEnforcement:
 # API Key endpoint tests
 # ═══════════════════════════════════════════════════════════════════════
 
+class TestCapabilityImportEndpoint:
+    """POST /api/models/capability/import — UI-driven dataset import."""
+
+    def test_import_endpoint(self, temp_db):
+        h = TestHandler(path="/api/models/capability/import", method="POST",
+                        engine=temp_db, body="{}")
+        h.do_POST()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert body.get("ok") is True
+        assert body.get("materialized", 0) > 0
+
+    def test_import_endpoint_seeds_missing_models(self, temp_db):
+        """The UI import path materializes top-level rows for subtask-only models."""
+        h = TestHandler(path="/api/models/capability/import", method="POST",
+                        engine=temp_db, body="{}")
+        h.do_POST()
+        assert _status(h) == 200
+
+        from src.api.models import ModelCapability, get_session
+        session = get_session(temp_db)
+        try:
+            for model in ("gpt-5.6-luna", "gpt-5.6-terra", "minimax-m3"):
+                rows = session.query(ModelCapability).filter_by(model=model).all()
+                assert rows, f"{model} should have top-level rows after import"
+        finally:
+            session.close()
+
+
 class TestKeyEndpoints:
     def test_list_keys(self, temp_db):
         from src.api.key_manager import init_key_manager

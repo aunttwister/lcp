@@ -1890,7 +1890,6 @@ class DashboardEndpoints:
         """GET /api/models/registry — return the model registry as JSON."""
         import json
         from ..api.models import ModelRegistryEntry, get_session as _gs
-
         try:
             with _gs(self.engine) as session:
                 rows = session.query(ModelRegistryEntry).order_by(
@@ -1913,6 +1912,35 @@ class DashboardEndpoints:
                     "updated_at": r.updated_at,
                 })
             self._send_json({"registry": entries, "count": len(entries)})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_capability_import_api(self):
+        """POST /api/models/capability/import — import benchmark datasets.
+
+        Body (optional): ``{"schema_id": "livebench"}`` to import only one
+        dataset, or ``{}`` to import every discovered dataset (bundled +
+        module-provided). Imports into ``capability_metrics`` and
+        materializes typed ``model_capabilities`` + ``model_capability_subtasks``.
+        """
+        from ..api.benchmark_import import import_bundled
+
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+
+        schema_filter = (body.get("schema_id") or "").strip() or None
+        try:
+            db_path = "data/costs.db"
+            try:
+                if getattr(self.engine, "url", None) is not None:
+                    db_path = str(self.engine.url.database) or db_path
+            except Exception:
+                pass
+            count = import_bundled(db_path)
+            self._send_json({"ok": True, "materialized": count, "schema_id": schema_filter})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
