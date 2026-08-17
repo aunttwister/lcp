@@ -60,6 +60,20 @@ LIVEBENCH_DATA: dict[str, dict[str, dict[str, float]]] = {
             "instruction_following": 75.8, "overall": 83.0,
         },
     },
+    "claude-sonnet-5": {
+        "2026-06-25": {
+            "reasoning": 88.7, "coding": 80.7, "agentic_coding": 59.4,
+            "math": 92.9, "data_analysis": 71.7, "language": 75.0,
+            "instruction_following": 63.9, "overall": 76.0,
+        },
+    },
+    "claude-opus-5": {
+        "2026-06-25": {
+            "reasoning": 91.2, "coding": 81.4, "agentic_coding": 65.2,
+            "math": 95.7, "data_analysis": 74.6, "language": 88.7,
+            "instruction_following": 63.8, "overall": 80.1,
+        },
+    },
     "gpt-5.6-sol": {
         "2026-06-25": {
             "reasoning": 91.7, "coding": 83.9, "agentic_coding": 56.2,
