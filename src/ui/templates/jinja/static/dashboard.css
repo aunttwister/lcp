@@ -1041,7 +1041,7 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 
 .score-list { display: flex; flex-direction: column; gap: 0.375rem; }
 .score-item { display: flex; flex-direction: column; }
-.score-row { display: grid; grid-template-columns: 170px 1fr 52px 90px 16px; gap: 0.5rem; align-items: center; }
+.score-row { display: grid; grid-template-columns: 170px 1fr 52px 16px; gap: 0.5rem; align-items: center; }
 .score-row.clickable { cursor: pointer; border-radius: var(--radius); }
 .score-row.clickable:hover { background: hsl(var(--secondary) / 0.35); }
 .score-row.clickable:hover .score-chev { color: hsl(var(--foreground)); }
@@ -1070,7 +1070,6 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .score-fill.mid { background: #eab308; }
 .score-fill.lo { background: hsl(var(--muted-foreground)); }
 .score-pct { font-size: 0.6875rem; font-variant-numeric: tabular-nums; text-align: right; color: hsl(var(--foreground)); }
-.score-src { font-size: 0.625rem; color: hsl(var(--muted-foreground)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .bench-run-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 
@@ -1078,7 +1077,6 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   .models-layout { grid-template-columns: 1fr; }
   .models-sidebar { position: static; }
   .score-row { grid-template-columns: 120px 1fr 48px 16px; }
-  .score-src { display: none; }
 }
 
 /* ── First-run setup wizard ─────────────────────────────────────────────── */

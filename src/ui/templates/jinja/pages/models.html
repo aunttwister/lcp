@@ -530,7 +530,6 @@ function renderDetail(model) {
               <span class="score-task" title="${s.task}">${s.task.replace(/_/g, ' ')}</span>
               <div class="score-track"><div class="score-fill ${s.score >= 0.8 ? 'hi' : s.score >= 0.6 ? 'mid' : 'lo'}" style="width:${(s.score * 100).toFixed(0)}%"></div></div>
               <span class="score-pct">${(s.score * 100).toFixed(1)}%</span>
-              <span class="score-src" title="source: ${s.source}, category: ${s.category}${s.release ? ', release: ' + s.release : ''}">${s.source}${s.release ? ' @ ' + s.release : ''}</span>
               ${chev}
             </div>
             ${groups.length ? subtaskPanelHtml(groups) : ''}
@@ -549,7 +548,6 @@ function renderDetail(model) {
               <span class="score-task" title="${groupLabel(g.lb)}">${groupLabel(g.lb)}</span>
               <div class="score-track"></div>
               <span class="score-pct"></span>
-              <span class="score-src"></span>
               <span class="score-chev">▸</span>
             </div>
             ${subtaskPanelHtml([g])}
