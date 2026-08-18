@@ -1,15 +1,24 @@
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-brand">LCP</div>
   <nav class="sidebar-nav">
+    <div class="nav-label">Monitor</div>
     <a href="/dashboard"{% if active_page == 'dashboard' %} class="active"{% endif %}>Dashboard</a>
-    <a href="/keys"{% if active_page == 'keys' %} class="active"{% endif %}>API Keys</a>
-    <a href="/providers"{% if active_page == 'providers' %} class="active"{% endif %}>Providers</a>
     <a href="/usage"{% if active_page == 'usage' %} class="active"{% endif %}>Usage</a>
-    <div class="sb-provider-rows" id="providerPluginRows"></div>
+    <div class="nav-label sb-prov-toggle" id="usageSubmenuToggle" role="button" tabindex="0" aria-expanded="true">
+      <span>Provider usage</span>
+      <span class="sb-prov-chev">▾</span>
+    </div>
+    <div class="sb-usage-submenu" id="usageSubmenu"></div>
     <a href="/logs"{% if active_page == 'logs' %} class="active"{% endif %}>Logs</a>
     <a href="/alerts"{% if active_page == 'alerts' %} class="active"{% endif %}>Alerts <span id="sidebarAlertBadge" class="sb-alert-badge" style="display:none">0</span></a>
+
+    <div class="nav-label">Gateway</div>
+    <a href="/providers"{% if active_page == 'providers' %} class="active"{% endif %}>Providers</a>
     <a href="/models"{% if active_page == 'models' %} class="active"{% endif %}>Models</a>
     <a href="/profiles"{% if active_page == 'profiles' %} class="active"{% endif %}>Profiles</a>
+    <a href="/keys"{% if active_page == 'keys' %} class="active"{% endif %}>API Keys</a>
+
+    <div class="nav-label">Admin</div>
     <a href="/setup"{% if active_page == 'setup' %} class="active"{% endif %}>Setup</a>
   </nav>
 </aside>

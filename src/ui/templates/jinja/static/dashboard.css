@@ -623,31 +623,30 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   font-size: 0.625rem; color: hsl(var(--muted-foreground));
 }
 
-/* ── Provider plugin rows under Providers nav ── */
-.sb-provider-rows {
+/* ── Usage submenu (provider links into /usage tabs) ── */
+.sb-usage-submenu {
   padding: 0 0.75rem 0.125rem 1.5rem;
+  display: flex; flex-direction: column;
 }
-.sb-provider-empty {
-  font-size: 0.625rem; color: hsl(var(--muted-foreground));
-  padding: 0.125rem 0;
+.sb-usage-submenu a {
+  padding: 0.3rem 0.75rem; border-radius: var(--radius);
+  font-size: 0.75rem; font-weight: 500; text-decoration: none;
+  color: hsl(var(--muted-foreground)); transition: all 0.15s;
+  margin-bottom: 0.125rem;
 }
-.sb-provider-row {
-  padding: 0.125rem 0;
-  border-radius: var(--radius);
-  transition: background 0.1s;
+.sb-usage-submenu a:hover { background: hsl(var(--secondary)); color: hsl(var(--foreground)); }
+.sb-usage-submenu a.active { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.sb-usage-submenu.collapsed { display: none; }
+
+/* ── Usage submenu collapse toggle ── */
+.sb-prov-toggle {
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between;
+  user-select: none;
 }
-.sb-provider-row:hover { background: hsl(var(--secondary) / 0.4); }
-.sb-provider-name {
-  font-weight: 600; font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 0.625rem; color: hsl(var(--foreground));
-}
-.sb-provider-detail {
-  display: block;
-  font-size: 0.5rem; color: hsl(var(--muted-foreground));
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  opacity: 0.75; line-height: 1.4;
-  padding-left: 0.125rem;
-}
+.sb-prov-toggle:hover { color: hsl(var(--foreground)); }
+.sb-prov-toggle .sb-prov-chev { transition: transform 0.15s; }
+.sb-prov-toggle.collapsed .sb-prov-chev { transform: rotate(-90deg); }
 
 /* ── Sidebar alert badge ── */
 .sb-alert-badge {

@@ -43,3 +43,52 @@ function closeSidebar() {
   pollAlertBadge();
   setInterval(pollAlertBadge, 15000);
 })();
+
+// Usage submenu — provider links deep-link into the /usage page tabs.
+(function() {
+  var KEY = 'lcp-prov-usage';
+  var toggle = document.getElementById('usageSubmenuToggle');
+  var menu = document.getElementById('usageSubmenu');
+  if (!toggle || !menu) return;
+
+  var provs = (typeof configuredProviders !== 'undefined' && Array.isArray(configuredProviders)) ? configuredProviders : [];
+  if (!provs.length) {
+    toggle.style.display = 'none';
+    menu.style.display = 'none';
+    return;
+  }
+
+  menu.innerHTML = provs.map(function(p) {
+    return '<a href="/usage#' + encodeURIComponent(p) + '">' + p + '</a>';
+  }).join('');
+
+  function syncActive() {
+    var hashProv = (window.location.hash || '').replace(/^#/, '');
+    menu.querySelectorAll('a').forEach(function(a) {
+      a.classList.toggle('active', a.getAttribute('href') === '/usage#' + hashProv);
+    });
+  }
+
+  function apply(state) {
+    var collapsed = state === 'collapsed';
+    toggle.classList.toggle('collapsed', collapsed);
+    menu.classList.toggle('collapsed', collapsed);
+    toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  }
+
+  apply(localStorage.getItem(KEY) || 'expanded');
+  syncActive();
+
+  toggle.addEventListener('click', function () {
+    var next = menu.classList.contains('collapsed') ? 'expanded' : 'collapsed';
+    localStorage.setItem(KEY, next);
+    apply(next);
+  });
+  toggle.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggle.click();
+    }
+  });
+  window.addEventListener('hashchange', syncActive);
+})();

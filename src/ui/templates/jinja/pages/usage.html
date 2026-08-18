@@ -612,7 +612,18 @@ window.applyDateRange = function(btnEl, provider, range) {
         });
 };
 
-buildPage(configuredProviders).catch(function(e) {
+// Deep-link support: /usage#<provider> opens that provider's tab.
+function applyHashProvider() {
+    var hashProv = (window.location.hash || '').replace(/^#/, '');
+    if (hashProv && configuredProviders.indexOf(hashProv) !== -1) {
+        switchTab(hashProv);
+    }
+}
+window.addEventListener('hashchange', applyHashProvider);
+
+buildPage(configuredProviders).then(function() {
+    applyHashProvider();
+}).catch(function(e) {
     console.error('Failed to load usage page', e);
 });
 {% endraw %}
