@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1332%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-1336%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -298,15 +298,16 @@ LCP also falls back to `run_livebench.py` on `PATH`.
 Running full 150-question LiveBench on every model is expensive. LCP therefore
 supports **three tiers** of model data:
 
-1. **Bulk seed (free, baseline).** A JSON snapshot of the public
-   LiveBench leaderboard (`2026-06-25`) ships in
-   `src/api/data/livebench_2026_06_25.json`. The import pipeline
-   (`src/api/benchmark_import.py`) reads it into the `capability_metrics`
-   table and materializes the typed `model_capabilities` +
-   `model_capability_subtasks` rows the router and Models page query. Models
-   that only have subtask-level data (e.g. `gpt-5.6-terra`, `gpt-5.6-luna`,
-   `minimax-m3`) get their top-level category scores derived from their
-   subtask rows. Seed it in milliseconds for a zero-cost baseline per model:
+1. **Bulk seed (free, baseline).** A snapshot of the public LiveBench
+   leaderboard (`2026-06-25`) ships in
+   `src/api/data/table_2026_06_25.csv` (the raw LiveBench task table). The
+   import pipeline (`src/api/benchmark_import.py`) reads it into the
+   `capability_metrics` table and materializes the typed `model_capabilities`
+   + `model_capability_subtasks` rows the router and Models page query.
+   Top-level category scores are derived from the per-subtask rows (same
+   aggregation livebench.ai uses), so models that only have subtask-level
+   data get their top-level scores derived automatically. Seed it in
+   milliseconds for a zero-cost baseline per model:
 
    ```bash
    # in the container: seed registry + LiveBench snapshot
@@ -318,12 +319,13 @@ supports **three tiers** of model data:
    python -m src.api.benchmark_import --db /app/data/costs.db --file path/to/dataset.json
    ```
 
-   **Modular datasets.** The importer reads JSON from two places: bundled
-   files under `src/api/data/*.json`, and any installable module under
-   `LCP_MODULES_DIR` (default `/opt/lcp-modules`) that ships a
-   `data/*.json` file. A module dataset with the same `schema_id` overrides
-   the bundled one, so benchmark plugins can drop in their own leaderboard
-   data without forking LCP.
+   **Modular datasets.** The importer reads datasets from two places:
+   bundled files under `src/api/data/*.csv` (LiveBench task table) and
+   `src/api/data/*.json`, and any installable module under `LCP_MODULES_DIR`
+   (default `/opt/lcp-modules`) that ships a `data/*.csv` or `data/*.json`
+   file. A module dataset with the same `schema_id` overrides the bundled
+   one, so benchmark plugins can drop in their own leaderboard data without
+   forking LCP.
 
    **Upload a dataset from the UI.** On the Models page, the **Import**
    button opens a file picker — choose any JSON dataset (bundled shape
@@ -446,13 +448,13 @@ Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 1332 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
+| `pytest` | Test runner — 1336 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**95% overall** — 5,879 of 6,218 statements covered (1332 tests, 0 integration tests).
+**95% overall** — 5,879 of 6,218 statements covered (1336 tests, 0 integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 

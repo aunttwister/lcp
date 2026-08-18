@@ -33,7 +33,9 @@ CLI::
 
 from __future__ import annotations
 
+import csv
 import glob
+import io
 import json
 import os
 from datetime import datetime, timezone
@@ -56,6 +58,91 @@ CATEGORY_ORDER = (
     "data_analysis", "language", "instruction_following",
 )
 
+# LiveBench task column → LCP canonical category. Mirrors
+# ``benchmark.LIVEBENCH_TASK_CATEGORIES`` (kept local so the importer does not
+# import the heavyweight benchmark runner). Unknown tasks fall under "_all"
+# and are skipped for the bundled snapshot.
+TASK_CATEGORIES: dict[str, str] = {
+    "theory_of_mind": "reasoning",
+    "zebra_puzzle": "reasoning",
+    "spatial": "reasoning",
+    "logic_with_navigation": "reasoning",
+    "web_of_lies_v2": "reasoning",
+    "house_traversal": "reasoning",
+    "code_generation": "coding",
+    "code_completion": "coding",
+    "lcb_generation": "coding",
+    "javascript": "agentic_coding",
+    "typescript": "agentic_coding",
+    "python": "agentic_coding",
+    "amps_hard": "math",
+    "integrals_with_game": "math",
+    "math_comp": "math",
+    "olympiad": "math",
+    "consecutive_events": "data_analysis",
+    "table_join": "data_analysis",
+    "table_reformat": "data_analysis",
+    "cta": "data_analysis",
+    "connections": "language",
+    "plot_unscrambling": "language",
+    "typos": "language",
+    "paraphrase": "instruction_following",
+    "simplify": "instruction_following",
+    "story_generation": "instruction_following",
+    "summarize": "instruction_following",
+}
+
+# The CSV column names use ``tablejoin``/``tablereformat`` while LCP's task
+# keys use ``table_join``/``table_reformat``; normalize on parse.
+_CSV_TASK_NORMALIZE = {
+    "tablejoin": "table_join",
+    "tablereformat": "table_reformat",
+}
+
+# Curated LiveBench CSV model key → LCP logical benchmark key. Only models in
+# this map are imported (keeps the matrix to the curated provider models rather
+# than all 44 leaderboard rows). Duplicate name spellings in the old JSON
+# (claude-5-opus-thinking == claude-opus-5, qwen3.8-max == qwen-3.8-max) are
+# collapsed to the single canonical benchmark key.
+CSV_MODEL_ALIASES: dict[str, str] = {
+    "deepseek-v4-pro-0813": "deepseek-v4-pro",
+    "deepseek-v4-flash-0731": "deepseek-v4-flash",
+    "claude-sonnet-5-xhigh-effort": "claude-sonnet-5",
+    "claude-fable-5-max-effort": "claude-fable-5",
+    "claude-opus-5-max-effort": "claude-opus-5",
+    "gpt-5.5-xhigh": "gpt-5.5-thinking",
+    "gpt-5.6-sol-max": "gpt-5.6-sol",
+    "gpt-5.6-terra-max": "gpt-5.6-terra",
+    "gpt-5.6-luna-max": "gpt-5.6-luna",
+    "kimi-k3": "kimi-k3",
+    "minimax-m3": "minimax-m3",
+    "qwen3.8-max": "qwen-3.8-max",
+    "qwen3.6-27b": "qwen3.6-27b-q4_k_m",
+    "grok-4.5": "grok-4.5",
+    "gemini-3.6-flash-high": "gemini-3.6-flash",
+    "smaug-agentic": "smaug-agentic",
+}
+
+# Top-level row release label per logical key. Most models use the leaderboard
+# snapshot date; dated builds keep their model-version label (mirrors the old
+# JSON's ``releases`` keys).
+MODEL_TOP_LEVEL_RELEASE: dict[str, str] = {
+    "deepseek-v4-pro": "2026-08-13",
+    "deepseek-v4-flash": "2026-07-31",
+}
+
+
+def normalize_csv_model_key(key: str) -> Optional[str]:
+    """Map a LiveBench CSV model key to its LCP logical key (or None to skip).
+
+    Curated alias map only — unmapped rows are skipped so the matrix stays
+    curated (effort/version variants are deliberately not tracked).
+    """
+    key = (key or "").strip()
+    if not key:
+        return None
+    return CSV_MODEL_ALIASES.get(key)
+
 
 def modules_dir() -> str:
     """Return the configured module install root (env or default)."""
@@ -63,17 +150,19 @@ def modules_dir() -> str:
 
 
 def discover_files(modules_root: Optional[str] = None) -> list[str]:
-    """Return dataset JSON paths — bundled first, then module-provided.
+    """Return dataset paths — bundled first, then module-provided.
 
-    Bundled files are listed first; module files later so that (in
-    ``import_bundled``) a module dataset with the same ``schema_id``
-    overrides the bundled one.
+    Bundled files (CSV + JSON) are listed first; module files later so that (in
+    ``import_bundled``) a module dataset with the same ``schema_id`` overrides
+    the bundled one.
     """
     files: list[str] = []
     if os.path.isdir(BUNDLED_DATA_DIR):
+        files.extend(sorted(glob.glob(os.path.join(BUNDLED_DATA_DIR, "*.csv"))))
         files.extend(sorted(glob.glob(os.path.join(BUNDLED_DATA_DIR, "*.json"))))
     root = modules_root if modules_root is not None else modules_dir()
     if root and os.path.isdir(root):
+        files.extend(sorted(glob.glob(os.path.join(root, "**", "data", "*.csv"), recursive=True)))
         files.extend(sorted(glob.glob(os.path.join(root, "**", "data", "*.json"), recursive=True)))
     return files
 
@@ -163,6 +252,129 @@ def parse_payload(payload: dict) -> tuple[str, str, list[dict]]:
                     add(model, release_label, category, None, value)
 
     return schema_id, release_label, rows
+
+
+def parse_livebench_csv(csv_text: str, schema_id: str = "livebench",
+                        release_label: str = "2026-06-25") -> tuple[str, str, list[dict]]:
+    """Parse LiveBench's ``table_<release>.csv`` into metric rows.
+
+    The CSV has one row per model and one column per task. Top-level category
+    scores are DERIVED from subtask averages (same as
+    ``derive_category_scores``) — the CSV is subtask-first. Returns the same
+    ``(schema_id, release_label, rows)`` shape as ``parse_payload``.
+
+    Models are normalized via :func:`normalize_csv_model_key` (curated aliases
+    first, suffix-stripping fallback); unmapped rows are skipped.
+    """
+    reader = csv.DictReader(io.StringIO(csv_text))
+    if reader.fieldnames is None:
+        return schema_id, release_label, []
+
+    rows: list[dict] = []
+
+    def add(model: str, rel: str, category: str, task: Optional[str], value: float) -> None:
+        rows.append({
+            "schema_id": schema_id,
+            "release_label": rel,
+            "model": model,
+            "category": category,
+            "task": task,
+            "value": value,
+            "source": "livebench",
+        })
+
+    for csv_row in reader:
+        raw_key = (csv_row.get("model") or "").strip()
+        model = normalize_csv_model_key(raw_key)
+        if not model:
+            continue
+
+        subtasks: dict[str, dict[str, float]] = {}
+        for column, raw in csv_row.items():
+            if column == "model" or column is None:
+                continue
+            value = _to_float(raw)
+            if value is None:
+                continue
+            task = column.strip().lower()
+            task = _CSV_TASK_NORMALIZE.get(task, task)
+            category = TASK_CATEGORIES.get(task)
+            if category is None or category == "_all":
+                continue
+            subtasks.setdefault(category, {})[task] = value
+
+        if not subtasks:
+            continue
+
+        # Subtask rows keyed to the dataset snapshot date.
+        for category, tasks in subtasks.items():
+            for task, value in tasks.items():
+                add(model, release_label, category, task, value)
+
+        # Top-level rows derived from subtask averages (includes "overall").
+        # Top-level release label is the model version for dated builds, else
+        # the dataset snapshot date.
+        top_rel = MODEL_TOP_LEVEL_RELEASE.get(model, release_label)
+        for category, value in derive_category_scores(subtasks).items():
+            add(model, top_rel, category, None, value)
+
+    return schema_id, release_label, rows
+
+
+def import_csv_file(
+    db_path: str,
+    path: str,
+    release: Optional[str] = None,
+    materialize_capabilities: bool = True,
+    materialize_subtasks: bool = True,
+    dry_run: bool = False,
+) -> int:
+    """Import a single LiveBench CSV file from disk."""
+    with open(path, "r", encoding="utf-8") as f:
+        csv_text = f.read()
+    return import_csv_string(
+        db_path, csv_text,
+        release=release,
+        materialize_capabilities=materialize_capabilities,
+        materialize_subtasks=materialize_subtasks,
+        dry_run=dry_run,
+    )
+
+
+def import_csv_string(
+    db_path: str,
+    csv_text: str,
+    release: Optional[str] = None,
+    materialize_capabilities: bool = True,
+    materialize_subtasks: bool = True,
+    dry_run: bool = False,
+) -> int:
+    """Import a parsed LiveBench CSV text."""
+    from .models import CapabilityMetric, get_session
+
+    schema_id, _, rows = parse_livebench_csv(csv_text)
+    if not rows:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+
+    engine = _engine(db_path)
+    if dry_run:
+        return len(rows)
+
+    with get_session(engine) as session:
+        session.query(CapabilityMetric).filter(
+            CapabilityMetric.schema_id == schema_id
+        ).delete(synchronize_session=False)
+        for row in rows:
+            session.add(CapabilityMetric(updated_at=now, **row))
+        session.commit()
+
+    count = 0
+    if materialize_capabilities:
+        count += materialize_capability_rows(engine, schema_id=schema_id, release=release)
+    if materialize_subtasks:
+        count += materialize_subtask_rows(engine, schema_id=schema_id, release=release)
+    return count
 
 
 def _engine(db_path: str):
@@ -259,32 +471,55 @@ def import_bundled(
 ) -> int:
     """Import all discovered datasets (bundled + module-provided).
 
-    When a module dataset shares a ``schema_id`` with a bundled one, the
-    module's file wins (it is discovered later and overrides).
+    Supports both CSV (LiveBench ``table_*.csv``) and JSON datasets. When a
+    module dataset shares a ``schema_id`` with a bundled one, the module's file
+    wins (it is discovered later and overrides). A JSON dataset for the same
+    ``schema_id`` overrides a CSV one (JSON is the richer, explicit format).
     """
-    by_schema: dict[str, dict] = {}
+    by_schema: dict[str, tuple[str, str]] = {}  # schema_id -> (kind, text)
     for path in discover_files():
         try:
             with open(path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-        except (OSError, json.JSONDecodeError) as exc:
+                text = f.read()
+        except OSError as exc:
+            logger.warning("benchmark_import_skip", path=path, error=str(exc))
+            continue
+        if path.endswith(".csv"):
+            # CSV: schema_id is "livebench"; a module CSV overrides a bundled
+            # CSV for the same schema_id (JSON still wins if also present).
+            by_schema.setdefault("livebench", ("csv", text))
+            continue
+        # JSON dataset.
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
             logger.warning("benchmark_import_skip", path=path, error=str(exc))
             continue
         schema_id = str(payload.get("schema_id") or "").strip()
         if not schema_id:
             logger.warning("benchmark_import_no_schema", path=path)
             continue
-        by_schema[schema_id] = payload
+        by_schema[schema_id] = ("json", text)
 
     total = 0
-    for payload in by_schema.values():
-        total += import_payload(
-            db_path, payload,
-            release=release,
-            materialize_capabilities=materialize_capabilities,
-            materialize_subtasks=materialize_subtasks,
-            dry_run=dry_run,
-        )
+    for kind, text in by_schema.values():
+        if kind == "csv":
+            total += import_csv_string(
+                db_path, text,
+                release=release,
+                materialize_capabilities=materialize_capabilities,
+                materialize_subtasks=materialize_subtasks,
+                dry_run=dry_run,
+            )
+        else:
+            payload = json.loads(text)
+            total += import_payload(
+                db_path, payload,
+                release=release,
+                materialize_capabilities=materialize_capabilities,
+                materialize_subtasks=materialize_subtasks,
+                dry_run=dry_run,
+            )
     return total
 
 

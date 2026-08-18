@@ -9,6 +9,9 @@ from src.api.benchmark_import import (
     discover_files,
     import_bundled,
     import_file,
+    import_csv_file,
+    normalize_csv_model_key,
+    parse_livebench_csv,
     parse_payload,
 )
 
@@ -82,9 +85,80 @@ def test_parse_payload_requires_schema():
         parse_payload({"models": {}})
 
 
+# ── CSV parsing ─────────────────────────────────────────────────────────────
+
+def _csv_text():
+    return (
+        "model,AMPS_Hard,code_generation,code_completion,theory_of_mind,zebra_puzzle,"
+        "javascript,python,typescript,connections,typos,summarize,story_generation,"
+        "simplify,paraphrase,consecutive_events,tablejoin,tablereformat,"
+        "integrals_with_game,math_comp,olympiad,logic_with_navigation,spatial,plot_unscrambling\n"
+        "gpt-5.5-xhigh,98.0,82.609,81.69,84.615,100.0,63.636,55.0,43.333,100.0,88.0,"
+        "72.317,72.55,66.317,71.733,88.823,55.904,100.0,99.0,96.078,91.351,76.0,98.0,74.089\n"
+        "claude-opus-5-max-effort,99.01,80.282,82.609,78.846,100.0,77.273,75.0,43.333,"
+        "99.333,92.0,66.433,61.317,61.583,65.733,77.571,51.962,94.118,97.0,94.118,92.796,"
+        "86.0,100.0,74.731\n"
+        "unmapped-model,1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,11.0,12.0,13.0,14.0,"
+        "15.0,16.0,17.0,18.0,19.0,20.0,21.0,22.0,23.0\n"
+    )
+
+
+def test_parse_livebench_csv_normalizes_and_derives():
+    schema, rel, rows = parse_livebench_csv(_csv_text())
+    assert schema == "livebench"
+    assert rel == "2026-06-25"
+    models = {r["model"] for r in rows}
+    assert "gpt-5.5-thinking" in models
+    assert "claude-opus-5" in models
+    assert "unmapped-model" not in models
+
+    # Subtask rows exist for the thinking models.
+    subs = {(r["model"], r["category"], r["task"]) for r in rows if r["task"] is not None}
+    assert ("gpt-5.5-thinking", "reasoning", "theory_of_mind") in subs
+    assert ("claude-opus-5", "reasoning", "zebra_puzzle") in subs
+
+    # Top-level rows derived from subtask averages.
+    top = {(r["model"], r["category"]) for r in rows if r["task"] is None}
+    assert ("gpt-5.5-thinking", "overall") in top
+    assert ("gpt-5.5-thinking", "reasoning") in top
+
+
+def test_parse_livebench_csv_empty():
+    schema, rel, rows = parse_livebench_csv("model,foo\n")
+    assert schema == "livebench"
+    assert rows == []
+
+
+def test_normalize_csv_model_key():
+    assert normalize_csv_model_key("gpt-5.5-xhigh") == "gpt-5.5-thinking"
+    assert normalize_csv_model_key("claude-opus-5-max-effort") == "claude-opus-5"
+    assert normalize_csv_model_key("unmapped-model") is None
+    assert normalize_csv_model_key("") is None
+
+
+def test_import_csv_file_writes_typed_rows(db_path):
+    fd, cpath = tempfile.mkstemp(suffix=".csv")
+    os.close(fd)
+    with open(cpath, "w") as f:
+        f.write(_csv_text())
+
+    import_csv_file(db_path, cpath)
+
+    from src.api.models import ModelCapabilitySubtask, get_engine, get_session
+    engine = get_engine(db_path)
+    session = get_session(engine)
+    try:
+        subs = session.query(ModelCapabilitySubtask).filter_by(model="gpt-5.5-thinking").all()
+        assert subs
+    finally:
+        session.close()
+        engine.dispose()
+        os.unlink(cpath)
+
+
 def test_discover_files_finds_bundled():
     files = discover_files()
-    assert any(f.endswith("livebench_2026_06_25.json") for f in files)
+    assert any(f.endswith("table_2026_06_25.csv") for f in files)
 
 
 def test_import_file_writes_metrics_and_typed_rows(db_path):
@@ -132,6 +206,11 @@ def test_import_bundled_seeds_known_models(db_path):
         # Subtasks exist for deepseek-v4-pro.
         subs = session.query(ModelCapabilitySubtask).filter_by(model="deepseek-v4-pro").all()
         assert subs
+        # The previously-subtask-less thinking models now have subtasks.
+        gpt_thinking = session.query(ModelCapabilitySubtask).filter_by(model="gpt-5.5-thinking").all()
+        assert gpt_thinking
+        opus = session.query(ModelCapabilitySubtask).filter_by(model="claude-opus-5").all()
+        assert opus
     finally:
         session.close()
         engine.dispose()
