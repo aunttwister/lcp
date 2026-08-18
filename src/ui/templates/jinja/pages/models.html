@@ -469,7 +469,6 @@ function renderDetail(model) {
   const providerNames = reg ? (reg.providers || Object.keys(providerMappings)) : [];
   const updatedAt = reg ? (reg.updated_at || '').replace('T', ' ').slice(0, 19) : null;
   const provs = providerModels()[canonical] || [];
-  const defaultProvider = provs[0] || '';
 
   const displayName = quantization && !canonical.toUpperCase().includes(quantization.toUpperCase())
     ? `${canonical}-${quantization.toLowerCase()}`
@@ -570,7 +569,7 @@ function renderDetail(model) {
 
     <div class="model-section">
       <h4>Benchmark</h4>
-      ${benchSection(model, defaultProvider)}
+      ${benchSection(model, provs)}
       <div class="table-wrap" style="margin-top:0.75rem">
         <table class="capability-table bench-table">
           <thead><tr><th>ID</th><th>Categories</th><th>Status</th><th>Started</th><th>Result</th><th></th></tr></thead>
@@ -621,7 +620,7 @@ function renderDetail(model) {
   });
 }
 
-function benchSection(model, defaultProvider) {
+function benchSection(model, providers) {
   const bench = STATE.bench;
   if (!bench || !bench.available) {
     const reason = (bench && bench.reason) || 'Benchmark runner not installed.';
@@ -631,8 +630,15 @@ function benchSection(model, defaultProvider) {
   if (bench.coding_supported === false) {
     note = '<span class="seed-status"> (coding category unavailable — install the LiveBench eval extra)</span>';
   }
+  const provList = (providers || []).filter(Boolean);
+  if (!provList.length) {
+    return `<div class="bench-run-row">
+      <span class="seed-status">No provider supports this model — map it to a provider first.</span>
+    </div>`;
+  }
+  const options = provList.map(p => `<option value="${esc(p)}"${provList[0] === p ? ' selected' : ''}>${esc(p)}</option>`).join('');
   return `<div class="bench-run-row">
-    <input type="text" id="benchProvider" placeholder="provider (e.g. deepseek)" class="capability-filter" value="${defaultProvider}">
+    <select id="benchProvider" class="capability-filter">${options}</select>
     <button class="btn btn-outline" id="runBenchBtn">Run benchmark</button>${note}
     <span id="benchStatus" class="seed-status"></span>
   </div>`;
