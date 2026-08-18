@@ -7,7 +7,7 @@ LCPHandler inherits from all of them via multiple inheritance.
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
 
 from ..api.logging_config import get_logger
@@ -143,12 +143,12 @@ def _friendly_provider_error(provider: str, status: int, body: str) -> tuple[str
     return (message, code, etype)
 
 
-def _parse_multipart_upload(body: bytes, content_type: str) -> tuple[bytes, str]:
+def _parse_multipart_upload(body: bytes, content_type: str) -> tuple[bytes, str, str]:
     """Manually parse a ``multipart/form-data`` upload body for the ``file`` field.
 
-    Returns ``(file_bytes, release_value)``. Handles quoted boundaries and the
-    standard ``name="file"`` / ``name="release"`` fields. Raises ``ValueError``
-    on malformed input or a missing file field.
+    Returns ``(file_bytes, release_value, filename)``. Handles quoted
+    boundaries and the standard ``name="file"`` / ``name="release"`` fields.
+    Raises ``ValueError`` on malformed input or a missing file field.
     """
     import re
 
@@ -161,6 +161,7 @@ def _parse_multipart_upload(body: bytes, content_type: str) -> tuple[bytes, str]
     parts = body.split(b"--" + boundary)
     file_bytes: bytes = b""
     release: str = ""
+    filename: str = ""
     found_file = False
 
     for part in parts:
@@ -182,12 +183,15 @@ def _parse_multipart_upload(body: bytes, content_type: str) -> tuple[bytes, str]
         if field_name == "file":
             found_file = True
             file_bytes = payload
+            file_match = re.search(r'filename="([^"]+)"', headers_text)
+            if file_match:
+                filename = file_match.group(1)
         elif field_name == "release":
             release = payload.decode("utf-8", errors="replace").strip()
 
     if not found_file or not file_bytes:
         raise ValueError("missing 'file' field in upload")
-    return file_bytes, release
+    return file_bytes, release, filename
 
 
 # ── Health / Monitoring Endpoints ────────────────────────────────────────────
@@ -1965,20 +1969,14 @@ class DashboardEndpoints:
     def _serve_capability_import_api(self):
         """POST /api/models/capability/import — import a benchmark dataset.
 
-        Two accepted forms:
-
-        1. **File upload** — ``multipart/form-data`` with a ``file`` field
-           containing a JSON dataset (and an optional ``release`` field).
-        2. **Inline JSON** — ``application/json`` body with the full dataset
-           under a ``payload`` key (backward-compatible).
+        Accepts a ``multipart/form-data`` upload with a ``file`` field
+        containing a LiveBench CSV (``table_*.csv``), plus an optional
+        ``release`` field.
 
         The dataset is validated, written into ``capability_metrics``, and
         materialized into typed ``model_capabilities`` +
         ``model_capability_subtasks`` rows.
         """
-        import json
-        from ..api.benchmark_import import import_json_string
-
         db_path = "data/costs.db"
         try:
             if getattr(self.engine, "url", None) is not None:
@@ -1987,36 +1985,42 @@ class DashboardEndpoints:
             pass
 
         content_type = (self.headers.get("Content-Type") or "").lower()
-        release = None
 
-        if "multipart/form-data" in content_type:
-            # Read the raw body and parse the multipart upload manually (the
-            # stdlib cgi module is deprecated and awkward to drive with a mock
-            # rfile; our parser is small and tested).
-            try:
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length) if content_length else b""
-                raw, release = _parse_multipart_upload(body, self.headers.get("Content-Type", ""))
-            except Exception as exc:
-                self._send_json({"error": f"invalid upload: {exc}"}, 400)
-                return
-        else:
-            # Inline JSON body: either a raw payload object or {payload: {...}}.
-            try:
-                body = self._read_body()
-            except Exception:
-                self._send_json({"error": "invalid JSON body"}, 400)
-                return
-            raw = json.dumps(body.get("payload", body))
-            release = (body.get("release") or "").strip() or None
+        if "multipart/form-data" not in content_type:
+            self._send_json({"error": "import requires a multipart CSV upload"}, 400)
+            return
+
+        # Read the raw body and parse the multipart upload manually (the
+        # stdlib cgi module is deprecated and awkward to drive with a mock
+        # rfile; our parser is small and tested).
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length) if content_length else b""
+            raw, release, filename = _parse_multipart_upload(
+                body, self.headers.get("Content-Type", ""))
+        except Exception as exc:
+            self._send_json({"error": f"invalid upload: {exc}"}, 400)
+            return
+
+        if not filename.lower().endswith(".csv"):
+            self._send_json({"error": "only LiveBench CSV uploads are supported"}, 400)
+            return
+
+        return self._import_csv_body(raw, release, db_path)
+
+    def _import_csv_body(self, raw: bytes, release: Optional[str], db_path: str) -> None:
+        """Import a CSV upload (``table_*.csv``) and respond."""
+        from ..api.benchmark_import import import_csv_string
 
         try:
-            payload = json.loads(raw)
-            if not isinstance(payload, dict):
-                raise ValueError("uploaded file must contain a JSON object")
-            count = import_json_string(db_path, payload, release=release)
-            schema_id = payload.get("schema_id")
-            self._send_json({"ok": True, "materialized": count, "schema_id": schema_id})
+            csv_text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            self._send_json({"error": "CSV upload must be UTF-8 text"}, 400)
+            return
+
+        try:
+            count = import_csv_string(db_path, csv_text, release=release)
+            self._send_json({"ok": True, "materialized": count, "schema_id": "livebench"})
         except ValueError as e:
             self._send_json({"error": str(e)}, 400)
         except Exception as e:

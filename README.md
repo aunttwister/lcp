@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1336%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-1331%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -315,37 +315,22 @@ supports **three tiers** of model data:
    # registry only / LiveBench only
    python -m src.api.seed_capabilities --db /app/data/costs.db --registry-only
    python -m src.api.seed_capabilities --db /app/data/costs.db --livebench-only --release 2026-06-25
-   # import a JSON dataset directly (modular installable-module path)
-   python -m src.api.benchmark_import --db /app/data/costs.db --file path/to/dataset.json
+   # import a LiveBench CSV dataset directly
+   python -m src.api.benchmark_import --db /app/data/costs.db --file path/to/table_2026_06_25.csv
    ```
 
-   **Modular datasets.** The importer reads datasets from two places:
-   bundled files under `src/api/data/*.csv` (LiveBench task table) and
-   `src/api/data/*.json`, and any installable module under `LCP_MODULES_DIR`
-   (default `/opt/lcp-modules`) that ships a `data/*.csv` or `data/*.json`
-   file. A module dataset with the same `schema_id` overrides the bundled
-   one, so benchmark plugins can drop in their own leaderboard data without
-   forking LCP.
+   **Modular datasets.** The importer reads LiveBench CSV task tables from two
+   places: bundled files under `src/api/data/*.csv`, and any installable
+   module under `LCP_MODULES_DIR` (default `/opt/lcp-modules`) that ships a
+   `data/*.csv` file. A module dataset overrides the bundled one, so
+   benchmark plugins can drop in their own leaderboard data without forking
+   LCP.
 
    **Upload a dataset from the UI.** On the Models page, the **Import**
-   button opens a file picker — choose any JSON dataset (bundled shape
-   below) and LCP uploads it via `multipart/form-data` to
+   button opens a file picker — choose a LiveBench CSV (`table_*.csv`). LCP
+   uploads it via `multipart/form-data` to
    `POST /api/models/capability/import`, writes `capability_metrics`, and
-   materializes the typed rows. The same endpoint accepts an inline JSON
-   body with the dataset under a `payload` key (and an optional `release`).
-
-   Dataset JSON shape::
-
-       {
-         "schema_id": "livebench",
-         "release_label": "2026-06-25",
-         "models": {
-           "deepseek-v4-pro": {
-             "releases": {"2026-08-13": {"reasoning": 85.8, ...}},
-             "subtasks": {"reasoning": {"theory_of_mind": 84.6, ...}}
-           }
-         }
-       }
+   materializes the typed rows.
 
 2. **Incremental benchmark (accurate, opt-in).** Run LiveBench for a single
    model + release when a new model appears or a new release ships (e.g.
@@ -448,13 +433,13 @@ Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 1336 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
+| `pytest` | Test runner — 1331 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**95% overall** — 5,879 of 6,218 statements covered (1336 tests, 0 integration tests).
+**95% overall** — 5,879 of 6,218 statements covered (1331 tests, 0 integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 

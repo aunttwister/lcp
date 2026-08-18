@@ -1,30 +1,19 @@
-"""Benchmark data import pipeline — JSON datasets → SQLite.
+"""Benchmark data import pipeline — LiveBench CSV → SQLite.
 
-Reads benchmark datasets from JSON files and materializes them into SQLite:
+Reads LiveBench task tables (``table_<release>.csv``) and materializes them
+into SQLite:
 
   ``capability_metrics``            — source-of-truth metric rows
   ``model_capabilities``            — typed top-level scores (router + UI)
   ``model_capability_subtasks``     — typed per-subtask scores (Models page)
 
-JSON files are discovered from two locations:
+CSV files are discovered from two locations:
 
-1. **Bundled** datasets: ``src/api/data/*.json`` (ship with the gateway).
-2. **Installed modules**: ``$LCP_MODULES_DIR/**/data/*.json``. A module that
-   ships a dataset with the same ``schema_id`` OVERRIDES the bundled one, so
-   third-party benchmark plugins can drop in their own data without forking.
-
-A dataset payload looks like::
-
-    {
-      "schema_id": "livebench",
-      "release_label": "2026-06-25",
-      "models": {
-        "deepseek-v4-pro": {
-          "releases": {"2026-08-13": {"reasoning": 85.8, ...}},
-          "subtasks": {"reasoning": {"theory_of_mind": 84.6, ...}}
-        }
-      }
-    }
+1. **Bundled** datasets: ``src/api/data/*.csv`` (ship with the gateway).
+2. **Installed modules**: ``$LCP_MODULES_DIR/**/data/*.csv``. A module that
+   ships a dataset with the same ``schema_id`` (``livebench``) OVERRIDES the
+   bundled one, so third-party benchmark plugins can drop in their own data
+   without forking.
 
 CLI::
 
@@ -36,7 +25,6 @@ from __future__ import annotations
 import csv
 import glob
 import io
-import json
 import os
 from datetime import datetime, timezone
 from typing import Optional
@@ -150,20 +138,18 @@ def modules_dir() -> str:
 
 
 def discover_files(modules_root: Optional[str] = None) -> list[str]:
-    """Return dataset paths — bundled first, then module-provided.
+    """Return dataset CSV paths — bundled first, then module-provided.
 
-    Bundled files (CSV + JSON) are listed first; module files later so that (in
+    Bundled files are listed first; module files later so that (in
     ``import_bundled``) a module dataset with the same ``schema_id`` overrides
     the bundled one.
     """
     files: list[str] = []
     if os.path.isdir(BUNDLED_DATA_DIR):
         files.extend(sorted(glob.glob(os.path.join(BUNDLED_DATA_DIR, "*.csv"))))
-        files.extend(sorted(glob.glob(os.path.join(BUNDLED_DATA_DIR, "*.json"))))
     root = modules_root if modules_root is not None else modules_dir()
     if root and os.path.isdir(root):
         files.extend(sorted(glob.glob(os.path.join(root, "**", "data", "*.csv"), recursive=True)))
-        files.extend(sorted(glob.glob(os.path.join(root, "**", "data", "*.json"), recursive=True)))
     return files
 
 
@@ -174,86 +160,6 @@ def _to_float(value) -> Optional[float]:
         return None
 
 
-def parse_payload(payload: dict) -> tuple[str, str, list[dict]]:
-    """Validate a dataset payload and flatten it into metric rows.
-
-    Returns ``(schema_id, release_label, rows)`` where each row is a dict:
-    ``{schema_id, release_label, model, category, task, value, source}``.
-
-    * Top-level category scores → ``task=None``.
-    * Per-subtask scores → ``task=<task>``.
-    * ``release_label`` on a top-level row is the MODEL VERSION (mirrors
-      ``model_capabilities.release_label``); on a subtask row it is the
-      dataset snapshot date (mirrors ``model_capability_subtasks``).
-    * Models that have subtasks but no ``releases`` get top-level scores
-      DERIVED from their subtask rows.
-    """
-    schema_id = str(payload.get("schema_id") or "").strip()
-    release_label = str(payload.get("release_label") or "").strip()
-    if not schema_id:
-        raise ValueError("dataset payload missing 'schema_id'")
-    if not release_label:
-        raise ValueError("dataset payload missing 'release_label'")
-
-    models = payload.get("models") or {}
-    if not isinstance(models, dict):
-        raise ValueError("dataset payload 'models' must be an object")
-
-    rows: list[dict] = []
-
-    def add(model: str, rel: str, category: str, task: Optional[str], value: float) -> None:
-        rows.append({
-            "schema_id": schema_id,
-            "release_label": rel,
-            "model": model,
-            "category": category,
-            "task": task,
-            "value": value,
-            "source": "livebench",
-        })
-
-    for model, entry in models.items():
-        model = str(model).strip()
-        if not model or not isinstance(entry, dict):
-            continue
-
-        releases = entry.get("releases") or {}
-        if not isinstance(releases, dict):
-            releases = {}
-        for rel, categories in releases.items():
-            rel = str(rel).strip()
-            if not isinstance(categories, dict):
-                continue
-            for category, raw in categories.items():
-                value = _to_float(raw)
-                if value is None:
-                    continue
-                add(model, rel, str(category), None, value)
-
-        subtasks = entry.get("subtasks") or {}
-        if not isinstance(subtasks, dict):
-            subtasks = {}
-        for category, tasks in subtasks.items():
-            if not isinstance(tasks, dict):
-                continue
-            for task, raw in tasks.items():
-                value = _to_float(raw)
-                if value is None:
-                    continue
-                add(model, release_label, str(category), str(task), value)
-
-        # Models with subtasks but no releases get top-level scores derived
-        # from their subtask averages.
-        if subtasks and not releases:
-            for category, value in derive_category_scores(subtasks).items():
-                if category == "overall":
-                    add(model, release_label, "overall", None, value)
-                else:
-                    add(model, release_label, category, None, value)
-
-    return schema_id, release_label, rows
-
-
 def parse_livebench_csv(csv_text: str, schema_id: str = "livebench",
                         release_label: str = "2026-06-25") -> tuple[str, str, list[dict]]:
     """Parse LiveBench's ``table_<release>.csv`` into metric rows.
@@ -261,10 +167,10 @@ def parse_livebench_csv(csv_text: str, schema_id: str = "livebench",
     The CSV has one row per model and one column per task. Top-level category
     scores are DERIVED from subtask averages (same as
     ``derive_category_scores``) — the CSV is subtask-first. Returns the same
-    ``(schema_id, release_label, rows)`` shape as ``parse_payload``.
+    ``(schema_id, release_label, rows)`` shape.
 
-    Models are normalized via :func:`normalize_csv_model_key` (curated aliases
-    first, suffix-stripping fallback); unmapped rows are skipped.
+    Models are normalized via :func:`normalize_csv_model_key` (curated alias
+    map); unmapped rows are skipped.
     """
     reader = csv.DictReader(io.StringIO(csv_text))
     if reader.fieldnames is None:
@@ -385,83 +291,6 @@ def _engine(db_path: str):
     return engine
 
 
-def import_payload(
-    db_path: str,
-    payload: dict,
-    release: Optional[str] = None,
-    materialize_capabilities: bool = True,
-    materialize_subtasks: bool = True,
-    dry_run: bool = False,
-) -> int:
-    """Import one parsed dataset payload into SQLite.
-
-    Writes ``capability_metrics`` (the whole payload snapshot, replacing prior
-    rows for the same ``schema_id``) and then materializes the typed query
-    tables. Returns the number of materialized typed rows.
-    """
-    from .models import CapabilityMetric, get_session
-
-    schema_id, _, rows = parse_payload(payload)
-    now = datetime.now(timezone.utc).isoformat()
-
-    engine = _engine(db_path)
-    if dry_run:
-        return len(rows)
-
-    with get_session(engine) as session:
-        session.query(CapabilityMetric).filter(
-            CapabilityMetric.schema_id == schema_id
-        ).delete(synchronize_session=False)
-        for row in rows:
-            session.add(CapabilityMetric(updated_at=now, **row))
-        session.commit()
-
-    count = 0
-    if materialize_capabilities:
-        count += materialize_capability_rows(engine, schema_id=schema_id, release=release)
-    if materialize_subtasks:
-        count += materialize_subtask_rows(engine, schema_id=schema_id, release=release)
-    return count
-
-
-def import_file(
-    db_path: str,
-    path: str,
-    release: Optional[str] = None,
-    materialize_capabilities: bool = True,
-    materialize_subtasks: bool = True,
-    dry_run: bool = False,
-) -> int:
-    """Import a single JSON file from disk."""
-    with open(path, "r", encoding="utf-8") as f:
-        payload = json.load(f)
-    return import_json_string(
-        db_path, payload,
-        release=release,
-        materialize_capabilities=materialize_capabilities,
-        materialize_subtasks=materialize_subtasks,
-        dry_run=dry_run,
-    )
-
-
-def import_json_string(
-    db_path: str,
-    payload: dict,
-    release: Optional[str] = None,
-    materialize_capabilities: bool = True,
-    materialize_subtasks: bool = True,
-    dry_run: bool = False,
-) -> int:
-    """Import a parsed dataset dict (e.g. from an uploaded JSON file)."""
-    return import_payload(
-        db_path, payload,
-        release=release,
-        materialize_capabilities=materialize_capabilities,
-        materialize_subtasks=materialize_subtasks,
-        dry_run=dry_run,
-    )
-
-
 def import_bundled(
     db_path: str,
     release: Optional[str] = None,
@@ -469,14 +298,12 @@ def import_bundled(
     materialize_subtasks: bool = True,
     dry_run: bool = False,
 ) -> int:
-    """Import all discovered datasets (bundled + module-provided).
+    """Import all discovered LiveBench CSV datasets (bundled + module-provided).
 
-    Supports both CSV (LiveBench ``table_*.csv``) and JSON datasets. When a
-    module dataset shares a ``schema_id`` with a bundled one, the module's file
-    wins (it is discovered later and overrides). A JSON dataset for the same
-    ``schema_id`` overrides a CSV one (JSON is the richer, explicit format).
+    When a module CSV is discovered later for the same ``schema_id``
+    (``livebench``), it overrides the bundled one.
     """
-    by_schema: dict[str, tuple[str, str]] = {}  # schema_id -> (kind, text)
+    text: Optional[str] = None
     for path in discover_files():
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -484,43 +311,18 @@ def import_bundled(
         except OSError as exc:
             logger.warning("benchmark_import_skip", path=path, error=str(exc))
             continue
-        if path.endswith(".csv"):
-            # CSV: schema_id is "livebench"; a module CSV overrides a bundled
-            # CSV for the same schema_id (JSON still wins if also present).
-            by_schema.setdefault("livebench", ("csv", text))
-            continue
-        # JSON dataset.
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError as exc:
-            logger.warning("benchmark_import_skip", path=path, error=str(exc))
-            continue
-        schema_id = str(payload.get("schema_id") or "").strip()
-        if not schema_id:
-            logger.warning("benchmark_import_no_schema", path=path)
-            continue
-        by_schema[schema_id] = ("json", text)
+        # Later files (module overrides) win.
+        text = text
 
-    total = 0
-    for kind, text in by_schema.values():
-        if kind == "csv":
-            total += import_csv_string(
-                db_path, text,
-                release=release,
-                materialize_capabilities=materialize_capabilities,
-                materialize_subtasks=materialize_subtasks,
-                dry_run=dry_run,
-            )
-        else:
-            payload = json.loads(text)
-            total += import_payload(
-                db_path, payload,
-                release=release,
-                materialize_capabilities=materialize_capabilities,
-                materialize_subtasks=materialize_subtasks,
-                dry_run=dry_run,
-            )
-    return total
+    if text is None:
+        return 0
+    return import_csv_string(
+        db_path, text,
+        release=release,
+        materialize_capabilities=materialize_capabilities,
+        materialize_subtasks=materialize_subtasks,
+        dry_run=dry_run,
+    )
 
 
 def _metric_rows(engine, schema_id: Optional[str], release: Optional[str],
@@ -629,15 +431,15 @@ def _default_db_path() -> str:
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Import benchmark datasets from JSON into SQLite")
+    parser = argparse.ArgumentParser(description="Import LiveBench CSV datasets into SQLite")
     parser.add_argument("--db", default=_default_db_path(), help="path to SQLite DB")
-    parser.add_argument("--file", default=None, help="import a single JSON file (default: all discovered datasets)")
+    parser.add_argument("--file", default=None, help="import a single CSV file (default: all discovered datasets)")
     parser.add_argument("--release", default=None, help="only materialize this release label")
     parser.add_argument("--dry-run", action="store_true", help="parse + report without writing")
     args = parser.parse_args()
 
     if args.file:
-        count = import_file(args.db, args.file, release=args.release, dry_run=args.dry_run)
+        count = import_csv_file(args.db, args.file, release=args.release, dry_run=args.dry_run)
         print(f"Imported {count} materialized rows from {args.file}")
         return
 

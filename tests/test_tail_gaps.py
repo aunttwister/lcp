@@ -58,29 +58,22 @@ class TestLoadRegistryBadJson:
 
 class TestImportOverallBranch:
     def test_import_subtask_only_derives_overall(self, db_path):
-        from src.api.benchmark_import import import_payload
+        from src.api.benchmark_import import import_csv_string
         from src.api.models import CapabilityMetric, get_engine, get_session
-        payload = {
-            "schema_id": "livebench",
-            "release_label": "2026-06-25",
-            "models": {"m": {"subtasks": {"reasoning": {"theory_of_mind": 100.0}}}},
-        }
-        import_payload(db_path, payload, materialize_capabilities=False)
+        csv_text = "model,theory_of_mind\ngpt-5.5-xhigh,100.0\n"
+        import_csv_string(db_path, csv_text, materialize_capabilities=False)
         engine = get_engine(db_path)
         with get_session(engine) as session:
             overall = session.query(CapabilityMetric).filter_by(
-                model="m", category="overall", task=None
+                model="gpt-5.5-thinking", category="overall", task=None
             ).first()
             assert overall is not None
             assert overall.value == 100.0
 
     def test_cli_file_print(self, db_path, tmp_path, capsys):
         from src.api.benchmark_import import main
-        jf = tmp_path / "d.json"
-        jf.write_text(json.dumps({
-            "schema_id": "x", "release_label": "r",
-            "models": {"m": {"releases": {"r": {"coding": 90.0}}}},
-        }))
+        jf = tmp_path / "d.csv"
+        jf.write_text("model,code_generation\ngpt-5.5-xhigh,90.0\n")
         with patch("sys.argv", ["benchmark_import", "--db", db_path, "--file", str(jf)]):
             main()
         out = capsys.readouterr().out

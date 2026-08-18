@@ -62,11 +62,8 @@ class TestSeedCli:
 class TestImportCli:
     def test_cli_file(self, db_path, capsys, tmp_path):
         from src.api.benchmark_import import main
-        jf = tmp_path / "d.json"
-        jf.write_text(json.dumps({
-            "schema_id": "x", "release_label": "r",
-            "models": {"m": {"releases": {"r": {"coding": 90.0}}}},
-        }))
+        jf = tmp_path / "d.csv"
+        jf.write_text("model,code_generation,theory_of_mind\ngpt-5.5-xhigh,82.609,84.615\n")
         with patch("sys.argv", ["benchmark_import", "--db", db_path, "--file", str(jf)]):
             main()
         out = capsys.readouterr().out
@@ -81,41 +78,37 @@ class TestImportCli:
         assert "dataset file(s)" in out
 
 
-# ── benchmark_import parse edge cases (remaining branches) ──────────────────
+# ── benchmark_import CSV parse edge cases (remaining branches) ───────────────
 
 class TestParseBranches:
-    def test_parse_missing_release_label(self):
-        from src.api.benchmark_import import parse_payload
-        with pytest.raises(ValueError, match="release_label"):
-            parse_payload({"schema_id": "x", "models": {}})
-
-    def test_parse_models_not_dict(self):
-        from src.api.benchmark_import import parse_payload
-        with pytest.raises(ValueError, match="must be an object"):
-            parse_payload({"schema_id": "x", "release_label": "r", "models": "oops"})
+    def test_parse_empty_csv(self):
+        from src.api.benchmark_import import parse_livebench_csv
+        schema, rel, rows = parse_livebench_csv("model,foo\n")
+        assert schema == "livebench"
+        assert rows == []
 
     def test_parse_non_numeric_skipped(self):
-        from src.api.benchmark_import import parse_payload
-        schema, rel, rows = parse_payload({
-            "schema_id": "x", "release_label": "r",
-            "models": {"m": {"releases": {"r": {"coding": "not-a-number"}}}},
-        })
+        from src.api.benchmark_import import parse_livebench_csv
+        schema, rel, rows = parse_livebench_csv(
+            "model,code_generation\ngpt-5.5-xhigh,not-a-number\n")
         assert rows == []
 
-    def test_parse_empty_model_skipped(self):
-        from src.api.benchmark_import import parse_payload
-        schema, rel, rows = parse_payload({
-            "schema_id": "x", "release_label": "r",
-            "models": {"  ": {"releases": {"r": {"coding": 1.0}}}},
-        })
+    def test_parse_unmapped_model_skipped(self):
+        from src.api.benchmark_import import parse_livebench_csv
+        schema, rel, rows = parse_livebench_csv(
+            "model,code_generation\nunmapped-model,90.0\n")
         assert rows == []
 
-    def test_parse_bad_release_dict_skipped(self):
-        from src.api.benchmark_import import parse_payload
-        schema, rel, rows = parse_payload({
-            "schema_id": "x", "release_label": "r",
-            "models": {"m": {"releases": {"r": "not-a-dict"}}},
-        })
+    def test_parse_unknown_column_skipped(self):
+        from src.api.benchmark_import import parse_livebench_csv
+        schema, rel, rows = parse_livebench_csv(
+            "model,not_a_lb_task\ngpt-5.5-xhigh,90.0\n")
+        assert rows == []
+
+    def test_parse_no_header(self):
+        from src.api.benchmark_import import parse_livebench_csv
+        schema, rel, rows = parse_livebench_csv("")
+        assert schema == "livebench"
         assert rows == []
 
 

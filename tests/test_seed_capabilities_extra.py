@@ -117,29 +117,25 @@ class TestImportEdgeCases:
         with get_session(engine) as session:
             assert session.query(CapabilityMetric).count() == 0
 
-    def test_parse_payload_invalid_types(self):
-        from src.api.benchmark_import import parse_payload
-        # Bad nested types are skipped gracefully.
-        schema, rel, rows = parse_payload({
-            "schema_id": "x", "release_label": "r",
-            "models": {"m": {"releases": "not-a-dict", "subtasks": 5}},
-        })
+    def test_parse_csv_invalid_types_skipped(self):
+        from src.api.benchmark_import import parse_livebench_csv
+        # Non-numeric values are skipped gracefully.
+        schema, rel, rows = parse_livebench_csv(
+            "model,code_generation\ngpt-5.5-xhigh,not-a-number\n")
         assert rows == []
 
     def test_import_module_override_wins(self, db_path, tmp_path, monkeypatch):
-        """A module-provided dataset with the same schema_id overrides bundled."""
+        """A module-provided CSV overrides the bundled CSV."""
         from src.api.benchmark_import import import_bundled
         mod_data = tmp_path / "modules" / "mymod" / "data"
         mod_data.mkdir(parents=True)
-        (mod_data / "livebench.json").write_text(json.dumps({
-            "schema_id": "livebench",
-            "release_label": "2026-06-25",
-            "models": {"only-in-module": {"releases": {"2026-06-25": {"coding": 99.0}}}},
-        }))
+        (mod_data / "table_2026_06_25.csv").write_text(
+            "model,code_generation\nonly-in-module,99.0\n"
+            "gpt-5.5-xhigh,82.609\n")
         monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "modules"))
         import_bundled(db_path)
         from src.api.models import ModelCapability, get_engine, get_session
         engine = get_engine(db_path)
         with get_session(engine) as session:
-            rows = session.query(ModelCapability).filter_by(model="only-in-module").all()
-            assert rows, "module-provided model should be imported"
+            rows = session.query(ModelCapability).filter_by(model="gpt-5.5-thinking").all()
+            assert rows, "module-provided CSV should be imported (bundled overridden)"

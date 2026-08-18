@@ -14,9 +14,9 @@
     <div class="models-sidebar-head">
       <input type="text" id="modelFilter" placeholder="Filter models…" class="capability-filter" style="width:100%">
       <div class="btn-row">
-        <label id="importBtn" class="btn btn-outline" title="Import a benchmark dataset JSON file" style="cursor:pointer">
+        <label id="importBtn" class="btn btn-outline" title="Import a LiveBench CSV dataset" style="cursor:pointer">
           <span id="importBtnText">Import</span>
-          <input type="file" id="importFile" accept=".json,application/json" style="display:none">
+          <input type="file" id="importFile" accept=".csv,text/csv" style="display:none">
         </label>
         <button id="addRegistryBtn" class="btn btn-outline" title="Register a model alias">+ Register model</button>
         <button id="configuredOnlyBtn" class="btn btn-outline" title="Show only models wired into a profile" onclick="toggleConfiguredOnly()">Configured</button>
@@ -894,7 +894,7 @@ async function runBenchmark(model) {
 async function importDatasets() {
   const input = document.getElementById('importFile');
   const file = input && input.files && input.files[0];
-  if (!file) { alert('Choose a JSON dataset file to import first.'); return; }
+  if (!file) { alert('Choose a LiveBench CSV dataset file to import first.'); return; }
   const label = document.getElementById('importBtn');
   const labelText = document.getElementById('importBtnText');
   if (!label || !labelText) return;
