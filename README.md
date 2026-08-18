@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-926%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-1319%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -426,48 +426,52 @@ Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 926 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), and the plugin system |
+| `pytest` | Test runner — 1319 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**93% overall** — 4,071 of 4,401 statements covered (926 tests, 0 integration tests).
+**95% overall** — 5,772 of 6,102 statements covered (1319 tests, 0 integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 
 | Module | Coverage |
 |---|---|
 | `src/api/alert_manager.py` | 99% |
+| `src/api/benchmark.py` | 95% |
+| `src/api/benchmark_import.py` | 97% |
 | `src/api/circuit_breaker.py` | 100% |
+| `src/api/config.py` | 98% |
 | `src/api/cost_estimator.py` | 100% |
 | `src/api/cost_plugins/opencode_api.py` | 100% |
-| `src/api/cost_plugins/base.py` | 99% |
+| `src/api/cost_plugins/base.py` | 100% |
 | `src/api/cost_plugins/commandcode_api.py` | 96% |
-| `src/api/cost_plugins/commandcode.py` | 73% |
-| `src/api/reasoning_store.py` | 92% |
+| `src/api/cost_plugins/commandcode.py` | 93% |
+| `src/api/reasoning_store.py` | 96% |
 | `src/api/credential_store.py` | 97% |
-| `src/api/crypto.py` | 93% |
+| `src/api/crypto.py` | 100% |
 | `src/api/exceptions.py` | 100% |
 | `src/api/key_manager.py` | 98% |
 | `src/api/logging_config.py` | 100% |
 | `src/api/models.py` | 100% |
 | `src/api/prompt_cache.py` | 100% |
-| `src/api/request_pipeline.py` | 96% |
-| `src/api/router.py` | 100% |
+| `src/api/request_pipeline.py` | 95% |
+| `src/api/router.py` | 93% |
+| `src/api/seed_capabilities.py` | 98% |
+| `src/api/setup.py` | 97% |
 | `src/server/server.py` | 100% |
 | `src/server/sse_helpers.py` | 100% |
 | `src/ui/dashboard.py` | 99% |
-| `src/ui/pages.py` | 100% |
-| `src/api/config.py` | 98% |
+| `src/ui/pages.py` | 94% |
+| `src/ui/render.py` | 96% |
 | `src/api/cost_plugins/deepseek.py` | 94% |
 | `src/api/cost_plugins/llamacpp.py` | 96% |
 | `src/api/cost_plugins/opencode.py` | 94% |
 | `src/api/token_verifier.py` | 97% |
-| `src/main.py` | 98% |
-| `src/ui/render.py` | 96% |
-| `src/server/handler.py` | 90% |
-| `src/server/endpoints.py` | 85% |
+| `src/main.py` | 94% |
+| `src/server/handler.py` | 93% |
+| `src/server/endpoints.py` | 89% |
 
 ## API
 

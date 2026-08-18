@@ -215,3 +215,50 @@ def test_provider_model_name_falls_back_to_logical(registry_db):
 def test_provider_model_name_unknown_provider_passthrough(registry_db):
     from src.api.router import provider_model_name
     assert provider_model_name("deepseek-v4-pro", "someprovider", registry_db) == "deepseek-v4-pro"
+
+
+# ── CapabilityRouter selection edge paths ────────────────────────────────────
+
+def test_router_keeps_default_when_tied(registry_db):
+    """When the best model is within 5% of the chain default, keep default."""
+    from src.api.router import CapabilityRouter
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    # available_models where all scores are equal → no override.
+    result = router.select_model(
+        [{"role": "user", "content": "write a function"}],
+        available_models=["deepseek-v4-pro", "deepseek-v4-pro"],
+    )
+    assert result is None
+
+def test_router_no_available_models_returns_none(registry_db):
+    from src.api.router import CapabilityRouter
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    assert router.select_model([{"role": "user", "content": "hi"}], available_models=[]) is None
+
+def test_router_empty_rank_returns_empty(registry_db):
+    from src.api.router import CapabilityRouter
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    assert router.rank_models("code_generation", []) == []
+
+def test_router_load_matrix_error_returns_empty(tmp_path):
+    from src.api.router import CapabilityRouter
+    router = CapabilityRouter(enabled=True, db_path=str(tmp_path / "missing.db"))
+    # Missing DB → load fails gracefully to {}.
+    matrix = router.load_matrix()
+    assert matrix == {}
+
+def test_init_router_warm_cache(registry_db):
+    from src.api import router as router_mod
+    router_mod.init_router(db_path=registry_db, enabled=True)
+    assert router_mod.get_dynamic_router().enabled is True
+    # Restore for other tests.
+    router_mod.init_router(db_path=registry_db, enabled=False)
+
+def test_dynamic_router_flash_heuristic():
+    from src.api.router import DynamicRouter
+    r = DynamicRouter(enabled=True)
+    assert r.should_use_flash([{"role": "user", "content": "hi"}]) is True
+    assert r.should_use_flash([{"role": "user", "content": "x " * 3000}]) is False
+    tools = [{"type": "function", "function": {"name": f"t{i}"}} for i in range(6)]
+    assert r.should_use_flash([{"role": "user", "content": "hi"}], tools=tools) is False
+    assert r.should_use_flash([{"role": "user", "content": "hi"}], max_tokens=4096) is False

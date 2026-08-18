@@ -105,6 +105,22 @@ class TestInstallProvider:
         with pytest.raises(setup_mod.SetupError, match="unknown provider"):
             setup_mod.install_provider(temp_db, mock_config, "openai", {"api_key": "k"})
 
+    def test_models_not_list_raises(self, temp_db, mock_config):
+        with patch("src.api.setup._provider_preset", return_value={"api_base": "https://x/v1", "models": []}):
+            with pytest.raises(setup_mod.SetupError, match="'models' must be a list"):
+                setup_mod.install_provider(temp_db, mock_config, "deepseek", {"models": "m"})
+
+    def test_missing_api_base_raises(self, temp_db, mock_config):
+        with patch("src.api.setup._provider_preset", return_value={"api_base": "", "models": ["m"]}):
+            with pytest.raises(setup_mod.SetupError, match="missing api_base"):
+                setup_mod.install_provider(temp_db, mock_config, "deepseek", {})
+
+    def test_store_none_raises(self, temp_db, mock_config):
+        with patch("src.api.setup._provider_preset", return_value={"api_base": "https://x/v1", "models": ["m"]}):
+            with patch("src.api.credential_store.get_credential_store", return_value=None):
+                with pytest.raises(setup_mod.SetupError, match="credential store not initialized"):
+                    setup_mod.install_provider(temp_db, mock_config, "deepseek", {"api_key": "k"})
+
     def test_missing_key_raises_for_keyed_provider(self, temp_db, mock_config):
         with patch("src.api.setup._provider_preset", return_value={"api_base": "https://x/v1", "models": ["m"]}):
             with patch("src.api.credential_store.get_credential_store", return_value=MagicMock(has=MagicMock(return_value=False))):
@@ -234,3 +250,68 @@ class TestLivebenchInstall:
     def test_livebench_root_default(self, monkeypatch):
         monkeypatch.delenv("LCP_MODULES_DIR", raising=False)
         assert setup_mod.livebench_root() == "/opt/lcp-modules/livebench"
+
+
+# ── Install progress helpers (previously uncovered) ─────────────────────────
+
+class TestInstallProgress:
+    def test_bench_update_noop_when_idle(self):
+        monkeypatch = __import__("pytest").MonkeyPatch()
+        monkeypatch.setattr(setup_mod, "_bench_install", None)
+        try:
+            setup_mod._bench_update("msg", progress=50.0, status="running")
+        finally:
+            monkeypatch.undo()
+
+    def test_bench_update_mutates_state(self, monkeypatch):
+        monkeypatch.setattr(setup_mod, "_bench_install", {
+            "status": "queued", "progress": 0.0, "detail": "", "log": [],
+        })
+        try:
+            setup_mod._bench_update("hello world", progress=50.0, status="running")
+            state = setup_mod._bench_install
+            assert state["status"] == "running"
+            assert state["progress"] == 50.0
+            assert state["detail"] == "hello world"
+            assert state["log"] == ["hello world"]
+            assert "updated_at" in state
+        finally:
+            monkeypatch.undo()
+
+    def test_bench_update_clamps_progress(self, monkeypatch):
+        monkeypatch.setattr(setup_mod, "_bench_install", {
+            "status": "running", "progress": 0.0, "detail": "", "log": [],
+        })
+        try:
+            setup_mod._bench_update(None, progress=999.0)
+            assert setup_mod._bench_install["progress"] == 100.0
+        finally:
+            monkeypatch.undo()
+
+    def test_tail_detail_prefers_error_lines(self, monkeypatch):
+        monkeypatch.setattr(setup_mod, "_bench_install", {
+            "status": "failed", "progress": 0.0, "detail": "",
+            "log": ["installing...", "ERROR: boom", "done"],
+        })
+        try:
+            detail = setup_mod._tail_detail("Install failed")
+            assert "ERROR: boom" in detail
+            assert "Install failed" in detail
+        finally:
+            monkeypatch.undo()
+
+    def test_tail_detail_no_log_returns_fallback(self, monkeypatch):
+        monkeypatch.setattr(setup_mod, "_bench_install", {
+            "status": "failed", "progress": 0.0, "detail": "", "log": [],
+        })
+        try:
+            assert setup_mod._tail_detail("Install failed") == "Install failed"
+        finally:
+            monkeypatch.undo()
+
+    def test_tail_detail_idle_returns_fallback(self, monkeypatch):
+        monkeypatch.setattr(setup_mod, "_bench_install", None)
+        try:
+            assert setup_mod._tail_detail("fallback") == "fallback"
+        finally:
+            monkeypatch.undo()

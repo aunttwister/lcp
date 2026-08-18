@@ -332,3 +332,85 @@ class TestRegistration:
         presets = registry.presets
         assert "commandcode" in presets
         assert presets["commandcode"]["api_base"] == "https://api.commandcode.ai/provider/v1"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Catalog loading + engine guard (previously uncovered)
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestCatalogAndEngine:
+    def test_load_catalog_fetches_and_indexes(self, monkeypatch):
+        import src.api.cost_plugins.commandcode as cc
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b'{"data": [{"id": "deepseek/deepseek-v4-pro"}, "bare-model", {"id": "moonshotai/Kimi-K3"}]}'
+
+        def fake_urlopen(req, timeout=8):
+            return FakeResp()
+
+        # Reset cache so TTL doesn't short-circuit.
+        import time as _t
+        cc._catalog_cache["by_last_seg"] = {}
+        cc._catalog_cache["loaded_ts"] = _t.time() - cc._CATALOG_TTL_SECONDS - 10
+        cc._catalog_cache["failed_ts"] = 0.0
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        idx = cc._load_catalog()
+        assert idx["deepseek-v4-pro"] == "deepseek/deepseek-v4-pro"
+        assert idx["kimi-k3"] == "moonshotai/Kimi-K3"
+        assert idx["bare-model"] == "bare-model"
+
+    def test_load_catalog_failure_backs_off(self, monkeypatch):
+        import src.api.cost_plugins.commandcode as cc
+        cc._catalog_cache["by_last_seg"] = {"cached": "cached-model"}
+        cc._catalog_cache["loaded_ts"] = 0.0
+        cc._catalog_cache["failed_ts"] = 0.0
+
+        def boom(req, timeout=8):
+            raise OSError("no route")
+
+        monkeypatch.setattr("urllib.request.urlopen", boom)
+        assert cc._load_catalog() == {"cached": "cached-model"}
+        # failed_ts set → cooldown path returns cache on next call.
+        cc._catalog_cache["failed_ts"] = 9999999999999
+        assert cc._load_catalog() == {"cached": "cached-model"}
+
+    def test_ensure_engine_raises_when_unbound(self):
+        p = CommandCodeCostPlugin(engine=None)
+        with pytest.raises(RuntimeError, match="no gateway engine"):
+            p._ensure_engine()
+
+    def test_api_model_prefixed_passthrough(self, plugin):
+        assert plugin.get_api_model("deepseek/deepseek-v4-pro") == "deepseek/deepseek-v4-pro"
+
+    def test_fetch_usage_filters_by_date_range(self, plugin):
+        _insert_request(engine=plugin._engine, timestamp="2026-08-01T10:00:00")
+        _insert_request(engine=plugin._engine, timestamp="2026-08-08T10:00:00")
+        rows = plugin.fetch_usage(start_date="2026-08-05", end_date="2026-08-09")
+        assert len(rows) == 1
+        assert rows[0]["date"] == "2026-08-08"
+
+    def test_fetch_summary_empty_db_returns_zeros(self, plugin):
+        summary = plugin.fetch_summary()
+        assert summary is not None
+        for period in ("daily", "weekly", "monthly"):
+            assert summary[period]["tokens"] == 0
+            assert summary[period]["cost"] == 0.0
+
+    def test_fetch_summary_aggregates(self, plugin):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        recent = now.strftime("%Y-%m-%dT%H:%M:%S")
+        _insert_request(engine=plugin._engine, timestamp=recent, prompt_tokens=1000,
+                        completion_tokens=500, cost=0.01)
+        summary = plugin.fetch_summary()
+        assert summary["daily"]["tokens"] == 1500
+        assert summary["daily"]["cost"] == pytest.approx(0.01)
+        assert summary["daily"]["requests"] == 1
+

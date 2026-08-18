@@ -767,7 +767,7 @@ def _execute_run(run_id: int, engine, config) -> None:
                     f"LiveBench aborted — fatal provider error: {fatal}"
                 )
             if rc != 0:
-                tail = "\n".join(get_run_log(run_id)[-40:])
+                tail = "\n".join(get_run_log(engine, run_id)[-40:])
                 raise RuntimeError(
                     f"LiveBench command failed (exit {rc}): {_redact_stream_line(tail[-2000:], api_key)}"
                 )
