@@ -45,15 +45,13 @@ function closeSidebar() {
 })();
 
 // Usage submenu — provider links deep-link into the /usage page tabs.
+// Nested directly under the Usage nav item (no toggle/collapse).
 (function() {
-  var KEY = 'lcp-prov-usage';
-  var toggle = document.getElementById('usageSubmenuToggle');
   var menu = document.getElementById('usageSubmenu');
-  if (!toggle || !menu) return;
+  if (!menu) return;
 
   var provs = (typeof configuredProviders !== 'undefined' && Array.isArray(configuredProviders)) ? configuredProviders : [];
   if (!provs.length) {
-    toggle.style.display = 'none';
     menu.style.display = 'none';
     return;
   }
@@ -69,26 +67,6 @@ function closeSidebar() {
     });
   }
 
-  function apply(state) {
-    var collapsed = state === 'collapsed';
-    toggle.classList.toggle('collapsed', collapsed);
-    menu.classList.toggle('collapsed', collapsed);
-    toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-  }
-
-  apply(localStorage.getItem(KEY) || 'expanded');
   syncActive();
-
-  toggle.addEventListener('click', function () {
-    var next = menu.classList.contains('collapsed') ? 'expanded' : 'collapsed';
-    localStorage.setItem(KEY, next);
-    apply(next);
-  });
-  toggle.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      toggle.click();
-    }
-  });
   window.addEventListener('hashchange', syncActive);
 })();

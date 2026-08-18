@@ -4,10 +4,6 @@
     <div class="nav-label">Monitor</div>
     <a href="/dashboard"{% if active_page == 'dashboard' %} class="active"{% endif %}>Dashboard</a>
     <a href="/usage"{% if active_page == 'usage' %} class="active"{% endif %}>Usage</a>
-    <div class="nav-label sb-prov-toggle" id="usageSubmenuToggle" role="button" tabindex="0" aria-expanded="true">
-      <span>Provider usage</span>
-      <span class="sb-prov-chev">▾</span>
-    </div>
     <div class="sb-usage-submenu" id="usageSubmenu"></div>
     <a href="/logs"{% if active_page == 'logs' %} class="active"{% endif %}>Logs</a>
     <a href="/alerts"{% if active_page == 'alerts' %} class="active"{% endif %}>Alerts <span id="sidebarAlertBadge" class="sb-alert-badge" style="display:none">0</span></a>

@@ -16,9 +16,15 @@ from sqlalchemy import func
 _templates_dir = Path(__file__).parent / "templates" / "jinja"
 _env = Environment(loader=FileSystemLoader(str(_templates_dir)), autoescape=True, extensions=["jinja2.ext.do"])
 
-# Cache-buster: mtime of dashboard.css so Safari re-fetches after deploy
-_css_path = _templates_dir / "static" / "dashboard.css"
-_cache_buster = str(int(os.path.getmtime(_css_path))) if _css_path.is_file() else "0"
+# Cache-buster: max mtime across static assets (CSS + JS) so browsers
+# re-fetch after every deploy. The CSS/JS links append ?v=<buster>.
+_static_dir = _templates_dir / "static"
+_cache_buster = "0"
+if _static_dir.is_dir():
+    _asset_paths = [_static_dir / "dashboard.css", *_static_dir.glob("js/*.js")]
+    _mtimes = [p.stat().st_mtime for p in _asset_paths if p.is_file()]
+    if _mtimes:
+        _cache_buster = str(int(max(_mtimes)))
 
 
 def _fmt_num(n) -> str:

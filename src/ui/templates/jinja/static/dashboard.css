@@ -623,9 +623,9 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   font-size: 0.625rem; color: hsl(var(--muted-foreground));
 }
 
-/* ── Usage submenu (provider links into /usage tabs) ── */
+/* ── Usage submenu (provider links nested under the Usage nav) ── */
 .sb-usage-submenu {
-  padding: 0 0.75rem 0.125rem 1.5rem;
+  padding: 0.125rem 0.75rem 0.25rem 1.5rem;
   display: flex; flex-direction: column;
 }
 .sb-usage-submenu a {
@@ -636,17 +636,6 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 .sb-usage-submenu a:hover { background: hsl(var(--secondary)); color: hsl(var(--foreground)); }
 .sb-usage-submenu a.active { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
-.sb-usage-submenu.collapsed { display: none; }
-
-/* ── Usage submenu collapse toggle ── */
-.sb-prov-toggle {
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: space-between;
-  user-select: none;
-}
-.sb-prov-toggle:hover { color: hsl(var(--foreground)); }
-.sb-prov-toggle .sb-prov-chev { transition: transform 0.15s; }
-.sb-prov-toggle.collapsed .sb-prov-chev { transform: rotate(-90deg); }
 
 /* ── Sidebar alert badge ── */
 .sb-alert-badge {

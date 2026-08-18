@@ -22,10 +22,10 @@ var monthly = {{ monthly_json | safe }};
 var configuredProviders = {{ configured_providers_json | safe }};
 </script>
 {% block base_scripts %}
-<script src="/static/js/api.js"></script>
-<script src="/static/js/sidebar.js"></script>
-<script src="/static/js/modal.js"></script>
-<script src="/static/js/stack.js"></script>
+<script src="/static/js/api.js?v={{ cache_buster }}"></script>
+<script src="/static/js/sidebar.js?v={{ cache_buster }}"></script>
+<script src="/static/js/modal.js?v={{ cache_buster }}"></script>
+<script src="/static/js/stack.js?v={{ cache_buster }}"></script>
 {% endblock %}
 {% block scripts %}{% endblock %}
 {% block body_end %}{% endblock %}
