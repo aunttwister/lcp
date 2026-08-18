@@ -889,8 +889,11 @@ function refreshRegProviderSelects() {
 function readRegMappingRows() {
   const out = {};
   document.querySelectorAll('#regMappingRows .mapping-editor-row').forEach(row => {
-    const p = row.querySelector('[data-role="provider"]').value.trim();
-    const m = row.querySelector('[data-role="model"]').value.trim();
+    const pSel = row.querySelector('[data-role="provider"]');
+    const mSel = row.querySelector('[data-role="model"]');
+    if (!pSel || !mSel) return;  // skip empty/ghost rows
+    const p = pSel.value.trim();
+    const m = mSel.value.trim();
     if (p && m) out[p] = m;
   });
   return out;
@@ -1089,9 +1092,11 @@ document.getElementById('regAddMappingRowBtn').addEventListener('click', functio
   const wrap = document.getElementById('regMappingRows');
   // Replace the "no providers yet" help with a row.
   if (!wrap.querySelector('.mapping-editor-row')) wrap.innerHTML = '';
-  const row = document.createElement('div');
-  row.className = 'mapping-editor-row';
-  row.innerHTML = regMappingRowHtml(nextRegProvider(), '');
+  // regMappingRowHtml already returns a full .mapping-editor-row div, so parse
+  // it and append that element directly rather than nesting it in another row.
+  const tmp = document.createElement('div');
+  tmp.innerHTML = regMappingRowHtml(nextRegProvider(), '');
+  const row = tmp.firstElementChild;
   wrap.appendChild(row);
   // Gray out providers that are already taken in other rows.
   refreshRegProviderSelects();
