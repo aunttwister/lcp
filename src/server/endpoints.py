@@ -143,6 +143,53 @@ def _friendly_provider_error(provider: str, status: int, body: str) -> tuple[str
     return (message, code, etype)
 
 
+def _parse_multipart_upload(body: bytes, content_type: str) -> tuple[bytes, str]:
+    """Manually parse a ``multipart/form-data`` upload body for the ``file`` field.
+
+    Returns ``(file_bytes, release_value)``. Handles quoted boundaries and the
+    standard ``name="file"`` / ``name="release"`` fields. Raises ``ValueError``
+    on malformed input or a missing file field.
+    """
+    import re
+
+    m = re.search(r'boundary="?([^";]+)"?', content_type)
+    if not m:
+        raise ValueError("multipart boundary not found in Content-Type")
+    boundary = m.group(1).encode("utf-8")
+
+    # Split into parts by the boundary.
+    parts = body.split(b"--" + boundary)
+    file_bytes: bytes = b""
+    release: str = ""
+    found_file = False
+
+    for part in parts:
+        if not part or part in (b"\r\n", b"\n"):
+            continue
+        # A part starts with headers then a blank line then the body.
+        try:
+            header_blob, payload = part.split(b"\r\n\r\n", 1)
+        except ValueError:
+            continue
+        headers_text = header_blob.decode("utf-8", errors="replace")
+        payload = payload.rstrip(b"\r\n")
+
+        name_match = re.search(r'name="([^"]+)"', headers_text)
+        if not name_match:
+            continue
+        field_name = name_match.group(1)
+
+        if field_name == "file":
+            found_file = True
+            file_bytes = payload
+        elif field_name == "release":
+            release = payload.decode("utf-8", errors="replace").strip()
+
+    if not found_file or not file_bytes:
+        raise ValueError("missing 'file' field in upload")
+    return file_bytes, release
+
+
 # ── Health / Monitoring Endpoints ────────────────────────────────────────────
 
 class HealthEndpoints:
@@ -1916,31 +1963,62 @@ class DashboardEndpoints:
             self._send_json({"error": str(e)}, 500)
 
     def _serve_capability_import_api(self):
-        """POST /api/models/capability/import — import benchmark datasets.
+        """POST /api/models/capability/import — import a benchmark dataset.
 
-        Body (optional): ``{"schema_id": "livebench"}`` to import only one
-        dataset, or ``{}`` to import every discovered dataset (bundled +
-        module-provided). Imports into ``capability_metrics`` and
-        materializes typed ``model_capabilities`` + ``model_capability_subtasks``.
+        Two accepted forms:
+
+        1. **File upload** — ``multipart/form-data`` with a ``file`` field
+           containing a JSON dataset (and an optional ``release`` field).
+        2. **Inline JSON** — ``application/json`` body with the full dataset
+           under a ``payload`` key (backward-compatible).
+
+        The dataset is validated, written into ``capability_metrics``, and
+        materialized into typed ``model_capabilities`` +
+        ``model_capability_subtasks`` rows.
         """
-        from ..api.benchmark_import import import_bundled
+        import json
+        from ..api.benchmark_import import import_json_string
 
+        db_path = "data/costs.db"
         try:
-            body = self._read_body()
+            if getattr(self.engine, "url", None) is not None:
+                db_path = str(self.engine.url.database) or db_path
         except Exception:
-            self._send_json({"error": "invalid JSON body"}, 400)
-            return
+            pass
 
-        schema_filter = (body.get("schema_id") or "").strip() or None
-        try:
-            db_path = "data/costs.db"
+        content_type = (self.headers.get("Content-Type") or "").lower()
+        release = None
+
+        if "multipart/form-data" in content_type:
+            # Read the raw body and parse the multipart upload manually (the
+            # stdlib cgi module is deprecated and awkward to drive with a mock
+            # rfile; our parser is small and tested).
             try:
-                if getattr(self.engine, "url", None) is not None:
-                    db_path = str(self.engine.url.database) or db_path
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length) if content_length else b""
+                raw, release = _parse_multipart_upload(body, self.headers.get("Content-Type", ""))
+            except Exception as exc:
+                self._send_json({"error": f"invalid upload: {exc}"}, 400)
+                return
+        else:
+            # Inline JSON body: either a raw payload object or {payload: {...}}.
+            try:
+                body = self._read_body()
             except Exception:
-                pass
-            count = import_bundled(db_path)
-            self._send_json({"ok": True, "materialized": count, "schema_id": schema_filter})
+                self._send_json({"error": "invalid JSON body"}, 400)
+                return
+            raw = json.dumps(body.get("payload", body))
+            release = (body.get("release") or "").strip() or None
+
+        try:
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("uploaded file must contain a JSON object")
+            count = import_json_string(db_path, payload, release=release)
+            schema_id = payload.get("schema_id")
+            self._send_json({"ok": True, "materialized": count, "schema_id": schema_id})
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 400)
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 

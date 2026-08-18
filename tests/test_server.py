@@ -216,30 +216,82 @@ class TestAuthEnforcement:
 class TestCapabilityImportEndpoint:
     """POST /api/models/capability/import — UI-driven dataset import."""
 
-    def test_import_endpoint(self, temp_db):
-        h = TestHandler(path="/api/models/capability/import", method="POST",
-                        engine=temp_db, body="{}")
-        h.do_POST()
-        assert _status(h) == 200
-        body = _json_body(h)
-        assert body.get("ok") is True
-        assert body.get("materialized", 0) > 0
+    SAMPLE_PAYLOAD = {
+        "schema_id": "livebench",
+        "release_label": "2026-06-25",
+        "models": {
+            "test-import-model": {
+                "releases": {"2026-06-25": {"coding": 70.0, "math": 80.0}},
+                "subtasks": {"reasoning": {"theory_of_mind": 90.0}},
+            },
+        },
+    }
 
-    def test_import_endpoint_seeds_missing_models(self, temp_db):
-        """The UI import path materializes top-level rows for subtask-only models."""
+    def test_import_endpoint_inline_json(self, temp_db):
+        body = json.dumps({"payload": self.SAMPLE_PAYLOAD})
         h = TestHandler(path="/api/models/capability/import", method="POST",
-                        engine=temp_db, body="{}")
+                        engine=temp_db, body=body)
         h.do_POST()
         assert _status(h) == 200
+        resp = _json_body(h)
+        assert resp.get("ok") is True
+        assert resp.get("materialized", 0) > 0
+        assert resp.get("schema_id") == "livebench"
+
+    def test_import_endpoint_missing_file_upload(self, temp_db):
+        """multipart upload without a file field → 400."""
+        ct = "multipart/form-data; boundary=XYZ"
+        body = b"--XYZ\r\nContent-Disposition: form-data; name=\"release\"\r\n\r\n2026-06-25\r\n--XYZ--\r\n"
+        h = TestHandler(path="/api/models/capability/import", method="POST",
+                        engine=temp_db, body=body, headers={"Content-Type": ct})
+        h.do_POST()
+        assert _status(h) == 400
+
+    def test_import_endpoint_multipart_upload(self, temp_db):
+        """multipart upload with a file field materializes rows."""
+        ct = "multipart/form-data; boundary=XYZ"
+        payload_json = json.dumps(self.SAMPLE_PAYLOAD).encode("utf-8")
+        body = (
+            b"--XYZ\r\n"
+            b"Content-Disposition: form-data; name=\"release\"\r\n\r\n"
+            b"2026-06-25\r\n"
+            b"--XYZ\r\n"
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"ds.json\"\r\n"
+            b"Content-Type: application/json\r\n\r\n"
+            + payload_json +
+            b"\r\n--XYZ--\r\n"
+        )
+        h = TestHandler(path="/api/models/capability/import", method="POST",
+                        engine=temp_db, body=body, headers={"Content-Type": ct})
+        h.do_POST()
+        assert _status(h) == 200
+        resp = _json_body(h)
+        assert resp.get("ok") is True
+        assert resp.get("materialized", 0) > 0
 
         from src.api.models import ModelCapability, get_session
         session = get_session(temp_db)
         try:
-            for model in ("gpt-5.6-luna", "gpt-5.6-terra", "minimax-m3"):
-                rows = session.query(ModelCapability).filter_by(model=model).all()
-                assert rows, f"{model} should have top-level rows after import"
+            rows = session.query(ModelCapability).filter_by(model="test-import-model").all()
+            assert rows, "uploaded model should have top-level rows"
         finally:
             session.close()
+
+    def test_import_endpoint_bad_payload(self, temp_db):
+        body = json.dumps({"payload": {"no_schema": True}})
+        h = TestHandler(path="/api/models/capability/import", method="POST",
+                        engine=temp_db, body=body)
+        h.do_POST()
+        assert _status(h) == 400
+
+    def test_import_endpoint_malformed_multipart(self, temp_db):
+        """Non-multipart body sent with multipart content-type → 400."""
+        ct = "multipart/form-data; boundary=XYZ"
+        h = TestHandler(path="/api/models/capability/import", method="POST",
+                        engine=temp_db, body=b"no boundary here",
+                        headers={"Content-Type": ct})
+        h.do_POST()
+        assert _status(h) == 400
 
 
 class TestKeyEndpoints:

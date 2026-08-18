@@ -220,9 +220,27 @@ def import_file(
     materialize_subtasks: bool = True,
     dry_run: bool = False,
 ) -> int:
-    """Import a single JSON file."""
+    """Import a single JSON file from disk."""
     with open(path, "r", encoding="utf-8") as f:
         payload = json.load(f)
+    return import_json_string(
+        db_path, payload,
+        release=release,
+        materialize_capabilities=materialize_capabilities,
+        materialize_subtasks=materialize_subtasks,
+        dry_run=dry_run,
+    )
+
+
+def import_json_string(
+    db_path: str,
+    payload: dict,
+    release: Optional[str] = None,
+    materialize_capabilities: bool = True,
+    materialize_subtasks: bool = True,
+    dry_run: bool = False,
+) -> int:
+    """Import a parsed dataset dict (e.g. from an uploaded JSON file)."""
     return import_payload(
         db_path, payload,
         release=release,

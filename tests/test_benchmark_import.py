@@ -135,3 +135,56 @@ def test_import_bundled_seeds_known_models(db_path):
     finally:
         session.close()
         engine.dispose()
+
+
+def test_import_json_string(db_path):
+    """Uploaded JSON (a parsed dict) materializes typed rows."""
+    from src.api.benchmark_import import import_json_string
+    from src.api.models import ModelCapability, get_engine, get_session
+
+    import_json_string(db_path, _payload())
+    engine = get_engine(db_path)
+    session = get_session(engine)
+    try:
+        rows = session.query(ModelCapability).filter_by(model="test-model").all()
+        assert rows
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_parse_multipart_upload():
+    """The multipart parser extracts the file field + optional release field."""
+    from src.server.endpoints import _parse_multipart_upload
+
+    payload = json.dumps({"schema_id": "x", "release_label": "r", "models": {}}).encode()
+    body = (
+        b"--BND\r\n"
+        b'Content-Disposition: form-data; name="release"\r\n\r\n'
+        b"2026-06-25\r\n"
+        b"--BND\r\n"
+        b'Content-Disposition: form-data; name="file"; filename="d.json"\r\n'
+        b"Content-Type: application/json\r\n\r\n"
+        + payload +
+        b"\r\n--BND--\r\n"
+    )
+    data, release = _parse_multipart_upload(body, "multipart/form-data; boundary=BND")
+    assert release == "2026-06-25"
+    assert json.loads(data)["schema_id"] == "x"
+
+
+def test_parse_multipart_upload_missing_file():
+    from src.server.endpoints import _parse_multipart_upload
+    body = (
+        b"--BND\r\n"
+        b'Content-Disposition: form-data; name="release"\r\n\r\n'
+        b"2026-06-25\r\n--BND--\r\n"
+    )
+    with pytest.raises(ValueError, match="missing 'file'"):
+        _parse_multipart_upload(body, "multipart/form-data; boundary=BND")
+
+
+def test_parse_multipart_upload_no_boundary():
+    from src.server.endpoints import _parse_multipart_upload
+    with pytest.raises(ValueError, match="boundary"):
+        _parse_multipart_upload(b"data", "multipart/form-data")

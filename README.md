@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1319%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-1326%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -325,6 +325,26 @@ supports **three tiers** of model data:
    the bundled one, so benchmark plugins can drop in their own leaderboard
    data without forking LCP.
 
+   **Upload a dataset from the UI.** On the Models page, the **Import**
+   button opens a file picker — choose any JSON dataset (bundled shape
+   below) and LCP uploads it via `multipart/form-data` to
+   `POST /api/models/capability/import`, writes `capability_metrics`, and
+   materializes the typed rows. The same endpoint accepts an inline JSON
+   body with the dataset under a `payload` key (and an optional `release`).
+
+   Dataset JSON shape::
+
+       {
+         "schema_id": "livebench",
+         "release_label": "2026-06-25",
+         "models": {
+           "deepseek-v4-pro": {
+             "releases": {"2026-08-13": {"reasoning": 85.8, ...}},
+             "subtasks": {"reasoning": {"theory_of_mind": 84.6, ...}}
+           }
+         }
+       }
+
 2. **Incremental benchmark (accurate, opt-in).** Run LiveBench for a single
    model + release when a new model appears or a new release ships (e.g.
    `deepseek-v4-pro` 2026-08-13). This is the "Run benchmark" button — it
@@ -426,13 +446,13 @@ Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 1319 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
+| `pytest` | Test runner — 1326 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**95% overall** — 5,772 of 6,102 statements covered (1319 tests, 0 integration tests).
+**95% overall** — 5,821 of 6,153 statements covered (1326 tests, 0 integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 
