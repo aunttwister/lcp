@@ -986,6 +986,16 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   border-radius: var(--radius); padding: 0.75rem; position: sticky; top: 1rem;
 }
 .models-sidebar-head { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.75rem; }
+.models-sidebar-head .btn-row {
+  display: flex; flex-wrap: wrap; gap: 0.5rem;
+}
+.models-sidebar-head .btn-row .btn-outline {
+  flex: 1 1 auto; text-align: center; white-space: nowrap;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.models-sidebar-head .btn-row .btn-outline.disabled {
+  opacity: 0.6; pointer-events: none;
+}
 .models-sidebar-foot { margin-top: 0.75rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .model-list { max-height: 70vh; overflow-y: auto; }
 .model-list-item {
