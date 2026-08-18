@@ -816,7 +816,12 @@ function addRegistry() {
 function renderRegMappingRows(mappings) {
   const wrap = document.getElementById('regMappingRows');
   const entries = Object.entries(mappings || {});
-  wrap.innerHTML = entries.map(([p, m]) => regMappingRowHtml(p, m)).join('');
+  const selected = new Set(entries.map(([p]) => p).filter(Boolean));
+  wrap.innerHTML = entries.map(([p, m]) => {
+    const used = new Set(selected);
+    used.delete(p);  // don't disable this row's own selection
+    return regMappingRowHtml(p, m, used);
+  }).join('');
   if (!entries.length) {
     wrap.innerHTML = '<div class="form-help">No providers mapped yet.</div>';
   }
@@ -826,9 +831,22 @@ function availableProviders() {
   return Object.keys(STATE.providers || {}).sort();
 }
 
-function regProviderOptionsHtml(selected) {
+function nextRegProvider() {
+  // First provider not already taken by an existing row, so new rows never
+  // start out as a duplicate.
+  const used = new Set([...document.querySelectorAll('#regMappingRows select[data-role="provider"]')]
+    .map(s => s.value).filter(Boolean));
+  return availableProviders().find(n => !used.has(n)) || '';
+}
+
+function regProviderOptionsHtml(selected, disabledNames) {
   const names = availableProviders();
-  let opts = names.map(n => `<option value="${esc(n)}"${n === selected ? ' selected' : ''}>${esc(n)}</option>`).join('');
+  const disabled = disabledNames || new Set();
+  let opts = names.map(n => {
+    const isDisabled = disabled.has(n) && n !== selected ? ' disabled' : '';
+    const isSelected = n === selected ? ' selected' : '';
+    return `<option value="${esc(n)}"${isSelected}${isDisabled}>${esc(n)}</option>`;
+  }).join('');
   if (selected && !names.includes(selected)) {
     opts = `<option value="${esc(selected)}" selected>${esc(selected)}</option>` + opts;
   }
@@ -847,12 +865,25 @@ function regModelFieldHtml(provider, current) {
   return `<input class="form-input" data-role="model" placeholder="model id" value="${esc(current)}">`;
 }
 
-function regMappingRowHtml(p, m) {
+function regMappingRowHtml(p, m, disabledNames) {
   return `<div class="mapping-editor-row">
-    <select class="form-input" data-role="provider">${regProviderOptionsHtml(p)}</select>
+    <select class="form-input" data-role="provider">${regProviderOptionsHtml(p, disabledNames)}</select>
     ${regModelFieldHtml(p || availableProviders()[0] || '', m)}
     <button class="mapping-remove" type="button" title="Remove">✕</button>
   </div>`;
+}
+
+function refreshRegProviderSelects() {
+  // Recompute which providers are already taken and gray them out everywhere
+  // except their own row, keeping selections intact.
+  const selects = [...document.querySelectorAll('#regMappingRows select[data-role="provider"]')];
+  const used = new Set(selects.map(s => s.value).filter(Boolean));
+  selects.forEach(sel => {
+    const cur = sel.value;
+    const disabledNames = new Set(used);
+    disabledNames.delete(cur);
+    sel.innerHTML = regProviderOptionsHtml(cur, disabledNames);
+  });
 }
 
 function readRegMappingRows() {
@@ -1058,11 +1089,12 @@ document.getElementById('regAddMappingRowBtn').addEventListener('click', functio
   const wrap = document.getElementById('regMappingRows');
   // Replace the "no providers yet" help with a row.
   if (!wrap.querySelector('.mapping-editor-row')) wrap.innerHTML = '';
-  const first = availableProviders()[0] || '';
   const row = document.createElement('div');
   row.className = 'mapping-editor-row';
-  row.innerHTML = regMappingRowHtml(first, '');
+  row.innerHTML = regMappingRowHtml(nextRegProvider(), '');
   wrap.appendChild(row);
+  // Gray out providers that are already taken in other rows.
+  refreshRegProviderSelects();
   row.querySelector('[data-role="provider"]').focus();
 });
 document.getElementById('regMappingRows').addEventListener('click', function (e) {
@@ -1072,6 +1104,9 @@ document.getElementById('regMappingRows').addEventListener('click', function (e)
   if (row) row.remove();
   if (!document.querySelector('#regMappingRows .mapping-editor-row')) {
     document.getElementById('regMappingRows').innerHTML = '<div class="form-help">No providers mapped yet.</div>';
+  } else {
+    // Re-enable any providers that are now free again.
+    refreshRegProviderSelects();
   }
 });
 document.getElementById('regMappingRows').addEventListener('change', function (e) {
@@ -1087,6 +1122,8 @@ document.getElementById('regMappingRows').addEventListener('change', function (e
   const tmp = document.createElement('div');
   tmp.innerHTML = regModelFieldHtml(provider, '');
   container.replaceChild(tmp.firstChild, modelField);
+  // The provider just picked is now taken — gray it out in every other row.
+  refreshRegProviderSelects();
 });
 
 loadAll();
