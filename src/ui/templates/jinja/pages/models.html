@@ -816,15 +816,43 @@ function addRegistry() {
 function renderRegMappingRows(mappings) {
   const wrap = document.getElementById('regMappingRows');
   const entries = Object.entries(mappings || {});
-  wrap.innerHTML = entries.map(([p, m], i) => `
-    <div class="mapping-editor-row" data-index="${i}">
-      <input class="form-input" data-role="provider" placeholder="provider" value="${esc(p)}">
-      <input class="form-input" data-role="model" placeholder="model id" value="${esc(m)}">
-      <button class="mapping-remove" type="button" data-remove="${i}" title="Remove">✕</button>
-    </div>`).join('');
+  wrap.innerHTML = entries.map(([p, m]) => regMappingRowHtml(p, m)).join('');
   if (!entries.length) {
     wrap.innerHTML = '<div class="form-help">No providers mapped yet.</div>';
   }
+}
+
+function availableProviders() {
+  return Object.keys(STATE.providers || {}).sort();
+}
+
+function regProviderOptionsHtml(selected) {
+  const names = availableProviders();
+  let opts = names.map(n => `<option value="${esc(n)}"${n === selected ? ' selected' : ''}>${esc(n)}</option>`).join('');
+  if (selected && !names.includes(selected)) {
+    opts = `<option value="${esc(selected)}" selected>${esc(selected)}</option>` + opts;
+  }
+  return opts;
+}
+
+function regModelFieldHtml(provider, current) {
+  const models = ((STATE.providers || {})[provider] || {}).models || [];
+  if (models.length) {
+    let opts = models.map(m => `<option value="${esc(m)}"${m === current ? ' selected' : ''}>${esc(m)}</option>`).join('');
+    if (current && !models.includes(current)) {
+      opts = `<option value="${esc(current)}" selected>${esc(current)}</option>` + opts;
+    }
+    return `<select class="form-input" data-role="model">${opts}</select>`;
+  }
+  return `<input class="form-input" data-role="model" placeholder="model id" value="${esc(current)}">`;
+}
+
+function regMappingRowHtml(p, m) {
+  return `<div class="mapping-editor-row">
+    <select class="form-input" data-role="provider">${regProviderOptionsHtml(p)}</select>
+    ${regModelFieldHtml(p || availableProviders()[0] || '', m)}
+    <button class="mapping-remove" type="button" title="Remove">✕</button>
+  </div>`;
 }
 
 function readRegMappingRows() {
@@ -1030,14 +1058,10 @@ document.getElementById('regAddMappingRowBtn').addEventListener('click', functio
   const wrap = document.getElementById('regMappingRows');
   // Replace the "no providers yet" help with a row.
   if (!wrap.querySelector('.mapping-editor-row')) wrap.innerHTML = '';
-  const idx = wrap.querySelectorAll('.mapping-editor-row').length;
+  const first = availableProviders()[0] || '';
   const row = document.createElement('div');
   row.className = 'mapping-editor-row';
-  row.dataset.index = idx;
-  row.innerHTML = `
-    <input class="form-input" data-role="provider" placeholder="provider">
-    <input class="form-input" data-role="model" placeholder="model id">
-    <button class="mapping-remove" type="button" title="Remove">✕</button>`;
+  row.innerHTML = regMappingRowHtml(first, '');
   wrap.appendChild(row);
   row.querySelector('[data-role="provider"]').focus();
 });
@@ -1049,6 +1073,20 @@ document.getElementById('regMappingRows').addEventListener('click', function (e)
   if (!document.querySelector('#regMappingRows .mapping-editor-row')) {
     document.getElementById('regMappingRows').innerHTML = '<div class="form-help">No providers mapped yet.</div>';
   }
+});
+document.getElementById('regMappingRows').addEventListener('change', function (e) {
+  const sel = e.target;
+  if (!sel.matches || !sel.matches('select[data-role="provider"]')) return;
+  const row = sel.closest('.mapping-editor-row');
+  const modelField = row.querySelector('[data-role="model"]');
+  const provider = sel.value;
+  const models = ((STATE.providers || {})[provider] || {}).models || [];
+  // Rebuild the model field as a dropdown of that provider's models (or a
+  // free-text input when the provider has no registered models).
+  const container = modelField.parentNode;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = regModelFieldHtml(provider, '');
+  container.replaceChild(tmp.firstChild, modelField);
 });
 
 loadAll();
