@@ -460,12 +460,34 @@ function buildPage(providers) {
                         '<div class="stat-card"><div class="label">Purchased</div><div class="value">$' + ccsub.purchased_credits.toFixed(2) + '</div><div class="sub">top-up / pay-as-you-go</div></div>' +
                         ccPlanCard +
                         '</div>';
+
+                    // Usage totals from Command Code's own usage page.
+                    var ccTotals = ccsub.usage_summary || {};
+                    if (ccTotals.total_tokens != null || ccTotals.total_runs != null) {
+                        var ccTotalCards = '';
+                        if (ccTotals.total_tokens != null) {
+                            ccTotalCards += '<div class="stat-card"><div class="label">Total Tokens</div><div class="value">' + formatTokens(ccTotals.total_tokens) + '</div><div class="sub">billing period</div></div>';
+                        }
+                        if (ccTotals.total_runs != null) {
+                            ccTotalCards += '<div class="stat-card"><div class="label">Total Runs</div><div class="value">' + ccTotals.total_runs.toLocaleString() + '</div><div class="sub">' + (ccTotals.failed_runs || 0) + ' failed</div></div>';
+                        }
+                        if (ccTotals.total_monthly_credits != null) {
+                            ccTotalCards += '<div class="stat-card"><div class="label">Monthly Usage</div><div class="value">$' + ccTotals.total_monthly_credits.toFixed(2) + '</div><div class="sub">billing period</div></div>';
+                        }
+                        if (ccTotalCards) {
+                            panelsHtml += '<div class="stat-cards">' + ccTotalCards + '</div>';
+                        }
+                    }
+
                     var ccBars = '';
                     if (ccsub.five_hour_pct != null) {
                         ccBars += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Rolling (5h)</span><span class="bar-pct">' + ccsub.five_hour_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(ccsub.five_hour_pct) + '" style="width:' + ccsub.five_hour_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(ccsub.five_hour_reset_sec) + '</span><span>' + fmtResetAt(ccsub.five_hour_reset_sec) + '</span></div></div>';
                     }
                     if (ccsub.weekly_pct != null) {
                         ccBars += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Weekly</span><span class="bar-pct">' + ccsub.weekly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(ccsub.weekly_pct) + '" style="width:' + ccsub.weekly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(ccsub.weekly_reset_sec) + '</span><span>' + fmtResetAt(ccsub.weekly_reset_sec) + '</span></div></div>';
+                    }
+                    if (ccsub.monthly_pct != null && ccsub.monthly_pct > 0) {
+                        ccBars += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Monthly</span><span class="bar-pct">' + ccsub.monthly_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(ccsub.monthly_pct) + '" style="width:' + ccsub.monthly_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(ccsub.monthly_reset_sec) + '</span><span>' + fmtResetAt(ccsub.monthly_reset_sec) + '</span></div></div>';
                     }
                     if (ccBars) {
                         panelsHtml += '<div class="usage-bars">' + ccBars + '</div>';

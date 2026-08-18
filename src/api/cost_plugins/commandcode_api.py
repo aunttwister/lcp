@@ -1,22 +1,26 @@
 """HTTP client for Command Code's internal billing API — subscription tracking.
 
-Fetches credits + subscription data from ``api.commandcode.ai``'s internal
-billing endpoints and parses the JSON. Authenticates via the browser session
+Fetches credits + subscription + usage data from ``api.commandcode.ai``'s
+internal endpoints and parses the JSON. Authenticates via the browser session
 cookie from a logged-in commandcode.ai session (same pattern as OpenCode).
 
-Endpoints (discovered from the CodexBar project / the web app):
+Endpoints (discovered from the Command Code Studio usage page):
 
     GET /internal/billing/credits        -> credits summary + rolling limits
     GET /internal/billing/subscriptions  -> active subscription (plan/status)
+    GET /internal/usage/summary          -> billing-period totals (tokens/cost)
+    GET /internal/usage?limit=N          -> recent usage entries
 
 Usage::
 
     from .commandcode_api import fetch_subscription_snapshot
     snap = fetch_subscription_snapshot(cookie)
-    # => {"monthly_credits_remaining": 8.78, "purchased_credits": 0.0,
-    #     "five_hour_pct": 32.0, "weekly_pct": 41.0,
+    # => {"monthly_credits_remaining": 40.19, "purchased_credits": 0.0,
+    #     "five_hour_pct": 10.5, "weekly_pct": 61.6, "monthly_pct": 42.6,
     #     "five_hour_reset_sec": 11520, "weekly_reset_sec": 172800,
-    #     "plan_id": "go", "plan_status": "active", ...}
+    #     "plan_id": "individual-goat", "plan_status": "active",
+    #     "usage_summary": {"total_tokens": ..., "total_runs": ...},
+    #     "recent_runs": [...], ...}
 """
 
 from __future__ import annotations
@@ -36,6 +40,8 @@ _WEB_ORIGIN = "https://commandcode.ai"
 
 _CREDITS_PATH = "/internal/billing/credits"
 _SUBSCRIPTIONS_PATH = "/internal/billing/subscriptions"
+_USAGE_SUMMARY_PATH = "/internal/usage/summary"
+_USAGE_PATH = "/internal/usage"
 
 _USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -45,6 +51,18 @@ _USER_AGENT = (
 
 _TIMEOUT_SECONDS = 15
 
+# ── Plan catalog ────────────────────────────────────────────────────────────
+# Monthly usage-value (USD) per plan, used to derive monthly usage percentage
+# from ``credits.monthlyCredits`` (remaining) vs the plan's total. Mirrors
+# CodexBar's CommandCodePlanCatalog plan IDs.
+_PLAN_MONTHLY_CAP: dict[str, float] = {
+    "individual-go": 10.0,
+    "individual-pro": 30.0,
+    "individual-goat": 70.0,
+    "individual-max": 150.0,
+    "individual-ultra": 300.0,
+}
+
 
 @dataclass
 class CommandCodeSubscriptionSnapshot:
@@ -53,13 +71,28 @@ class CommandCodeSubscriptionSnapshot:
     purchased_credits: float = 0.0           # top-up / pay-as-you-go balance
     premium_monthly_credits: float = 0.0     # USD left in premium grant
     opensource_monthly_credits: float = 0.0  # USD left in open-source grant
-    five_hour_pct: float = 0.0               # 0-100 rolling 5h window usage
-    weekly_pct: float = 0.0                  # 0-100 rolling weekly usage
-    five_hour_reset_sec: int = 0             # seconds until 5h window resets
-    weekly_reset_sec: int = 0                # seconds until weekly resets
+    # Rolling 5-hour window
+    five_hour_pct: float = 0.0               # 0-100
+    five_hour_used: float = 0.0
+    five_hour_cap: float = 0.0
+    five_hour_reset_sec: int = 0             # seconds until reset (countdown)
+    # Rolling weekly window
+    weekly_pct: float = 0.0                  # 0-100
+    weekly_used: float = 0.0
+    weekly_cap: float = 0.0
+    weekly_reset_sec: int = 0                # seconds until reset (countdown)
+    # Monthly window (derived from plan cap + remaining credits)
+    monthly_pct: float = 0.0                 # 0-100
+    monthly_used: float = 0.0
+    monthly_cap: float = 0.0
+    monthly_reset_sec: int = 0
+    # Subscription
     plan_id: Optional[str] = None
     plan_status: Optional[str] = None
     billing_period_end: Optional[str] = None
+    # Usage totals + recent runs (from /internal/usage/*)
+    usage_summary: dict = field(default_factory=dict)
+    recent_runs: list = field(default_factory=list)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -87,66 +120,103 @@ def _http_get_json(url: str, headers: dict[str, str],
     return data
 
 
+def _num(value, default: float = 0.0) -> float:
+    """Coerce a JSON value (number or numeric string) to float."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _int(value, default: int = 0) -> int:
+    """Coerce a JSON value (number or numeric string) to int."""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # ── Credits parsing ────────────────────────────────────────────────────────
 
-def _parse_credits(payload: dict) -> dict:
-    """Extract credits fields from the /internal/billing/credits response.
+def _window_limits(payload: dict) -> dict:
+    """Locate the ``windowLimits`` object — at the response root or nested
+    inside ``credits`` (both shapes are observed in the wild)."""
+    wl = payload.get("windowLimits")
+    if isinstance(wl, dict) and wl:
+        return wl
+    credits = payload.get("credits")
+    if isinstance(credits, dict):
+        wl = credits.get("windowLimits")
+        if isinstance(wl, dict) and wl:
+            return wl
+    return {}
 
-    Expected shape::
+
+def _window_pct(window: dict, now_ts: float) -> tuple[float, float, float, int]:
+    """Parse one rolling window ``{used, cap, resetAt}`` into
+    ``(pct, used, cap, reset_sec)``.
+
+    ``resetAt`` is an absolute Unix epoch (seconds or milliseconds, number or
+    string) — converted to a countdown of seconds until reset.
+    """
+    used = _num(window.get("used"))
+    cap = _num(window.get("cap"))
+    pct = round((used / cap * 100.0) if cap > 0 else 0.0, 1)
+    pct = max(0.0, min(100.0, pct))
+
+    reset_at = _num(window.get("resetAt"))
+    reset_sec = 0
+    if reset_at > 0:
+        # Normalize ms → seconds (epochs beyond ~10B are milliseconds).
+        epoch_sec = reset_at / 1000.0 if reset_at > 10_000_000_000 else reset_at
+        reset_sec = int(max(0.0, epoch_sec - now_ts))
+    return pct, used, cap, reset_sec
+
+
+def _parse_credits(payload: dict) -> dict:
+    """Extract credits + rolling-window fields from /internal/billing/credits.
+
+    Expected shape (real response, 2026-08)::
 
         {"credits": {
-            "monthlyCredits": 8.78,
-            "purchasedCredits": 0.0,
-            "premiumMonthlyCredits": 0.0,
-            "opensourceMonthlyCredits": 8.78,
-            "belowThreshold": false,
-            "creditThreshold": 0,
-            "fiveHourLimit": {"used": 32, "limit": 100, "resetInSeconds": 11520},
-            "weeklyLimit":   {"used": 41, "limit": 100, "resetInSeconds": 172800},
-        }}
+            "monthlyCredits": 40.19,
+            "purchasedCredits": 0,
+            "premiumMonthlyCredits": 0,
+            "opensourceMonthlyCredits": 40.19,
+         },
+         "windowLimits": {
+            "limited": true, "exceeded": null,
+            "fiveHour": {"used": 1.47, "cap": 14, "resetAt": 1787084876441},
+            "weekly":   {"used": 21.57, "cap": 35, "resetAt": 1787424086179},
+         }}
+
+    ``windowLimits`` may alternatively be nested inside ``credits``.
     """
     credits = payload.get("credits") or {}
+    now_ts = datetime.now(timezone.utc).timestamp()
+    windows = _window_limits(payload)
 
-    def _f(key: str, default: float = 0.0) -> float:
-        try:
-            val = credits.get(key)
-            return float(val) if val is not None else default
-        except (TypeError, ValueError):
-            return default
-
-    def _window(key: str) -> tuple[float, float, int]:
-        win = credits.get(key) or {}
-        used = _f_win(win, "used")
-        limit = _f_win(win, "limit")
-        reset = _i_win(win, "resetInSeconds") or _i_win(win, "resetIn") or 0
-        pct = (used / limit * 100) if limit and limit > 0 else 0.0
-        return pct, used, reset
-
-    def _f_win(win: dict, key: str, default: float = 0.0) -> float:
-        try:
-            val = win.get(key)
-            return float(val) if val is not None else default
-        except (TypeError, ValueError):
-            return default
-
-    def _i_win(win: dict, key: str, default: int = 0) -> int:
-        try:
-            val = win.get(key)
-            return int(val) if val is not None else default
-        except (TypeError, ValueError):
-            return default
-
-    five_hour_pct, _five_hour_used, five_hour_reset = _window("fiveHourLimit")
-    weekly_pct, _weekly_used, weekly_reset = _window("weeklyLimit")
+    five_hour_pct, five_used, five_cap, five_reset = _window_pct(
+        windows.get("fiveHour") or {}, now_ts)
+    weekly_pct, weekly_used, weekly_cap, weekly_reset = _window_pct(
+        windows.get("weekly") or {}, now_ts)
 
     return {
-        "monthly_credits_remaining": _f("monthlyCredits"),
-        "purchased_credits": _f("purchasedCredits"),
-        "premium_monthly_credits": _f("premiumMonthlyCredits"),
-        "opensource_monthly_credits": _f("opensourceMonthlyCredits"),
-        "five_hour_pct": round(five_hour_pct, 1),
-        "weekly_pct": round(weekly_pct, 1),
-        "five_hour_reset_sec": five_hour_reset,
+        "monthly_credits_remaining": _num(credits.get("monthlyCredits")),
+        "purchased_credits": _num(credits.get("purchasedCredits")),
+        "premium_monthly_credits": _num(credits.get("premiumMonthlyCredits")),
+        "opensource_monthly_credits": _num(credits.get("opensourceMonthlyCredits")),
+        "five_hour_pct": five_hour_pct,
+        "five_hour_used": five_used,
+        "five_hour_cap": five_cap,
+        "five_hour_reset_sec": five_reset,
+        "weekly_pct": weekly_pct,
+        "weekly_used": weekly_used,
+        "weekly_cap": weekly_cap,
         "weekly_reset_sec": weekly_reset,
     }
 
@@ -160,7 +230,7 @@ def _parse_subscription(payload: dict) -> tuple[Optional[str], Optional[str], Op
 
         {"success": true, "data": {
             "id": "sub_...", "status": "active",
-            "planID": "go", "currentPeriodEnd": "2026-09-08T00:00:00Z",
+            "planId": "individual-goat", "currentPeriodEnd": "2026-09-08T...",
         }}
 
     ``data`` may be null when the user has no active subscription (free tier) —
@@ -169,10 +239,87 @@ def _parse_subscription(payload: dict) -> tuple[Optional[str], Optional[str], Op
     data = payload.get("data")
     if not isinstance(data, dict):
         return None, None, None
-    plan_id = data.get("planID") or data.get("planId") or data.get("plan")
+    plan_id = data.get("planId") or data.get("planID") or data.get("plan")
     status = data.get("status")
     period_end = data.get("currentPeriodEnd") or data.get("current_period_end")
     return plan_id, status, period_end
+
+
+# ── Usage parsing ──────────────────────────────────────────────────────────
+
+def _parse_usage_summary(payload: dict) -> dict:
+    """Extract billing-period totals from /internal/usage/summary.
+
+    Real shape (numeric tokens fields may be strings)::
+
+        {"totalCount": 2204, "totalCost": 29.81, "averageCost": 0.0135,
+         "successRate": 100, "completedCount": 2204, "failedCount": 0,
+         "totalTokensIn": 622439445, "totalTokensOut": 1588190,
+         "totalTokens": 624027635, "totalCredits": 29.81,
+         "totalFreeCredits": 0, "totalMonthlyCredits": 29.81,
+         "totalPurchasedCredits": 0, "periodBasis": "billing-period"}
+    """
+    return {
+        "total_runs": _int(payload.get("totalCount")),
+        "completed_runs": _int(payload.get("completedCount")),
+        "failed_runs": _int(payload.get("failedCount")),
+        "success_rate": _num(payload.get("successRate")),
+        "total_cost": _num(payload.get("totalCost")),
+        "average_cost": _num(payload.get("averageCost")),
+        "total_tokens_in": _int(payload.get("totalTokensIn")),
+        "total_tokens_out": _int(payload.get("totalTokensOut")),
+        "total_tokens": _int(payload.get("totalTokens")),
+        "total_credits": _num(payload.get("totalCredits")),
+        "total_free_credits": _num(payload.get("totalFreeCredits")),
+        "total_monthly_credits": _num(payload.get("totalMonthlyCredits")),
+        "total_purchased_credits": _num(payload.get("totalPurchasedCredits")),
+        "period_basis": payload.get("periodBasis") or "",
+    }
+
+
+def _parse_usage_list(payload: dict) -> list[dict]:
+    """Extract recent usage entries from /internal/usage.
+
+    Real shape::
+
+        {"usages": [ { "createdAt": "...", "tokensIn": "137815",
+            "tokensOut": "4716", "tokensTotal": "142531",
+            "creditsTotal": "0.0125", "durationTotal": "82422",
+            "status": "completed",
+            "meta": {"model": "deepseek/deepseek-v4-pro", ...},
+            "type": "api", "mode": "api", ... } ],
+         "nextCursor": "...", "limit": 10, ...}
+    """
+    rows = []
+    for u in payload.get("usages") or []:
+        if not isinstance(u, dict):
+            continue
+        meta = u.get("meta") or {}
+        rows.append({
+            "created_at": u.get("createdAt") or "",
+            "model": meta.get("model") or "",
+            "tokens_in": _int(u.get("tokensIn")),
+            "tokens_out": _int(u.get("tokensOut")),
+            "tokens_total": _int(u.get("tokensTotal")),
+            "credits_total": _num(u.get("creditsTotal")),
+            "duration_total": _num(u.get("durationTotal")),
+            "status": u.get("status") or "",
+        })
+    return rows
+
+
+def _derive_monthly(plan_id: Optional[str], monthly_remaining: float) -> tuple[float, float, float]:
+    """Derive (monthly_pct, monthly_used, monthly_cap) from plan + remaining.
+
+    Monthly usage value = plan's total monthly cap minus remaining credits,
+    clamped to [0, cap]. When the plan is unknown, ``cap`` is 0 (UI hides it).
+    """
+    cap = _PLAN_MONTHLY_CAP.get(plan_id or "", 0.0)
+    if cap <= 0:
+        return 0.0, 0.0, 0.0
+    used = max(0.0, min(cap, cap - monthly_remaining))
+    pct = round(used / cap * 100.0, 1) if cap > 0 else 0.0
+    return max(0.0, min(100.0, pct)), used, cap
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
@@ -220,18 +367,58 @@ def fetch_subscription_snapshot(cookie: Optional[str]) -> Optional[CommandCodeSu
         # Subscription enrichment is optional — credits still usable.
         logger.warning("commandcode_subscription_fetch_failed: %s", str(exc))
 
+    # ── Fetch usage totals (best-effort) ───────────────────────────────
+    usage_summary: dict = {}
+    recent_runs: list = []
+    try:
+        summary_url = _COMMANDCODE_BASE + _USAGE_SUMMARY_PATH
+        usage_summary = _parse_usage_summary(_http_get_json(summary_url, headers))
+    except Exception as exc:
+        logger.warning("commandcode_usage_summary_fetch_failed: %s", str(exc))
+    try:
+        usage_url = _COMMANDCODE_BASE + _USAGE_PATH + "?limit=10"
+        recent_runs = _parse_usage_list(_http_get_json(usage_url, headers))
+    except Exception as exc:
+        logger.warning("commandcode_usage_list_fetch_failed: %s", str(exc))
+
+    # ── Derive monthly usage % ─────────────────────────────────────────
+    monthly_pct, monthly_used, monthly_cap = _derive_monthly(
+        plan_id, credits["monthly_credits_remaining"])
+
+    # Monthly reset countdown from the billing period end (fallback: 0).
+    monthly_reset_sec = 0
+    if period_end:
+        try:
+            end = datetime.fromisoformat(period_end.replace("Z", "+00:00"))
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            monthly_reset_sec = int(max(0.0, (end - now).total_seconds()))
+        except (ValueError, AttributeError):
+            monthly_reset_sec = 0
+
     return CommandCodeSubscriptionSnapshot(
         monthly_credits_remaining=credits["monthly_credits_remaining"],
         purchased_credits=credits["purchased_credits"],
         premium_monthly_credits=credits["premium_monthly_credits"],
         opensource_monthly_credits=credits["opensource_monthly_credits"],
         five_hour_pct=credits["five_hour_pct"],
-        weekly_pct=credits["weekly_pct"],
+        five_hour_used=credits["five_hour_used"],
+        five_hour_cap=credits["five_hour_cap"],
         five_hour_reset_sec=credits["five_hour_reset_sec"],
+        weekly_pct=credits["weekly_pct"],
+        weekly_used=credits["weekly_used"],
+        weekly_cap=credits["weekly_cap"],
         weekly_reset_sec=credits["weekly_reset_sec"],
+        monthly_pct=monthly_pct,
+        monthly_used=monthly_used,
+        monthly_cap=monthly_cap,
+        monthly_reset_sec=monthly_reset_sec,
         plan_id=plan_id,
         plan_status=plan_status,
         billing_period_end=period_end,
+        usage_summary=usage_summary,
+        recent_runs=recent_runs,
     )
 
 
@@ -253,12 +440,23 @@ def fetch_subscription_snapshot_dict(cookie: Optional[str]) -> Optional[dict]:
         "premium_monthly_credits": snap.premium_monthly_credits,
         "opensource_monthly_credits": snap.opensource_monthly_credits,
         "five_hour_pct": snap.five_hour_pct,
-        "weekly_pct": snap.weekly_pct,
+        "five_hour_used": snap.five_hour_used,
+        "five_hour_cap": snap.five_hour_cap,
         "five_hour_reset_sec": snap.five_hour_reset_sec,
-        "weekly_reset_sec": snap.weekly_reset_sec,
         "five_hour_reset_at": _reset_at(snap.five_hour_reset_sec),
+        "weekly_pct": snap.weekly_pct,
+        "weekly_used": snap.weekly_used,
+        "weekly_cap": snap.weekly_cap,
+        "weekly_reset_sec": snap.weekly_reset_sec,
         "weekly_reset_at": _reset_at(snap.weekly_reset_sec),
+        "monthly_pct": snap.monthly_pct,
+        "monthly_used": snap.monthly_used,
+        "monthly_cap": snap.monthly_cap,
+        "monthly_reset_sec": snap.monthly_reset_sec,
+        "monthly_reset_at": _reset_at(snap.monthly_reset_sec),
         "plan_id": snap.plan_id,
         "plan_status": snap.plan_status,
         "billing_period_end": snap.billing_period_end,
+        "usage_summary": snap.usage_summary,
+        "recent_runs": snap.recent_runs,
     }

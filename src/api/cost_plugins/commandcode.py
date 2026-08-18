@@ -402,10 +402,12 @@ class CommandCodeCostPlugin(CostPlugin):
         Requires a Command Code browser session cookie — read from the
         encrypted credential store (UI-managed).  Returns::
 
-            {"monthly_credits_remaining": 8.78, "purchased_credits": 0.0,
-             "five_hour_pct": 32.0, "weekly_pct": 41.0,
+            {"monthly_credits_remaining": 40.19, "purchased_credits": 0.0,
+             "five_hour_pct": 10.5, "weekly_pct": 61.6, "monthly_pct": 42.6,
              "five_hour_reset_sec": 11520, "weekly_reset_sec": 172800,
-             "plan_id": "go", "plan_status": "active", ...}
+             "plan_id": "individual-goat", "plan_status": "active",
+             "usage_summary": {"total_tokens": ..., "total_runs": ...},
+             "recent_runs": [...], ...}
 
         Returns ``{"_error": "auth_failed", "detail": "..."}`` when the cookie
         is missing/invalid, or ``{"_error": "api_error", "detail": "..."}`` on
@@ -414,19 +416,41 @@ class CommandCodeCostPlugin(CostPlugin):
         try:
             if os.environ.get("LCP_MOCK_PLUGIN_DATA"):
                 return {
-                    "monthly_credits_remaining": 8.78,
+                    "monthly_credits_remaining": 40.19,
                     "purchased_credits": 0.0,
                     "premium_monthly_credits": 0.0,
-                    "opensource_monthly_credits": 8.78,
-                    "five_hour_pct": 32.0,
-                    "weekly_pct": 41.0,
+                    "opensource_monthly_credits": 40.19,
+                    "five_hour_pct": 10.5,
+                    "five_hour_used": 1.47,
+                    "five_hour_cap": 14.0,
                     "five_hour_reset_sec": 11520,
-                    "weekly_reset_sec": 172800,
                     "five_hour_reset_at": "",
+                    "weekly_pct": 61.6,
+                    "weekly_used": 21.57,
+                    "weekly_cap": 35.0,
+                    "weekly_reset_sec": 172800,
                     "weekly_reset_at": "",
-                    "plan_id": "go",
+                    "monthly_pct": 42.6,
+                    "monthly_used": 29.81,
+                    "monthly_cap": 70.0,
+                    "monthly_reset_sec": 0,
+                    "monthly_reset_at": "",
+                    "plan_id": "individual-goat",
                     "plan_status": "active",
                     "billing_period_end": None,
+                    "usage_summary": {
+                        "total_runs": 2204,
+                        "completed_runs": 2204,
+                        "failed_runs": 0,
+                        "success_rate": 100.0,
+                        "total_cost": 29.81,
+                        "total_tokens": 624027635,
+                        "total_tokens_in": 622439445,
+                        "total_tokens_out": 1588190,
+                        "total_monthly_credits": 29.81,
+                        "period_basis": "billing-period",
+                    },
+                    "recent_runs": [],
                 }
             from .commandcode_api import fetch_subscription_snapshot_dict
             cookie = ""

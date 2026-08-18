@@ -257,10 +257,12 @@ class TestBalanceAndSubscription:
     def test_subscription_mock_data(self, plugin):
         with patch.dict(os.environ, {"LCP_MOCK_PLUGIN_DATA": "1"}, clear=False):
             result = plugin.fetch_subscription()
-        assert result["monthly_credits_remaining"] == 8.78
-        assert result["five_hour_pct"] == 32.0
-        assert result["weekly_pct"] == 41.0
-        assert result["plan_id"] == "go"
+        assert result["monthly_credits_remaining"] == 40.19
+        assert result["five_hour_pct"] == 10.5
+        assert result["weekly_pct"] == 61.6
+        assert result["monthly_pct"] == 42.6
+        assert result["plan_id"] == "individual-goat"
+        assert result["usage_summary"]["total_runs"] == 2204
 
     def test_subscription_no_cookie(self, plugin):
         # No cookie in the store and no mock data
@@ -281,20 +283,25 @@ class TestBalanceAndSubscription:
             "opensource_monthly_credits": 5.0,
             "five_hour_pct": 50.0,
             "weekly_pct": 60.0,
+            "monthly_pct": 42.6,
             "five_hour_reset_sec": 100,
             "weekly_reset_sec": 200,
+            "monthly_reset_sec": 0,
             "five_hour_reset_at": "",
             "weekly_reset_at": "",
-            "plan_id": "pro",
+            "monthly_reset_at": "",
+            "plan_id": "individual-pro",
             "plan_status": "active",
             "billing_period_end": None,
+            "usage_summary": {"total_runs": 10, "total_tokens": 123},
+            "recent_runs": [],
         }
         with patch.dict(os.environ, {}, clear=False):
             with patch("src.api.credential_store.get_credential_store", return_value=fake_store):
                 with patch("src.api.cost_plugins.commandcode_api.fetch_subscription_snapshot_dict", return_value=fake_snapshot):
                     result = plugin.fetch_subscription()
         assert result["monthly_credits_remaining"] == 5.0
-        assert result["plan_id"] == "pro"
+        assert result["plan_id"] == "individual-pro"
         fake_store.get_cookie.assert_called_with("commandcode")
 
     def test_subscription_api_error(self, plugin):

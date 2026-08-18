@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1326%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-1332%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -109,7 +109,7 @@ Clients (agents, VS Code, scripts, curl)
 
 ### Plugin architecture
 - Provider cost extraction plugins — DeepSeek, OpenCode, Command Code, llama.cpp, OpenAI
-- **Command Code plugin** — subscription usage tracking (rolling 5-hour / weekly usage windows, monthly credits remaining, plan + status) via a browser session cookie from the credential store, plus cost history from the gateway `requests` table
+- **Command Code plugin** — subscription usage tracking (rolling 5-hour / weekly / monthly usage windows, monthly credits remaining, plan + status, plus billing-period totals: total tokens, total runs, and monthly usage) via a browser session cookie from the credential store, plus cost history from the gateway `requests` table
 - Memory plugin with embedded [LanceDB](https://github.com/lancedb/lancedb) backend — columnar vector storage, ANN indexing, no separate service
 - See [features/memory.md](features/memory.md) for the unified memory specification
 
@@ -446,13 +446,13 @@ Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 1326 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
+| `pytest` | Test runner — 1332 unit tests covering routing, budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**95% overall** — 5,821 of 6,153 statements covered (1326 tests, 0 integration tests).
+**95% overall** — 5,879 of 6,218 statements covered (1332 tests, 0 integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 
@@ -466,7 +466,7 @@ Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 | `src/api/cost_estimator.py` | 100% |
 | `src/api/cost_plugins/opencode_api.py` | 100% |
 | `src/api/cost_plugins/base.py` | 100% |
-| `src/api/cost_plugins/commandcode_api.py` | 96% |
+| `src/api/cost_plugins/commandcode_api.py` | 93% |
 | `src/api/cost_plugins/commandcode.py` | 93% |
 | `src/api/reasoning_store.py` | 96% |
 | `src/api/credential_store.py` | 97% |

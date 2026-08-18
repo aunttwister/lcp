@@ -11,11 +11,13 @@ from src.api.cost_plugins.commandcode_api import (
     fetch_subscription_snapshot_dict,
     _parse_credits,
     _parse_subscription,
+    _parse_usage_summary,
+    _parse_usage_list,
 )
 
 
 def _credits_payload(**overrides):
-    """A realistic /internal/billing/credits response."""
+    """A realistic /internal/billing/credits response (root windowLimits)."""
     payload = {
         "credits": {
             "belowThreshold": False,
@@ -24,10 +26,15 @@ def _credits_payload(**overrides):
             "purchasedCredits": 0.0,
             "premiumMonthlyCredits": 0.0,
             "opensourceMonthlyCredits": 8.7784,
-            "fiveHourLimit": {"used": 32, "limit": 100, "resetInSeconds": 11520},
-            "weeklyLimit": {"used": 41, "limit": 100, "resetInSeconds": 172800},
-        }
+        },
+        "windowLimits": {
+            "limited": True,
+            "exceeded": None,
+            "fiveHour": {"used": 4.48, "cap": 14, "exceeded": False, "resetAt": 1787084876441},
+            "weekly": {"used": 21.57, "cap": 35, "exceeded": False, "resetAt": 1787424086179},
+        },
     }
+    payload.update(overrides)
     return payload
 
 
@@ -37,7 +44,7 @@ def _subscription_payload(**overrides):
         "data": {
             "id": "sub_1TTzt3DSZgxV3MJKG4ClCWpn",
             "status": "active",
-            "planID": "go",
+            "planId": "individual-goat",
             "currentPeriodEnd": "2026-09-08T00:00:00Z",
         },
     }
@@ -45,24 +52,79 @@ def _subscription_payload(**overrides):
     return payload
 
 
+def _usage_summary_payload(**overrides):
+    payload = {
+        "totalCount": 2204,
+        "totalCost": 29.809112054199996,
+        "averageCost": 0.013525005469237747,
+        "successRate": 100,
+        "completedCount": 2204,
+        "failedCount": 0,
+        "totalTokensIn": 622439445,
+        "totalTokensOut": 1588190,
+        "totalTokens": 624027635,
+        "totalCredits": 29.809112054199996,
+        "totalFreeCredits": 0,
+        "totalMonthlyCredits": 29.809112054199996,
+        "totalPurchasedCredits": 0,
+        "periodBasis": "billing-period",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _usage_list_payload():
+    return {
+        "usages": [
+            {
+                "id": "b36423a0",
+                "createdAt": "2026-08-18T16:28:49.295Z",
+                "tokensIn": "137815",
+                "tokensOut": "4716",
+                "tokensTotal": "142531",
+                "creditsTotal": "0.01250678",
+                "durationTotal": "82422",
+                "status": "completed",
+                "meta": {"model": "deepseek/deepseek-v4-pro"},
+                "type": "api",
+                "mode": "api",
+            },
+        ],
+        "nextCursor": "...",
+        "limit": 10,
+    }
+
+
 class TestParseCredits:
     def test_full_credits(self):
         result = _parse_credits(_credits_payload())
-        assert result["monthly_credits_remaining"] == 8.7784
+        assert result["monthly_credits_remaining"] == pytest.approx(8.7784)
         assert result["purchased_credits"] == 0.0
         assert result["premium_monthly_credits"] == 0.0
-        assert result["opensource_monthly_credits"] == 8.7784
+        assert result["opensource_monthly_credits"] == pytest.approx(8.7784)
+        # 4.48 / 14 * 100 == 32.0 ; 21.57 / 35 * 100 == 61.6
         assert result["five_hour_pct"] == 32.0
-        assert result["weekly_pct"] == 41.0
-        assert result["five_hour_reset_sec"] == 11520
-        assert result["weekly_reset_sec"] == 172800
+        assert result["weekly_pct"] == 61.6
+        assert result["five_hour_used"] == pytest.approx(4.48)
+        assert result["five_hour_cap"] == 14.0
+        assert result["weekly_used"] == pytest.approx(21.57)
+        assert result["weekly_cap"] == 35.0
+        # resetAt is an absolute epoch-ms; the countdown must be non-negative.
+        assert result["five_hour_reset_sec"] >= 0
+        assert result["weekly_reset_sec"] >= 0
+
+    def test_window_limits_nested_in_credits(self):
+        payload = _credits_payload()
+        wl = payload.pop("windowLimits")
+        payload["credits"]["windowLimits"] = wl
+        result = _parse_credits(payload)
+        assert result["five_hour_pct"] == 32.0
+        assert result["weekly_pct"] == 61.6
 
     def test_zero_credits(self):
         payload = {"credits": {
             "monthlyCredits": 0, "purchasedCredits": 0,
             "premiumMonthlyCredits": 0, "opensourceMonthlyCredits": 0,
-            "fiveHourLimit": {"used": 0, "limit": 0, "resetInSeconds": 0},
-            "weeklyLimit": {"used": 0, "limit": 0, "resetInSeconds": 0},
         }}
         result = _parse_credits(payload)
         assert result["monthly_credits_remaining"] == 0.0
@@ -75,30 +137,70 @@ class TestParseCredits:
         assert result["five_hour_pct"] == 0.0
 
     def test_partial_windows(self):
-        payload = {"credits": {
-            "monthlyCredits": 5.0,
-            "fiveHourLimit": {"used": 10, "limit": 20, "resetInSeconds": 60},
-        }}
+        payload = _credits_payload()
+        payload["windowLimits"] = {
+            "fiveHour": {"used": "7", "cap": "14", "resetAt": "1787084876441"},
+        }
         result = _parse_credits(payload)
-        assert result["monthly_credits_remaining"] == 5.0
         assert result["five_hour_pct"] == 50.0
         assert result["weekly_pct"] == 0.0
 
     def test_non_numeric_values(self):
         payload = {"credits": {
             "monthlyCredits": "abc",  # bad
-            "fiveHourLimit": {"used": "x", "limit": "y", "resetInSeconds": "z"},
+        }, "windowLimits": {
+            "fiveHour": {"used": "x", "cap": "y", "resetAt": "z"},
         }}
         result = _parse_credits(payload)
         assert result["monthly_credits_remaining"] == 0.0
         assert result["five_hour_pct"] == 0.0
         assert result["five_hour_reset_sec"] == 0
 
+    def test_reset_at_seconds(self):
+        """resetAt as absolute seconds (not ms) should still parse."""
+        import time
+        now_sec = int(time.time())
+        payload = _credits_payload()
+        payload["windowLimits"]["fiveHour"] = {"used": 7, "cap": 14, "resetAt": now_sec + 3600}
+        result = _parse_credits(payload)
+        assert 0 < result["five_hour_reset_sec"] <= 3600
+
+
+class TestParseUsageSummary:
+    def test_full(self):
+        result = _parse_usage_summary(_usage_summary_payload())
+        assert result["total_runs"] == 2204
+        assert result["total_tokens"] == 624027635
+        assert result["total_tokens_in"] == 622439445
+        assert result["total_tokens_out"] == 1588190
+        assert result["total_monthly_credits"] == pytest.approx(29.809112054199996)
+        assert result["period_basis"] == "billing-period"
+
+    def test_string_tokens(self):
+        payload = _usage_summary_payload(totalTokens="12345", totalCount="99")
+        result = _parse_usage_summary(payload)
+        assert result["total_tokens"] == 12345
+        assert result["total_runs"] == 99
+
+
+class TestParseUsageList:
+    def test_full(self):
+        result = _parse_usage_list(_usage_list_payload())
+        assert len(result) == 1
+        row = result[0]
+        assert row["model"] == "deepseek/deepseek-v4-pro"
+        assert row["tokens_total"] == 142531
+        assert row["credits_total"] == pytest.approx(0.01250678)
+        assert row["status"] == "completed"
+
+    def test_empty(self):
+        assert _parse_usage_list({}) == []
+
 
 class TestParseSubscription:
     def test_full_subscription(self):
         plan_id, status, period = _parse_subscription(_subscription_payload())
-        assert plan_id == "go"
+        assert plan_id == "individual-goat"
         assert status == "active"
         assert period == "2026-09-08T00:00:00Z"
 
@@ -117,11 +219,11 @@ class TestParseSubscription:
     def test_plan_id_variants(self):
         for key in ("planID", "planId", "plan"):
             payload = _subscription_payload()
-            # Drop the default planID so only the variant key carries the value
-            payload["data"].pop("planID", None)
-            payload["data"][key] = "pro"
+            # Drop the default planId so only the variant key carries the value
+            payload["data"].pop("planId", None)
+            payload["data"][key] = "individual-pro"
             plan_id, _, _ = _parse_subscription(payload)
-            assert plan_id == "pro"
+            assert plan_id == "individual-pro"
 
 
 class TestFetchSubscriptionSnapshot:
@@ -147,33 +249,41 @@ class TestFetchSubscriptionSnapshot:
         responses = [
             self._mock_json(_credits_payload()),
             self._mock_json(_subscription_payload()),
+            self._mock_json(_usage_summary_payload()),
+            self._mock_json(_usage_list_payload()),
         ]
         with patch("src.api.cost_plugins.commandcode_api.urlopen", side_effect=responses):
             snap = fetch_subscription_snapshot("session=valid")
         assert isinstance(snap, CommandCodeSubscriptionSnapshot)
         assert snap.monthly_credits_remaining == pytest.approx(8.7784)
         assert snap.five_hour_pct == 32.0
-        assert snap.weekly_pct == 41.0
-        assert snap.five_hour_reset_sec == 11520
-        assert snap.weekly_reset_sec == 172800
-        assert snap.plan_id == "go"
+        assert snap.weekly_pct == 61.6
+        assert snap.five_hour_reset_sec >= 0
+        assert snap.weekly_reset_sec >= 0
+        assert snap.plan_id == "individual-goat"
         assert snap.plan_status == "active"
         assert snap.billing_period_end == "2026-09-08T00:00:00Z"
+        # Monthly derived: goat cap 70 - 8.7784 remaining ≈ 61.22 used → 87.5%
+        assert snap.monthly_cap == 70.0
+        assert snap.monthly_pct == pytest.approx(87.5, abs=0.1)
+        assert snap.usage_summary["total_runs"] == 2204
+        assert len(snap.recent_runs) == 1
 
     def test_subscription_endpoint_down_keeps_credits(self):
-        """Subscription enrichment failure should not break the credits fetch."""
+        """Subscription/usage failures should not break the credits fetch."""
         from urllib.error import HTTPError
         responses = [
             self._mock_json(_credits_payload()),
             HTTPError("url", 503, "Service Unavailable", {}, None),
         ]
-        # The HTTPError will be raised from urlopen — patch to raise for 2nd call
+        # The HTTPError will be raised from urlopen — patch to raise for calls
+        # after the first (subscription + summary + list are best-effort).
         def _fake_urlopen(req, timeout=15):
             call = _fake_urlopen.calls
             _fake_urlopen.calls += 1
             if call == 0:
                 return responses[0]
-            raise responses[1]
+            raise HTTPError("url", 503, "Service Unavailable", {}, None)
         _fake_urlopen.calls = 0
 
         with patch("src.api.cost_plugins.commandcode_api.urlopen", side_effect=_fake_urlopen):
@@ -181,6 +291,7 @@ class TestFetchSubscriptionSnapshot:
         assert snap is not None
         assert snap.monthly_credits_remaining == pytest.approx(8.7784)
         assert snap.plan_id is None  # enrichment failed but credits survived
+        assert snap.usage_summary == {}
 
     def test_credits_endpoint_auth_failure(self):
         from urllib.error import HTTPError
@@ -211,17 +322,28 @@ class TestFetchSubscriptionSnapshot:
 
 
 class TestFetchSubscriptionSnapshotDict:
-    def test_returns_dict(self):
+    def _mock_json(self, payload):
         resp = MagicMock()
-        resp.read.return_value = json.dumps(_credits_payload()).encode()
+        resp.read.return_value = json.dumps(payload).encode()
         resp.__enter__ = MagicMock(return_value=resp)
         resp.__exit__ = MagicMock(return_value=False)
-        with patch("src.api.cost_plugins.commandcode_api.urlopen", return_value=resp):
+        return resp
+
+    def test_returns_dict(self):
+        responses = [
+            self._mock_json(_credits_payload()),
+            self._mock_json(_subscription_payload()),
+            self._mock_json(_usage_summary_payload()),
+            self._mock_json(_usage_list_payload()),
+        ]
+        with patch("src.api.cost_plugins.commandcode_api.urlopen", side_effect=responses):
             result = fetch_subscription_snapshot_dict("session=valid")
         assert isinstance(result, dict)
         assert result["monthly_credits_remaining"] == pytest.approx(8.7784)
         assert "five_hour_pct" in result
+        assert "monthly_pct" in result
         assert "plan_id" in result
+        assert result["usage_summary"]["total_runs"] == 2204
 
     def test_none_when_fetch_fails(self):
         from urllib.error import URLError

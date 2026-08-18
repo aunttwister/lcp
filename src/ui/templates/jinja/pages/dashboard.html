@@ -1047,6 +1047,13 @@ loadProvBadges();
     return months[resetDate.getMonth()] + ' ' + resetDate.getDate() + ' ' +
       String(resetDate.getHours()).padStart(2, '0') + ':' + String(resetDate.getMinutes()).padStart(2, '0');
   }
+  function fmtTokens(n) {
+    if (n == null) return '—';
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
+  }
 
   // Compact bar shows the highest of rolling/weekly/monthly; hover popover shows all three.
   function renderOpencodeHeaderUsage(ocSub) {
@@ -1085,7 +1092,7 @@ loadProvBadges();
     if (hpUsage) hpUsage.style.display = 'none';
   }
 
-  // Command Code: compact bar = max of rolling(5h)/weekly; popover shows both + monthly credits.
+  // Command Code: compact bar = max of rolling(5h)/weekly/monthly; popover shows all three + monthly credits.
   function renderCommandCodeHeaderUsage(ccSub) {
     var hpUsage = document.getElementById('hpUsage');
     var hpFill = document.getElementById('hpUsageFill');
@@ -1097,6 +1104,9 @@ loadProvBadges();
       { name: 'Rolling (5h)', pct: ccSub.five_hour_pct, reset: ccSub.five_hour_reset_sec },
       { name: 'Weekly',       pct: ccSub.weekly_pct,  reset: ccSub.weekly_reset_sec }
     ];
+    if (ccSub.monthly_pct != null && ccSub.monthly_pct > 0) {
+      windows.push({ name: 'Monthly', pct: ccSub.monthly_pct, reset: ccSub.monthly_reset_sec });
+    }
     var top = windows.reduce(function(a, b) { return (b.pct > a.pct) ? b : a; });
     hpFill.style.width = Math.min(top.pct, 100) + '%';
     hpFill.className = 'hp-usage-fill ' + barColor(top.pct);
@@ -1117,6 +1127,12 @@ loadProvBadges();
       rows += '<div class="hp-usage-popover-row"><div class="hp-usage-pop-row-head">' +
         '<span class="hp-usage-pop-name">Monthly credits</span>' +
         '<span class="hp-usage-pop-pct">$' + ccSub.monthly_credits_remaining.toFixed(2) + '</span></div></div>';
+    }
+    var ccTotals = ccSub.usage_summary || {};
+    if (ccTotals.total_tokens != null) {
+      rows += '<div class="hp-usage-popover-row"><div class="hp-usage-pop-row-head">' +
+        '<span class="hp-usage-pop-name">Total tokens</span>' +
+        '<span class="hp-usage-pop-pct">' + fmtTokens(ccTotals.total_tokens) + '</span></div></div>';
     }
     hpPop.innerHTML = rows;
     hpUsage.style.display = 'flex';
