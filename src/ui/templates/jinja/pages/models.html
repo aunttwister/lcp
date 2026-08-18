@@ -78,6 +78,39 @@
 </div>
 </div>
 
+<!-- Register model modal -->
+<div class="modal-overlay dialog-overlay" id="registerModelModal">
+<div class="modal dialog-content" style="width:min(640px,95vw)">
+  <div class="modal-header dialog-header">
+    <h2 class="dialog-title">Register model</h2>
+    <button class="modal-close dialog-close" type="button" aria-label="Close" onclick="closeRegisterModel()">✕</button>
+  </div>
+  <div class="modal-body dialog-body">
+    <div class="form-field">
+      <label class="form-label" for="regLogicalName">Logical name</label>
+      <input class="form-input" id="regLogicalName" type="text" placeholder="e.g. deepseek-v4-pro">
+      <div class="form-help">Canonical name used across the dashboard and registry.</div>
+    </div>
+    <div class="form-field">
+      <label class="form-label" for="regBenchmarkKey">Benchmark key</label>
+      <input class="form-input" id="regBenchmarkKey" type="text" placeholder="e.g. deepseek-v4-pro">
+      <div class="form-help">Stable, release-independent key used in the capability matrix.</div>
+    </div>
+    <div class="form-field">
+      <label class="form-label">Providers</label>
+      <div id="regMappingRows"></div>
+      <button class="btn btn-outline btn-sm" type="button" id="regAddMappingRowBtn">+ Add provider</button>
+      <div class="form-help">Map each provider to the model ID that provider expects.</div>
+    </div>
+    <div class="form-error" id="regModelError"></div>
+  </div>
+  <div class="modal-footer dialog-footer">
+    <button class="btn btn-outline btn-sm" type="button" onclick="closeRegisterModel()">Cancel</button>
+    <button class="btn btn-primary btn-sm" type="button" id="saveRegisterBtn">Register</button>
+  </div>
+</div>
+</div>
+
 <!-- Add score modal -->
 <div class="modal-overlay dialog-overlay" id="scoreModal">
 <div class="modal dialog-content" style="width:min(560px,95vw)">
@@ -773,19 +806,57 @@ function closeScoreModal() {
 // ── Add / delete registry ──────────────────────────────────────────────────
 
 function addRegistry() {
-  const logical = prompt('Logical name (e.g. deepseek-v4-pro):');
-  if (!logical) return;
-  const benchmark = prompt('Benchmark key:', logical);
-  if (benchmark === null) return;
+  document.getElementById('regLogicalName').value = '';
+  document.getElementById('regBenchmarkKey').value = '';
+  document.getElementById('regModelError').textContent = '';
+  renderRegMappingRows({});
+  openDialog('registerModelModal');
+}
+
+function renderRegMappingRows(mappings) {
+  const wrap = document.getElementById('regMappingRows');
+  const entries = Object.entries(mappings || {});
+  wrap.innerHTML = entries.map(([p, m], i) => `
+    <div class="mapping-editor-row" data-index="${i}">
+      <input class="form-input" data-role="provider" placeholder="provider" value="${esc(p)}">
+      <input class="form-input" data-role="model" placeholder="model id" value="${esc(m)}">
+      <button class="mapping-remove" type="button" data-remove="${i}" title="Remove">✕</button>
+    </div>`).join('');
+  if (!entries.length) {
+    wrap.innerHTML = '<div class="form-help">No providers mapped yet.</div>';
+  }
+}
+
+function readRegMappingRows() {
+  const out = {};
+  document.querySelectorAll('#regMappingRows .mapping-editor-row').forEach(row => {
+    const p = row.querySelector('[data-role="provider"]').value.trim();
+    const m = row.querySelector('[data-role="model"]').value.trim();
+    if (p && m) out[p] = m;
+  });
+  return out;
+}
+
+function saveRegisterModel() {
+  const err = document.getElementById('regModelError');
+  const logical = document.getElementById('regLogicalName').value.trim();
+  const benchmark = document.getElementById('regBenchmarkKey').value.trim();
+  if (!logical) { err.textContent = 'Logical name is required.'; return; }
+  if (!benchmark) { err.textContent = 'Benchmark key is required.'; return; }
   API.upsertRegistry({
-    logical_name: logical.trim(),
-    benchmark_key: benchmark.trim(),
-    provider_mappings: {},
+    logical_name: logical,
+    benchmark_key: benchmark,
+    provider_mappings: readRegMappingRows(),
   }).then(r => {
-    if (r.error) { alert('Error: ' + r.error); return; }
-    STATE.selected = logical.trim();
+    if (r.error) { err.textContent = 'Error: ' + r.error; return; }
+    closeRegisterModel();
+    STATE.selected = logical;
     loadAll();
   });
+}
+
+function closeRegisterModel() {
+  closeDialog('registerModelModal');
 }
 
 let DELETE_TARGET = null;
@@ -954,6 +1025,31 @@ document.getElementById('mappingRows').addEventListener('click', function (e) {
 document.getElementById('saveModelBtn').addEventListener('click', saveEditModel);
 document.getElementById('saveScoreBtn').addEventListener('click', saveScore);
 document.getElementById('confirmDeleteModelBtn').addEventListener('click', confirmDeleteModel);
+document.getElementById('saveRegisterBtn').addEventListener('click', saveRegisterModel);
+document.getElementById('regAddMappingRowBtn').addEventListener('click', function () {
+  const wrap = document.getElementById('regMappingRows');
+  // Replace the "no providers yet" help with a row.
+  if (!wrap.querySelector('.mapping-editor-row')) wrap.innerHTML = '';
+  const idx = wrap.querySelectorAll('.mapping-editor-row').length;
+  const row = document.createElement('div');
+  row.className = 'mapping-editor-row';
+  row.dataset.index = idx;
+  row.innerHTML = `
+    <input class="form-input" data-role="provider" placeholder="provider">
+    <input class="form-input" data-role="model" placeholder="model id">
+    <button class="mapping-remove" type="button" title="Remove">✕</button>`;
+  wrap.appendChild(row);
+  row.querySelector('[data-role="provider"]').focus();
+});
+document.getElementById('regMappingRows').addEventListener('click', function (e) {
+  const btn = e.target.closest('.mapping-remove');
+  if (!btn) return;
+  const row = btn.closest('.mapping-editor-row');
+  if (row) row.remove();
+  if (!document.querySelector('#regMappingRows .mapping-editor-row')) {
+    document.getElementById('regMappingRows').innerHTML = '<div class="form-help">No providers mapped yet.</div>';
+  }
+});
 
 loadAll();
 </script>
