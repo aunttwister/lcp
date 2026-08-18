@@ -101,6 +101,7 @@
       <div id="regMappingRows"></div>
       <button class="btn btn-outline btn-sm" type="button" id="regAddMappingRowBtn">+ Add provider</button>
       <div class="form-help">Map each provider to the model ID that provider expects.</div>
+      <div class="form-help" id="regExistingNote"></div>
     </div>
     <div class="form-error" id="regModelError"></div>
   </div>
@@ -810,6 +811,7 @@ function addRegistry() {
   document.getElementById('regBenchmarkKey').value = '';
   document.getElementById('regModelError').textContent = '';
   renderRegMappingRows({});
+  updateRegExistingNote();
   openDialog('registerModelModal');
 }
 
@@ -831,11 +833,82 @@ function availableProviders() {
   return Object.keys(STATE.providers || {}).sort();
 }
 
+// ── Register-modal provider uniqueness ─────────────────────────────────────
+
+// Resolve a raw key to a registry entry: exact logical name first, then
+// through the alias map (benchmark keys and provider-side model IDs).
+function regLookup(k) {
+  if (!k) return null;
+  if (STATE.registry[k]) return STATE.registry[k];
+  const logical = (STATE.aliasMap || {})[k];
+  return logical ? (STATE.registry[logical] || null) : null;
+}
+
+// The register modal UPDATES an existing model only when the typed logical
+// name resolves to a registry entry. A benchmark key that matches a different
+// model is a conflict (caught at save time), not a target to pre-fill.
+function regTargetEntry() {
+  const logical = (document.getElementById('regLogicalName').value || '').trim().toLowerCase();
+  const benchmark = (document.getElementById('regBenchmarkKey').value || '').trim().toLowerCase();
+  return regLookup(logical) || null;
+}
+
+function regExistingMappings() {
+  const entry = regTargetEntry();
+  return (entry && entry.provider_mappings) || {};
+}
+
+// Providers already mapped to the target model in the registry. These are
+// grayed out so a (provider, model) pair can never be registered twice.
+function regAlreadyMappedProviders() {
+  return new Set(Object.keys(regExistingMappings()));
+}
+
+function updateRegExistingNote() {
+  const note = document.getElementById('regExistingNote');
+  const entry = regTargetEntry();
+  if (entry) {
+    const providers = Object.keys(entry.provider_mappings || {});
+    note.textContent = providers.length
+      ? `Already registered as "${entry.logical_name}" with: ${providers.join(', ')}. Those providers are grayed out — only unmapped providers can be added.`
+      : `Already registered as "${entry.logical_name}" — no providers mapped yet.`;
+  } else {
+    note.textContent = '';
+  }
+  refreshRegProviderSelects();
+}
+
+// Reject duplicate registrations before they reach the API: a benchmark key
+// may not belong to two models, and a (provider, model) pair may not be
+// claimed by two models.
+function regConflicts(providerMappings) {
+  const logical = (document.getElementById('regLogicalName').value || '').trim().toLowerCase();
+  const benchmark = (document.getElementById('regBenchmarkKey').value || '').trim().toLowerCase();
+  const target = regTargetEntry();
+  const targetName = target ? target.logical_name : null;
+  const holder = regLookup(benchmark);
+  if (holder && holder.logical_name !== targetName && holder.logical_name !== logical) {
+    return `Benchmark key "${benchmark}" is already registered to "${holder.logical_name}".`;
+  }
+  for (const [provider, model] of Object.entries(providerMappings || {})) {
+    const norm = normalizeModelId(model);
+    for (const [otherName, other] of Object.entries(STATE.registry)) {
+      if (otherName === targetName) continue;
+      const otherMid = (other.provider_mappings || {})[provider];
+      if (otherMid && normalizeModelId(otherMid) === norm) {
+        return `Provider "${provider}" already maps "${otherMid}" to "${otherName}".`;
+      }
+    }
+  }
+  return '';
+}
+
 function nextRegProvider() {
-  // First provider not already taken by an existing row, so new rows never
-  // start out as a duplicate.
+  // First provider not already taken by an existing row or already mapped to
+  // the target model, so new rows never start out as a duplicate.
   const used = new Set([...document.querySelectorAll('#regMappingRows select[data-role="provider"]')]
     .map(s => s.value).filter(Boolean));
+  regAlreadyMappedProviders().forEach(p => used.add(p));
   return availableProviders().find(n => !used.has(n)) || '';
 }
 
@@ -874,10 +947,12 @@ function regMappingRowHtml(p, m, disabledNames) {
 }
 
 function refreshRegProviderSelects() {
-  // Recompute which providers are already taken and gray them out everywhere
+  // Recompute which providers are already taken — by another row OR already
+  // mapped to the target model in the registry — and gray them out everywhere
   // except their own row, keeping selections intact.
   const selects = [...document.querySelectorAll('#regMappingRows select[data-role="provider"]')];
   const used = new Set(selects.map(s => s.value).filter(Boolean));
+  regAlreadyMappedProviders().forEach(p => used.add(p));
   selects.forEach(sel => {
     const cur = sel.value;
     const disabledNames = new Set(used);
@@ -901,14 +976,20 @@ function readRegMappingRows() {
 
 function saveRegisterModel() {
   const err = document.getElementById('regModelError');
-  const logical = document.getElementById('regLogicalName').value.trim();
-  const benchmark = document.getElementById('regBenchmarkKey').value.trim();
+  const logical = document.getElementById('regLogicalName').value.trim().toLowerCase();
+  const benchmark = document.getElementById('regBenchmarkKey').value.trim().toLowerCase();
   if (!logical) { err.textContent = 'Logical name is required.'; return; }
   if (!benchmark) { err.textContent = 'Benchmark key is required.'; return; }
+  const newRows = readRegMappingRows();
+  // Preserve mappings that already exist for this model, so re-registering an
+  // existing model never wipes its current provider mappings.
+  const merged = {...regExistingMappings(), ...newRows};
+  const conflict = regConflicts(merged);
+  if (conflict) { err.textContent = 'Error: ' + conflict; return; }
   API.upsertRegistry({
     logical_name: logical,
     benchmark_key: benchmark,
-    provider_mappings: readRegMappingRows(),
+    provider_mappings: merged,
   }).then(r => {
     if (r.error) { err.textContent = 'Error: ' + r.error; return; }
     closeRegisterModel();
@@ -1092,13 +1173,23 @@ document.getElementById('regAddMappingRowBtn').addEventListener('click', functio
   const wrap = document.getElementById('regMappingRows');
   // Replace the "no providers yet" help with a row.
   if (!wrap.querySelector('.mapping-editor-row')) wrap.innerHTML = '';
+  const provider = nextRegProvider();
+  if (!provider) {
+    // Every provider is already mapped to the target model (or none exist).
+    const note = document.getElementById('regExistingNote');
+    const entry = regTargetEntry();
+    note.textContent = entry
+      ? `All available providers are already mapped to "${entry.logical_name}". Remove a row to change a mapping.`
+      : 'No providers are available to map.';
+    return;
+  }
   // regMappingRowHtml already returns a full .mapping-editor-row div, so parse
   // it and append that element directly rather than nesting it in another row.
   const tmp = document.createElement('div');
-  tmp.innerHTML = regMappingRowHtml(nextRegProvider(), '');
+  tmp.innerHTML = regMappingRowHtml(provider, '');
   const row = tmp.firstElementChild;
   wrap.appendChild(row);
-  // Gray out providers that are already taken in other rows.
+  // Gray out providers that are already taken in other rows or already mapped.
   refreshRegProviderSelects();
   row.querySelector('[data-role="provider"]').focus();
 });
@@ -1129,6 +1220,12 @@ document.getElementById('regMappingRows').addEventListener('change', function (e
   container.replaceChild(tmp.firstChild, modelField);
   // The provider just picked is now taken — gray it out in every other row.
   refreshRegProviderSelects();
+});
+
+// As the user types a logical name / benchmark key, surface existing
+// registrations and gray out providers that are already mapped to them.
+['regLogicalName', 'regBenchmarkKey'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateRegExistingNote);
 });
 
 loadAll();

@@ -2139,6 +2139,30 @@ class DashboardEndpoints:
         now = datetime.now(timezone.utc).isoformat()
         try:
             with _gs(self.engine) as session:
+                # Uniqueness guards: a benchmark key may belong to only one
+                # logical model, and a (provider, provider-side model ID) pair
+                # may be mapped by only one logical model. Updating the SAME
+                # logical model (below) is always allowed.
+                others = session.query(ModelRegistryEntry).filter(
+                    ModelRegistryEntry.logical_name != logical
+                ).all()
+                for other in others:
+                    if benchmark and other.benchmark_key and other.benchmark_key == benchmark:
+                        self._send_json({
+                            "error": f"benchmark key '{benchmark}' is already registered to '{other.logical_name}'"
+                        }, 400)
+                        return
+                    try:
+                        other_mappings = json.loads(other.provider_mappings_json or "{}")
+                    except json.JSONDecodeError:
+                        other_mappings = {}
+                    for prov, mid in provider_mappings.items():
+                        other_mid = other_mappings.get(prov)
+                        if other_mid and normalize_model_id(other_mid) == normalize_model_id(mid):
+                            self._send_json({
+                                "error": f"provider '{prov}' already maps '{other_mid}' to '{other.logical_name}'"
+                            }, 400)
+                            return
                 entry = session.query(ModelRegistryEntry).filter_by(
                     logical_name=logical
                 ).first()

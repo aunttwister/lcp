@@ -135,6 +135,50 @@ class TestRegistryApi:
         h.do_DELETE()
         assert _status(h) == 404
 
+    def test_upsert_rejects_reused_benchmark_key(self, temp_db):
+        # model-a claims benchmark key "shared-key".
+        h = TestHandler(path="/api/models/registry", method="POST", engine=temp_db[1],
+                        body=json.dumps({"logical_name": "model-a", "benchmark_key": "shared-key",
+                                         "provider_mappings": {}}))
+        h.do_POST()
+        assert _status(h) == 200
+        # A different logical model may not reuse that benchmark key.
+        h = TestHandler(path="/api/models/registry", method="POST", engine=temp_db[1],
+                        body=json.dumps({"logical_name": "model-b", "benchmark_key": "shared-key",
+                                         "provider_mappings": {}}))
+        h.do_POST()
+        assert _status(h) == 400
+        assert "already registered" in _json_body(h)["error"]
+
+    def test_upsert_rejects_duplicate_provider_mapping(self, temp_db):
+        # model-a claims deepseek → deepseek-v4-pro.
+        h = TestHandler(path="/api/models/registry", method="POST", engine=temp_db[1],
+                        body=json.dumps({"logical_name": "model-a", "benchmark_key": "model-a",
+                                         "provider_mappings": {"deepseek": "deepseek-v4-pro"}}))
+        h.do_POST()
+        assert _status(h) == 200
+        # model-b may not claim the same (provider, model) pair, even via a
+        # differently-cased / path-qualified spelling of the model ID.
+        h = TestHandler(path="/api/models/registry", method="POST", engine=temp_db[1],
+                        body=json.dumps({"logical_name": "model-b", "benchmark_key": "model-b",
+                                         "provider_mappings": {"deepseek": "/models/DeepSeek-V4-Pro.gguf"}}))
+        h.do_POST()
+        assert _status(h) == 400
+        assert "already maps" in _json_body(h)["error"]
+
+    def test_upsert_allows_updating_same_model(self, temp_db):
+        # Re-registering the SAME logical model with its own mappings is an
+        # update, not a duplicate → allowed.
+        body = json.dumps({"logical_name": "model-a", "benchmark_key": "model-a",
+                           "provider_mappings": {"deepseek": "deepseek-v4-pro"}})
+        h = TestHandler(path="/api/models/registry", method="POST", engine=temp_db[1], body=body)
+        h.do_POST()
+        assert _status(h) == 200
+        h = TestHandler(path="/api/models/registry", method="POST", engine=temp_db[1], body=body)
+        h.do_POST()
+        assert _status(h) == 200
+        assert _json_body(h)["action"] == "updated"
+
 
 # ── Benchmark endpoints ──────────────────────────────────────────────────────
 
