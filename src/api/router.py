@@ -191,11 +191,23 @@ DEFAULT_CAPABILITY: dict[str, float] = {
 # Cost bias: how much to boost cheaper models (0.0 = pure capability, 0.3 = strong cost bias)
 DEFAULT_COST_BIAS = 0.15
 
+# Hysteresis: only override/reorder when the best step beats the default by this much.
+_HYSTERESIS = 0.05
+
 # Known model pricing (USD per 1M output tokens) — from gateway.yaml
 _MODEL_PRICES: dict[str, float] = {
     "deepseek-v4-pro": 0.87,
     "deepseek-v4-flash": 0.27,
 }
+
+# Health bonus per circuit-breaker status (adds to a step's score).
+_HEALTH_BONUS: dict[str, float] = {
+    "healthy": 0.05,
+    "degraded": -0.03,
+    "dead": -0.25,
+}
+# Score penalty when a provider's cached usage suggests it is running low.
+_LOW_CREDIT_PENALTY = -0.10
 
 
 # ── Model registry — DB-backed, explicit, no runtime name parsing ────────────
@@ -426,6 +438,115 @@ class CapabilityRouter:
             score=round(default_score, 3),
         )
         return None
+
+    # ── Provider-aware selection (Phase 2) ────────────────────────────────
+
+    def _health_bonus(self, step: dict, profile: Optional[str] = None,
+                      config: Optional[object] = None) -> float:
+        """Bonus/penalty from the circuit breaker's per-provider health.
+
+        A 96% model on a degraded provider can lose to a 94% model on a
+        healthy one. Returns 0 when the breaker is unavailable (e.g. tests).
+        """
+        try:
+            from .circuit_breaker import get_circuit_breaker
+            provider = step["provider"]
+            base_url = step.get("base_url") or ""
+            if config is not None and not base_url:
+                base_url = (config.providers or {}).get(provider, {}).get("api_base", "")
+            cb = get_circuit_breaker()
+            status = cb.status_of(provider, base_url, profile or "")
+            return _HEALTH_BONUS.get(status, 0.0)
+        except Exception:  # noqa: BLE001 — tiebreaker must never break routing
+            return 0.0
+
+    def _credit_bonus(self, provider: str) -> float:
+        """Penalty when a provider's cached usage suggests low credits.
+
+        Reads the DB cost cache (never scrapes): opencode monthly% >= 95,
+        commandcode remaining credits <= $5, deepseek balance <= $1.
+        """
+        try:
+            from .cost_cache import get_cost_cache
+            cache = get_cost_cache()
+            if cache is None:
+                return 0.0
+            sub = cache.get(provider, "subscription")
+            if sub:
+                p = sub["payload"] or {}
+                if p.get("_error"):
+                    return _LOW_CREDIT_PENALTY
+                if provider == "opencode":
+                    mpct = p.get("monthly_pct")
+                    if mpct is not None and mpct >= 95:
+                        return _LOW_CREDIT_PENALTY
+                elif provider == "commandcode":
+                    rem = p.get("monthly_credits_remaining")
+                    if rem is not None and rem <= 5.0:
+                        return _LOW_CREDIT_PENALTY
+            bal = cache.get(provider, "balance")
+            if bal:
+                p = bal["payload"] or {}
+                b = p.get("balance")
+                if isinstance(b, dict):
+                    avail = b.get("available")
+                    if avail is not None and avail <= 1.0:
+                        return _LOW_CREDIT_PENALTY
+        except Exception:  # noqa: BLE001 — tiebreaker must never break routing
+            pass
+        return 0.0
+
+    def score_step(self, step: dict, task: str, profile: Optional[str] = None,
+                   config: Optional[object] = None) -> float:
+        """Score a single ``{provider, model}`` chain step.
+
+        capability + cost-bias boost + health bonus + credit penalty.
+        """
+        model = step["model"]
+        capability = self.get_model_score(model, task)
+        price = _MODEL_PRICES.get(model, 1.0)
+        max_price = max(_MODEL_PRICES.values()) if _MODEL_PRICES else 1.0
+        cost_factor = price / max_price if max_price > 0 else 0.5
+        score = capability + self.cost_bias * (1.0 - cost_factor)
+        score += self._health_bonus(step, profile, config)
+        score += self._credit_bonus(step["provider"])
+        return score
+
+    def select_step(self, messages: list[dict], tools: Optional[list[dict]] = None,
+                    max_tokens: int = 1024, chain: Optional[list[dict]] = None,
+                    profile: Optional[str] = None, config: Optional[object] = None,
+                    ) -> Optional[list[dict]]:
+        """Provider-aware selection: reorder a COPY of the chain so the best
+        (provider, model) step is tried first.
+
+        Returns a reordered list when the best step meaningfully beats the
+        current first step (capability + cost + health + credits), else None
+        to keep the chain's existing order. The caller applies it to its own
+        copy — this never mutates the profile config.
+        """
+        if not self.enabled or not chain:
+            return None
+        task = classify_task(messages, tools, max_tokens)
+        scored = sorted(
+            ((self.score_step(step, task, profile, config), i, step)
+             for i, step in enumerate(chain)),
+            key=lambda x: -x[0],
+        )
+        best_score, best_idx, best = scored[0]
+        default_score = self.score_step(chain[0], task, profile, config)
+        if best_idx == 0 or best_score <= default_score + _HYSTERESIS:
+            return None
+        rest = [step for i, step in enumerate(chain) if i != best_idx]
+        logger.info(
+            "router_step_override",
+            task=task,
+            profile=profile or "",
+            from_provider=chain[0]["provider"], from_model=chain[0]["model"],
+            to_provider=best["provider"], to_model=best["model"],
+            default_score=round(default_score, 3),
+            recommended_score=round(best_score, 3),
+        )
+        return [best, *rest]
 
 
 # ── Global instances ──────────────────────────────────────────────────────────

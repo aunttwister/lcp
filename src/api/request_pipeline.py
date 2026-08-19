@@ -606,25 +606,19 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
     chain_len = len(chain)
     errors = []
 
-    # ── Dynamic router: override model in first chain step if smarter ──────
+    # ── Dynamic router: reorder chain so best (provider, model) step is first ─
     router = get_dynamic_router()
     if router.enabled and chain_len > 0:
-        router_model = router.select_model(
+        reordered = router.select_step(
             messages=body.get("messages", []),
             tools=body.get("tools"),
             max_tokens=body.get("max_tokens", 1024),
-            available_models=list(dict.fromkeys(step["model"] for step in chain)),
+            chain=chain,
+            profile=profile_name,
+            config=config,
         )
-        if router_model:
-            # Override the model in the first chain step (on the copy only).
-            original = chain[0].get("model", "?")
-            chain[0]["model"] = router_model
-            logger.info(
-                "router_model_override",
-                profile=profile_name,
-                original=original,
-                selected=router_model,
-            )
+        if reordered:
+            chain = reordered  # apply to the local copy only
 
     for i, step in enumerate(chain):
         provider_name = step["provider"]

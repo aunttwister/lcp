@@ -153,6 +153,97 @@ def test_select_model_debugging_prompt_returns_choice(registry_db):
     assert result in ("deepseek-v4-flash", "deepseek-v4-pro")
 
 
+# ── Provider-aware selection (Phase 2) ───────────────────────────────────
+
+def test_score_step_uses_capability_and_cost(registry_db):
+    from src.api.seed_capabilities import seed_livebench
+    seed_livebench(registry_db)
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    # No breaker/cost-cache configured → pure capability + cost-bias boost.
+    s = router.score_step({"provider": "opencode", "model": "deepseek-v4-pro",
+                           "base_url": "https://opencode.ai"}, "reasoning_chain")
+    assert s > 0.5
+    # Same model on the same step scores identically without health input.
+    s2 = router.score_step({"provider": "deepseek", "model": "deepseek-v4-pro",
+                            "base_url": "https://deepseek.com"}, "reasoning_chain")
+    assert abs(s - s2) < 1e-9  # health/credit tiebreakers both absent
+
+def test_health_bonus_penalizes_degraded(registry_db):
+    from src.api.seed_capabilities import seed_livebench
+    from src.api.circuit_breaker import get_circuit_breaker
+    seed_livebench(registry_db)
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+
+    class _Cfg:
+        providers = {"deepseek": {"api_base": "https://deepseek.com"},
+                     "opencode": {"api_base": "https://opencode.ai"}}
+    cfg = _Cfg()
+    breaker_cfg = {"failures_dead": 5, "dead_cooldown_seconds": 60,
+                   "failures_degraded": 3, "degraded_cooldown_seconds": 60}
+    get_circuit_breaker(breaker_cfg)
+
+    healthy_step = {"provider": "deepseek", "model": "deepseek-v4-pro"}
+    degraded_step = {"provider": "opencode", "model": "deepseek-v4-pro"}
+    # Mark opencode degraded for this profile/base_url.
+    get_circuit_breaker().get_health("opencode", "https://opencode.ai", "l2")["status"] = "degraded"
+
+    sh = router.score_step(healthy_step, "reasoning_chain", profile="l2", config=cfg)
+    sd = router.score_step(degraded_step, "reasoning_chain", profile="l2", config=cfg)
+    assert sh > sd  # healthy provider step scores higher
+
+def test_credit_bonus_penalizes_low_credits(registry_db, monkeypatch):
+    from src.api.seed_capabilities import seed_livebench
+    seed_livebench(registry_db)
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+
+    class FakeCache:
+        def get(self, provider, kind):
+            if provider == "commandcode" and kind == "subscription":
+                return {"payload": {"monthly_credits_remaining": 1.0}}
+            return None
+    monkeypatch.setattr("src.api.cost_cache.get_cost_cache", lambda: FakeCache())
+
+    step = {"provider": "commandcode", "model": "deepseek-v4-pro", "base_url": "x"}
+    base = router.score_step(step, "reasoning_chain")
+    # Same provider with plenty of credits scores higher (no penalty).
+    class RichCache:
+        def get(self, provider, kind):
+            if provider == "commandcode" and kind == "subscription":
+                return {"payload": {"monthly_credits_remaining": 50.0}}
+            return None
+    monkeypatch.setattr("src.api.cost_cache.get_cost_cache", lambda: RichCache())
+    rich = router.score_step(step, "reasoning_chain")
+    assert rich > base
+
+def test_select_step_reorders_best_first(registry_db, monkeypatch):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    # Force known scores: second step clearly better.
+    monkeypatch.setattr(router, "score_step",
+                        lambda step, task, profile=None, config=None:
+                        0.9 if step["model"] == "deepseek-v4-pro" else 0.6)
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    out = router.select_step([{"role": "user", "content": "hi"}], chain=chain)
+    assert out is not None
+    assert out[0]["model"] == "deepseek-v4-pro"  # best first
+
+def test_select_step_keeps_order_within_hysteresis(registry_db, monkeypatch):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    # Both steps ~equal → no reorder (avoids flapping).
+    monkeypatch.setattr(router, "score_step",
+                        lambda step, task, profile=None, config=None:
+                        0.81 if step["model"] == "deepseek-v4-pro" else 0.80)
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    assert router.select_step([{"role": "user", "content": "hi"}], chain=chain) is None
+
+def test_select_step_disabled_or_empty_returns_none(registry_db):
+    router = CapabilityRouter(enabled=False, db_path=registry_db)
+    assert router.select_step([{"role": "user", "content": "hi"}], chain=[{"provider": "a", "model": "m"}]) is None
+    router.enabled = True
+    assert router.select_step([{"role": "user", "content": "hi"}], chain=[]) is None
+
+
 # ── Model registry tests (explicit alias → logical → benchmark) ───────────
 
 def test_logical_model_name_maps_provider_alias(registry_db):

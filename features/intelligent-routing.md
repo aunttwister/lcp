@@ -55,14 +55,19 @@
 - **Kept as-is:** deterministic top-1, model-only override, 5% hysteresis,
   hardcoded `_MODEL_PRICES`.
 
-#### Phase 2 — Task-aware (provider, model) selection
-- Extend selection from *model* to *(provider, model)* pairs (each chain step is
-  `{provider, model}`); rank steps themselves using `provider_model_name` + matrix
-  score + cost.
-- Add a **provider health/credits tiebreaker** (from circuit breaker uptime + the
-  new cost cache) so a 96% model on a degraded provider loses to 94% on a healthy one.
-- Selection policy: deterministic top-1 by default, optional weighted sampling
-  (`explore`) for spread + A/B-style exploration.
+#### Phase 2 — Task-aware (provider, model) selection ✅ DONE (2026-08-19)
+- `CapabilityRouter.score_step(step, task, profile, config)` scores a
+  `{provider, model}` step as: capability + cost-bias boost + **health bonus**
+  (from the circuit breaker: healthy +0.05 / degraded −0.03 / dead −0.25) +
+  **credit penalty** (from the DB cost cache: opencode monthly% ≥95,
+  commandcode remaining ≤$5, deepseek balance ≤$1 → −0.10).
+- `select_step(messages, …, chain, profile, config)` classifies, ranks steps,
+  and returns a **reordered copy** (best step first) when the best step beats
+  the current first step by more than the 5% hysteresis; else `None`.
+- `try_chain` applies the reordered chain to its local copy only (never mutates
+  profile config). Tiebreakers degrade gracefully (0) when the circuit breaker
+  / cost cache are unavailable.
+- Selection policy stays **deterministic top-1** (weighted `explore` later).
 
 #### Phase 3 — Benchmark closed loop + routing policy
 - Auto-enqueue benchmarks for new/edited registry models; invalidate the router's

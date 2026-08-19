@@ -787,9 +787,9 @@ class TestTryChainDynamicRouter:
     def _body(self):
         return {"messages": [{"role": "user", "content": "why does this fail with a TypeError?"}]}
 
-    def test_router_override_does_not_mutate_profile_config(self, chain_config):
-        """A dynamic-router model override must apply to a COPY of the chain —
-        the profile config must never be permanently changed."""
+    def test_router_reorder_does_not_mutate_profile_config(self, chain_config):
+        """A dynamic-router reorder must apply to a COPY of the chain — the
+        profile config must never be permanently changed."""
         from unittest.mock import patch as _patch
 
         good_resp = MagicMock()
@@ -801,7 +801,8 @@ class TestTryChainDynamicRouter:
 
         fake_router = MagicMock()
         fake_router.enabled = True
-        fake_router.select_model.return_value = "m2"  # router overrides m1 → m2
+        # Router reorders so the second step (m2) is tried first.
+        fake_router.select_step.side_effect = lambda **kw: [kw["chain"][1], kw["chain"][0]]
 
         profile_cfg = chain_config.profiles["l2"]
         with _patch("src.api.request_pipeline.get_dynamic_router", return_value=fake_router), \
@@ -809,17 +810,15 @@ class TestTryChainDynamicRouter:
             result_body, status, provider, model = try_chain(
                 "l2", profile_cfg, self._body(), chain_config)
 
-        # The request used the overridden model...
+        # The request tried the reordered step first (m2)...
         assert model == "m2"
+        assert provider == "second"
         # ...but the profile config's chain is untouched.
         assert profile_cfg["chain"][0]["model"] == "m1"
         assert profile_cfg["chain"][1]["model"] == "m2"
-        # And the router's deduped available_models were passed the chain models.
-        _, kwargs = fake_router.select_model.call_args
-        assert kwargs["available_models"] == ["m1", "m2"]
 
     def test_router_returning_none_keeps_default(self, chain_config):
-        """When the router recommends no override, the chain model is kept."""
+        """When the router recommends no reorder, the chain order is kept."""
         from unittest.mock import patch as _patch
 
         good_resp = MagicMock()
@@ -831,7 +830,7 @@ class TestTryChainDynamicRouter:
 
         fake_router = MagicMock()
         fake_router.enabled = True
-        fake_router.select_model.return_value = None  # keep default
+        fake_router.select_step.return_value = None  # keep default order
 
         profile_cfg = chain_config.profiles["l2"]
         with _patch("src.api.request_pipeline.get_dynamic_router", return_value=fake_router), \
@@ -839,5 +838,6 @@ class TestTryChainDynamicRouter:
             result_body, status, provider, model = try_chain(
                 "l2", profile_cfg, self._body(), chain_config)
 
-        assert model == "m1"  # default first-step model used
+        assert provider == "first"  # original first step used
+        assert model == "m1"
         assert profile_cfg["chain"][0]["model"] == "m1"
