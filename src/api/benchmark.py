@@ -793,6 +793,13 @@ def _execute_run(run_id: int, engine, config) -> None:
 
         release_label = target.get("release") or None
         _upsert_scores(engine, target, category_scores, release_label=release_label)
+        # New scores landed in model_capabilities → drop the router's cached
+        # matrix so live routing picks up the refreshed scores immediately.
+        try:
+            from .router import invalidate_router_matrix
+            invalidate_router_matrix()
+        except Exception:  # noqa: BLE001 — never block benchmark completion
+            pass
 
         now = datetime.now(timezone.utc).isoformat()
         with get_session(engine) as session:

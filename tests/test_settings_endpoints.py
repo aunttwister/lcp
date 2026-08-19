@@ -158,6 +158,44 @@ class TestSettingsApi:
         assert _status(h) == 200
         assert get_cost_cache().entries() == []
 
+    def test_routing_status_api(self, engine, mock_config):
+        from src.api.router import init_router
+        init_settings(engine)
+        init_router(enabled=True)
+        try:
+            h = TestHandler(path="/api/routing/status", engine=engine)
+            h.config = mock_config
+            h.do_GET()
+            body = _json_body(h)
+            assert body["enabled"] is True
+            assert body["policy"] == "eager"
+            assert "per_task" in body
+            assert "recent_decisions" in body
+        finally:
+            init_router(enabled=False)
+
+    def test_routing_policy_update(self, engine, mock_config):
+        init_settings(engine)
+        h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,
+                        body=json.dumps({"policy": "cost_first", "min_score": 0.4}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert body["policy"] == "cost_first"
+        assert body["min_score"] == 0.4
+        # Persisted via settings store.
+        assert get_settings().get_routing_policy() == "cost_first"
+        assert get_settings().get_routing_min_score() == 0.4
+
+    def test_routing_policy_rejects_invalid(self, engine, mock_config):
+        init_settings(engine)
+        h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,
+                        body=json.dumps({"policy": "bogus"}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 400
+
     def test_provider_create_requests_refresh(self, engine, mock_config, monkeypatch):
         init_settings(engine)
         cache = init_cost_cache(engine)

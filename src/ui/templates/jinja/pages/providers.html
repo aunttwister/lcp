@@ -10,6 +10,7 @@
   <button class="tab-btn active" data-tab="health" onclick="switchProvTab('health', this)">Health</button>
   <button class="tab-btn" data-tab="config" onclick="switchProvTab('config', this)">Configuration</button>
   <button class="tab-btn" data-tab="cache" onclick="switchProvTab('cache', this)">Cache</button>
+  <button class="tab-btn" data-tab="routing" onclick="switchProvTab('routing', this)">Routing</button>
 </div>
 
 <!-- ═══ HEALTH TAB ═══ -->
@@ -153,6 +154,62 @@
       </tbody></table>
     </div>
     <div class="form-help" id="cacheStatus"></div>
+  </div>
+</div>
+
+<!-- ═══ ROUTING TAB ═══ -->
+<div id="tab-routing" class="tab-panel">
+  <div style="max-width:760px;background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem;margin-bottom:1rem">
+    <h3 style="font-size:0.9rem;margin-bottom:0.25rem">Dynamic routing</h3>
+    <p style="font-size:0.75rem;color:hsl(var(--muted-foreground));margin-bottom:1rem">
+      Requests are classified by task type and routed to the best-fit
+      (provider, model) chain step using benchmark capability scores + a
+      cost-bias boost, with a circuit-breaker health and credit-balance
+      tiebreaker. Decisions below are from the background router.
+    </p>
+    <div style="display:flex;align-items:flex-end;gap:0.75rem;flex-wrap:wrap">
+      <div>
+        <label class="form-label" for="routingStatusBadge" style="display:block;margin-bottom:0.25rem">Status</label>
+        <span class="badge badge-success" id="routingStatusBadge">…</span>
+      </div>
+      <div>
+        <label class="form-label" for="routingPolicy" style="display:block;margin-bottom:0.25rem">Policy</label>
+        <select id="routingPolicy" style="padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+          <option value="eager">eager — always best fit</option>
+          <option value="cost_first">cost_first — favor cheaper models</option>
+          <option value="explore">explore — weighted spread</option>
+        </select>
+      </div>
+      <div>
+        <label class="form-label" for="routingMinScore" style="display:block;margin-bottom:0.25rem">Min score (0–1)</label>
+        <input class="form-input" type="number" id="routingMinScore" min="0" max="1" step="0.05" style="width:90px;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="saveRouting()">Save</button>
+    </div>
+    <div class="form-error" id="routingError"></div>
+    <div class="form-help" id="routingStatus"></div>
+  </div>
+
+  <div style="background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem;margin-bottom:1rem">
+    <h3 style="font-size:0.9rem;margin:0 0 0.75rem">Recommended model per task</h3>
+    <div class="table-wrap">
+      <table class="capability-table"><thead><tr>
+        <th>Task</th><th>Top model</th><th>Score</th>
+      </tr></thead><tbody id="routingTaskRows">
+        <tr><td colspan="3" class="empty">Loading…</td></tr>
+      </tbody></table>
+    </div>
+  </div>
+
+  <div style="background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem">
+    <h3 style="font-size:0.9rem;margin:0 0 0.75rem">Recent routing decisions</h3>
+    <div class="table-wrap">
+      <table class="capability-table"><thead><tr>
+        <th>Time</th><th>Profile</th><th>Task</th><th>Policy</th><th>Action</th><th>Chosen</th><th>Score</th>
+      </tr></thead><tbody id="routingDecRows">
+        <tr><td colspan="7" class="empty">No decisions yet — routing only logs decisions once requests flow through.</td></tr>
+      </tbody></table>
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -589,4 +646,73 @@ async function clearCache() {
 
 loadCacheSettings();
 setInterval(loadCacheSettings, 15000);
+
+// ── Routing tab ────────────────────────────────────────────────────────────
+var ROUTING = { enabled: false, policy: 'eager', min_score: 0, per_task: {}, recent_decisions: [] };
+
+async function loadRouting() {
+  try {
+    const d = await api('GET', '/api/routing/status');
+    ROUTING = d;
+    const badge = document.getElementById('routingStatusBadge');
+    badge.textContent = d.enabled ? 'enabled' : 'disabled';
+    badge.className = 'badge ' + (d.enabled ? 'badge-success' : 'badge-error');
+    document.getElementById('routingPolicy').value = d.policy;
+    document.getElementById('routingMinScore').value = d.min_score;
+    renderRoutingTasks();
+    renderRoutingDecisions();
+  } catch (e) {
+    document.getElementById('routingStatus').textContent = 'Failed to load routing: ' + e.message;
+  }
+}
+
+function renderRoutingTasks() {
+  const rows = document.getElementById('routingTaskRows');
+  const tasks = Object.entries(ROUTING.per_task || {});
+  if (!tasks.length) {
+    rows.innerHTML = '<tr><td colspan="3" class="empty">No benchmark scores yet — seed the capability matrix to see recommendations.</td></tr>';
+    return;
+  }
+  rows.innerHTML = tasks.map(([task, t]) =>
+    '<tr><td class="mono">' + escC(task) + '</td>' +
+    '<td class="mono">' + escC(t.model) + '</td>' +
+    '<td class="mono">' + (t.score * 100).toFixed(1) + '%</td></tr>'
+  ).join('');
+}
+
+function renderRoutingDecisions() {
+  const rows = document.getElementById('routingDecRows');
+  const decs = ROUTING.recent_decisions || [];
+  if (!decs.length) {
+    rows.innerHTML = '<tr><td colspan="7" class="empty">No decisions yet — routing only logs decisions once requests flow through.</td></tr>';
+    return;
+  }
+  rows.innerHTML = decs.slice().reverse().map(d =>
+    '<tr>' +
+    '<td class="mono">' + String(d.ts || '').replace('T', ' ').slice(5, 19) + '</td>' +
+    '<td class="mono">' + escC(d.profile || '—') + '</td>' +
+    '<td class="mono">' + escC(d.task || '—') + '</td>' +
+    '<td class="mono">' + escC(d.policy || '—') + '</td>' +
+    '<td>' + escC(d.action || '—') + '</td>' +
+    '<td class="mono">' + escC((d.provider || '') + '/' + (d.model || '')) + '</td>' +
+    '<td class="mono">' + (d.score != null ? (d.score * 100).toFixed(1) + '%' : '—') + '</td>' +
+    '</tr>'
+  ).join('');
+}
+
+async function saveRouting() {
+  const err = document.getElementById('routingError');
+  const status = document.getElementById('routingStatus');
+  err.textContent = '';
+  const body = { policy: document.getElementById('routingPolicy').value };
+  const ms = parseFloat(document.getElementById('routingMinScore').value);
+  if (!isNaN(ms)) body.min_score = ms;
+  const d = await api('POST', '/api/routing/policy', body);
+  if (d.error) { err.textContent = d.error; return; }
+  status.textContent = 'Saved — policy applies to new requests immediately.';
+  loadRouting();
+}
+
+loadRouting();
+setInterval(loadRouting, 15000);
 {% endraw %}</script>{% endblock %}

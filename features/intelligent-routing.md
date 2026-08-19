@@ -69,16 +69,27 @@
   / cost cache are unavailable.
 - Selection policy stays **deterministic top-1** (weighted `explore` later).
 
-#### Phase 3 — Benchmark closed loop + routing policy
-- Auto-enqueue benchmarks for new/edited registry models; invalidate the router's
-  cached matrix on completion (mirror `invalidate_registry_cache`).
-- Configurable per-profile routing policy: `eager` (always best), `cost_first`,
-  `latency_first`, `explore` (weighted), plus a `min_score` floor.
-- Record routing decisions on `requests` (currently only a log line) for analysis.
+#### Phase 3 — Benchmark closed loop + routing policy ✅ DONE (2026-08-19)
+- **Routing policy** (runtime-editable in the UI, stored in the settings table,
+  config as fallback): `eager` (default, deterministic), `cost_first` (stronger
+  cost-bias), `explore` (weighted random among steps within hysteresis), plus a
+  `min_score` floor. `select_step` reads the effective policy via
+  `SettingsStore` (`routing_policy`, `routing_min_score`).
+- **Decisions + visibility**: the router keeps a bounded log of recent routing
+  decisions (reorder / keep_default / explore / below_min_score); surfaced via
+  `GET /api/routing/status` + `POST /api/routing/policy`, and a **Routing tab**
+  on the Providers page (status badge, policy editor, min-score, per-task
+  recommended model, recent decisions). The Models page subtitle shows a
+  dynamic-routing status note.
+- **Closed loop**: `invalidate_router_matrix()` drops the cached matrix; called
+  when a benchmark run completes (`benchmark.py`) and on registry upsert — so
+  fresh scores/identity are picked up without a restart.
 
 #### Phase 4 (optional) — learning / profile benchmarks
 - Feedback loop: track error/latency/cost per route; nudge weights.
 - Implement `target_kind="profile"` benchmark runs (stubbed in `benchmark.py`).
+- Persist routing decisions on `requests` (currently in-memory recent-decisions
+  buffer only) for offline analysis.
 
 ### Decisions (2026-08-19)
 - **Taxonomy:** add `debugging` (derived from `code_generation`) — DONE.

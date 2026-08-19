@@ -6,6 +6,7 @@
   Benchmark any provider model with <a href="https://livebench.ai/" target="_blank" rel="noopener">LiveBench</a>
   (run direct-to-provider, no Docker), then grade it into the capability matrix
   that drives dynamic routing. Scores come only from benchmarks you run here.
+  <span id="routingNote" class="seed-status"></span>
 </p>
 
 <div class="models-layout">
@@ -1227,6 +1228,21 @@ document.getElementById('regMappingRows').addEventListener('change', function (e
 ['regLogicalName', 'regBenchmarkKey'].forEach(id => {
   document.getElementById(id).addEventListener('input', updateRegExistingNote);
 });
+
+// Dynamic-routing status note (enabled / policy).
+(async function () {
+  const note = document.getElementById('routingNote');
+  if (!note) return;
+  try {
+    const r = await fetch('/api/routing/status');
+    const d = await r.json();
+    note.textContent = d.enabled
+      ? '· dynamic routing on (' + d.policy + (d.min_score ? ', min ' + d.min_score : '') + ')'
+      : '· dynamic routing off';
+  } catch (e) {
+    note.textContent = '';
+  }
+})();
 
 loadAll();
 </script>

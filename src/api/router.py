@@ -326,6 +326,11 @@ class CapabilityRouter:
         self.db_path = db_path
         self.cost_bias = cost_bias
         self._matrix: Optional[dict[str, dict[str, float]]] = None
+        # Bounded log of recent routing decisions, surfaced in the UI
+        # (/api/routing/status, Providers → Routing tab).
+        self._decisions: list[dict] = []
+
+    # ── Matrix ────────────────────────────────────────────────────────────
 
     def load_matrix(self) -> dict[str, dict[str, float]]:
         """Load capability matrix from DB. Cached in memory."""
@@ -339,6 +344,49 @@ class CapabilityRouter:
             logger.warning("capability_matrix_load_failed", error=str(e))
             self._matrix = {}
         return self._matrix
+
+    def invalidate_matrix(self) -> None:
+        """Drop the cached matrix so the next call re-reads the DB.
+
+        Called when a benchmark run completes or the registry changes, so
+        routing picks up fresh scores without a restart.
+        """
+        self._matrix = None
+
+    # ── Policy + decisions ────────────────────────────────────────────────
+
+    def _effective_policy(self, config: Optional[object] = None) -> tuple[str, float]:
+        """Return (policy, min_score): runtime settings override config.
+
+        Policy ∈ {eager, cost_first, explore}; min_score is a 0–1 floor below
+        which a reorder is never recommended.
+        """
+        policy = "eager"
+        min_score = 0.0
+        try:
+            from .cost_cache import get_settings
+            settings = get_settings()
+            if settings is not None:
+                policy = settings.get_routing_policy(default=policy)
+                min_score = settings.get_routing_min_score(default=min_score)
+        except Exception:  # noqa: BLE001
+            pass
+        if config is not None:
+            try:
+                dr = config.dynamic_routing or {}
+                policy = dr.get("policy", policy)
+                min_score = float(dr.get("min_score", min_score))
+            except Exception:  # noqa: BLE001
+                pass
+        return policy, min_score
+
+    def _record_decision(self, decision: dict) -> None:
+        self._decisions.append(decision)
+        if len(self._decisions) > 50:
+            self._decisions = self._decisions[-50:]
+
+    def recent_decisions(self, limit: int = 25) -> list[dict]:
+        return list(self._decisions[-limit:])
 
     def get_model_score(self, model: str, task: str) -> float:
         """Get capability score for a model on a task (0.0–1.0).
@@ -497,17 +545,19 @@ class CapabilityRouter:
         return 0.0
 
     def score_step(self, step: dict, task: str, profile: Optional[str] = None,
-                   config: Optional[object] = None) -> float:
+                   config: Optional[object] = None, bias: Optional[float] = None) -> float:
         """Score a single ``{provider, model}`` chain step.
 
         capability + cost-bias boost + health bonus + credit penalty.
+        ``bias`` overrides the default cost bias (used by ``cost_first``).
         """
         model = step["model"]
         capability = self.get_model_score(model, task)
         price = _MODEL_PRICES.get(model, 1.0)
         max_price = max(_MODEL_PRICES.values()) if _MODEL_PRICES else 1.0
         cost_factor = price / max_price if max_price > 0 else 0.5
-        score = capability + self.cost_bias * (1.0 - cost_factor)
+        b = self.cost_bias if bias is None else bias
+        score = capability + b * (1.0 - cost_factor)
         score += self._health_bonus(step, profile, config)
         score += self._credit_bonus(step["provider"])
         return score
@@ -519,33 +569,93 @@ class CapabilityRouter:
         """Provider-aware selection: reorder a COPY of the chain so the best
         (provider, model) step is tried first.
 
-        Returns a reordered list when the best step meaningfully beats the
-        current first step (capability + cost + health + credits), else None
-        to keep the chain's existing order. The caller applies it to its own
-        copy — this never mutates the profile config.
+        Policy (from runtime settings, falling back to config):
+          - ``eager``     : deterministic — reorder when the best step beats the
+                            current first step by more than the hysteresis.
+          - ``cost_first``: same, but with a stronger cost-bias boost.
+          - ``explore``   : weighted random pick among the steps within the
+                            hysteresis of the best (spread traffic + A/B).
+
+        ``min_score`` is a floor: no reorder unless the best step's score is
+        >= it. Returns None to keep the chain's existing order. The caller
+        applies it to its own copy — this never mutates the profile config.
         """
         if not self.enabled or not chain:
             return None
+        policy, min_score = self._effective_policy(config)
         task = classify_task(messages, tools, max_tokens)
+
+        # cost_first: boost the cost component of the score.
+        bias = None
+        if policy == "cost_first":
+            bias = min(self.cost_bias + 0.15, 0.5)
+
         scored = sorted(
-            ((self.score_step(step, task, profile, config), i, step)
+            ((self.score_step(step, task, profile, config, bias=bias), i, step)
              for i, step in enumerate(chain)),
             key=lambda x: -x[0],
         )
         best_score, best_idx, best = scored[0]
-        default_score = self.score_step(chain[0], task, profile, config)
-        if best_idx == 0 or best_score <= default_score + _HYSTERESIS:
+        default_score = next((s for s, i, _ in scored if i == 0), best_score)
+        if best_score < min_score:
+            self._record_decision({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "profile": profile or "", "task": task, "policy": policy,
+                "action": "below_min_score", "model": best["model"],
+                "provider": best["provider"], "score": round(best_score, 3),
+            })
             return None
+
+        # explore: weighted random among steps within hysteresis of the best.
+        if policy == "explore" and len(scored) > 1:
+            import random
+            cutoff = best_score - _HYSTERESIS
+            pool = [s for s in scored if s[0] >= cutoff]
+            if len(pool) > 1:
+                weights = [max(s[0], 0.0) + 0.05 for s in pool]
+                _, pick_idx, pick = random.choices(pool, weights=weights, k=1)[0]
+                if pick_idx != 0:
+                    rest = [st for i, st in enumerate(chain) if i != pick_idx]
+                    self._record_decision({
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "profile": profile or "", "task": task, "policy": policy,
+                        "action": "explore", "model": pick["model"],
+                        "provider": pick["provider"], "score": round(pick[0], 3),
+                    })
+                    return [pick, *rest]
+                self._record_decision({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "profile": profile or "", "task": task, "policy": policy,
+                    "action": "keep_default", "model": chain[0]["model"],
+                    "provider": chain[0]["provider"], "score": round(best_score, 3),
+                })
+                return None
+
+        if best_idx == 0 or best_score <= default_score + _HYSTERESIS:
+            self._record_decision({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "profile": profile or "", "task": task, "policy": policy,
+                "action": "keep_default", "model": chain[0]["model"],
+                "provider": chain[0]["provider"], "score": round(default_score, 3),
+            })
+            return None
+
         rest = [step for i, step in enumerate(chain) if i != best_idx]
         logger.info(
             "router_step_override",
-            task=task,
-            profile=profile or "",
+            task=task, profile=profile or "",
             from_provider=chain[0]["provider"], from_model=chain[0]["model"],
             to_provider=best["provider"], to_model=best["model"],
             default_score=round(default_score, 3),
             recommended_score=round(best_score, 3),
         )
+        self._record_decision({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "profile": profile or "", "task": task, "policy": policy,
+            "action": "reorder", "model": best["model"],
+            "provider": best["provider"], "score": round(best_score, 3),
+            "from_model": chain[0]["model"], "from_provider": chain[0]["provider"],
+        })
         return [best, *rest]
 
 
@@ -566,6 +676,42 @@ def init_router(db_path: str = "data/costs.db", enabled: bool = False,
                                        cost_bias=cost_bias)
     if enabled:
         _dynamic_router.load_matrix()  # warm the cache
+
+
+def invalidate_router_matrix() -> None:
+    """Drop the global router's cached capability matrix.
+
+    Called when a benchmark run completes or the registry changes so routing
+    picks up fresh scores without a restart.
+    """
+    _dynamic_router.invalidate_matrix()
+
+
+def routing_status(config: Optional[object] = None) -> dict:
+    """Return a snapshot for the UI (Providers → Routing tab).
+
+    Includes enabled state, effective policy/min_score, the top recommended
+    model per task (from the capability matrix), and recent decisions.
+    """
+    router = get_dynamic_router()
+    policy, min_score = router._effective_policy(config)
+    per_task: dict[str, dict] = {}
+    try:
+        matrix = router.load_matrix()
+        for task, scores in matrix.items():
+            if not scores:
+                continue
+            top = max(scores.items(), key=lambda kv: kv[1])
+            per_task[task] = {"model": top[0], "score": round(top[1], 3)}
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "enabled": router.enabled,
+        "policy": policy,
+        "min_score": min_score,
+        "per_task": per_task,
+        "recent_decisions": router.recent_decisions(25),
+    }
 
 
 # ── Legacy: DynamicRouter (kept for reference, not used) ─────────────────────

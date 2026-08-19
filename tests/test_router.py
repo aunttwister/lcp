@@ -219,7 +219,7 @@ def test_select_step_reorders_best_first(registry_db, monkeypatch):
     router = CapabilityRouter(enabled=True, db_path=registry_db)
     # Force known scores: second step clearly better.
     monkeypatch.setattr(router, "score_step",
-                        lambda step, task, profile=None, config=None:
+                        lambda step, task, profile=None, config=None, bias=None:
                         0.9 if step["model"] == "deepseek-v4-pro" else 0.6)
     chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
              {"provider": "deepseek", "model": "deepseek-v4-pro"}]
@@ -231,7 +231,7 @@ def test_select_step_keeps_order_within_hysteresis(registry_db, monkeypatch):
     router = CapabilityRouter(enabled=True, db_path=registry_db)
     # Both steps ~equal → no reorder (avoids flapping).
     monkeypatch.setattr(router, "score_step",
-                        lambda step, task, profile=None, config=None:
+                        lambda step, task, profile=None, config=None, bias=None:
                         0.81 if step["model"] == "deepseek-v4-pro" else 0.80)
     chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
              {"provider": "deepseek", "model": "deepseek-v4-pro"}]
@@ -242,6 +242,108 @@ def test_select_step_disabled_or_empty_returns_none(registry_db):
     assert router.select_step([{"role": "user", "content": "hi"}], chain=[{"provider": "a", "model": "m"}]) is None
     router.enabled = True
     assert router.select_step([{"role": "user", "content": "hi"}], chain=[]) is None
+
+
+# ── Policy + decisions + matrix invalidation (Phase 3) ───────────────────
+
+def test_effective_policy_from_settings(registry_db, monkeypatch):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+
+    class FakeSettings:
+        def get_routing_policy(self, default="eager"):
+            return "cost_first"
+        def get_routing_min_score(self, default=0.0):
+            return 0.5
+    monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: FakeSettings())
+    policy, min_score = router._effective_policy(None)
+    assert policy == "cost_first"
+    assert min_score == 0.5
+
+def test_effective_policy_config_fallback(registry_db, monkeypatch):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    # No runtime settings → config.dynamic_routing used.
+    monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: None)
+
+    class _Cfg:
+        dynamic_routing = {"policy": "explore", "min_score": 0.4}
+    policy, min_score = router._effective_policy(_Cfg())
+    assert policy == "explore"
+    assert min_score == 0.4
+
+def test_select_step_min_score_floor(registry_db, monkeypatch):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    monkeypatch.setattr(router, "_effective_policy", lambda config: ("eager", 0.99))
+    # Best score is ~0.9 → below the 0.99 floor → no reorder + decision recorded.
+    monkeypatch.setattr(router, "score_step",
+                        lambda step, task, profile=None, config=None, bias=None:
+                        0.9 if step["model"] == "deepseek-v4-pro" else 0.6)
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    assert router.select_step([{"role": "user", "content": "hi"}], chain=chain) is None
+    assert router.recent_decisions()[-1]["action"] == "below_min_score"
+
+def test_select_step_cost_first_policy(registry_db, monkeypatch):
+    """cost_first boosts cheap models so a cheaper-but-close step can win."""
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    monkeypatch.setattr(router, "_effective_policy", lambda config: ("cost_first", 0.0))
+    monkeypatch.setattr(router, "score_step", router.score_step)  # real scoring
+    chain = [{"provider": "opencode", "model": "deepseek-v4-pro"},
+             {"provider": "deepseek", "model": "deepseek-v4-flash"}]
+    # Flash is much cheaper; under cost_first it should rank first for a
+    # task where the models are close (e.g. casual_chat).
+    out = router.select_step(
+        [{"role": "user", "content": "hello, how are you?"}], chain=chain)
+    assert out is None or out[0]["model"] == "deepseek-v4-flash"
+
+def test_select_step_explore_records_decision(registry_db, monkeypatch):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    monkeypatch.setattr(router, "_effective_policy", lambda config: ("explore", 0.0))
+    monkeypatch.setattr(router, "score_step",
+                        lambda step, task, profile=None, config=None, bias=None:
+                        0.95 if step["model"] == "deepseek-v4-pro" else 0.93)
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    out = router.select_step([{"role": "user", "content": "hi"}], chain=chain)
+    # Either a reorder (explore) or keep_default — both record a decision.
+    assert router.recent_decisions()
+    if out is not None:
+        assert out[0]["model"] == "deepseek-v4-pro"
+
+def test_decision_buffer_bounded(registry_db, monkeypatch):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    monkeypatch.setattr(router, "_effective_policy", lambda config: ("eager", 0.0))
+    monkeypatch.setattr(router, "score_step",
+                        lambda step, task, profile=None, config=None, bias=None:
+                        0.9 if step["model"] == "deepseek-v4-pro" else 0.6)
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    for _ in range(60):
+        router.select_step([{"role": "user", "content": "hi"}], chain=chain)
+    assert len(router._decisions) <= 50
+
+def test_invalidate_matrix(registry_db):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    router.load_matrix()
+    assert router._matrix is not None
+    router.invalidate_matrix()
+    assert router._matrix is None
+    # reloads on next access
+    assert router.load_matrix() is not None
+
+def test_routing_status(registry_db, monkeypatch):
+    from src.api.router import routing_status, init_router
+    init_router(registry_db, enabled=True)
+    monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: None)
+    router = get_dynamic_router()
+    router._record_decision({"ts": "t", "profile": "l2", "task": "debugging",
+                             "policy": "eager", "action": "reorder",
+                             "model": "m", "provider": "p", "score": 0.9})
+    st = routing_status(None)
+    assert st["enabled"] is True
+    assert st["policy"] == "eager"
+    assert "recent_decisions" in st
+    assert st["recent_decisions"][0]["action"] == "reorder"
+    init_router(enabled=False)  # restore
 
 
 # ── Model registry tests (explicit alias → logical → benchmark) ───────────

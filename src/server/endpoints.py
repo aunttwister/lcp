@@ -1626,12 +1626,13 @@ class PluginEndpoints:
 # ── Admin Settings API ───────────────────────────────────────────────────────
 
 class SettingsEndpoints:
-    """Admin settings API: cost-cache TTL + cache management.
+    """Admin settings API: cost-cache TTL, routing policy, cache management.
 
-    The UI for these lives in the Providers page's Cache tab; these endpoints
-    back it. There is no standalone /settings page anymore.
+    The UI for these lives in the Providers page's Cache / Routing tabs; these
+    endpoints back them. There is no standalone /settings page anymore.
     """
 
+    config: Any
     _send_json: Any
     _read_body: Any
 
@@ -1716,6 +1717,43 @@ class SettingsEndpoints:
         if refresher is not None:
             refresher.request_refresh()
         self._send_json({"ok": True})
+
+    def _serve_routing_status_api(self):
+        """GET /api/routing/status — dynamic-routing snapshot for the UI."""
+        from ..api.router import routing_status
+        self._send_json(routing_status(self.config))
+
+    def _serve_routing_policy_api(self):
+        """POST /api/routing/policy {policy?, min_score?} — persist routing policy.
+
+        ``policy`` ∈ eager | cost_first | explore; ``min_score`` is a 0–1 floor.
+        Both are stored in the settings table (apply immediately, no restart).
+        """
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        from ..api.cost_cache import get_settings
+        settings = get_settings()
+        if settings is None:
+            self._send_json({"error": "settings store not initialized"}, 500)
+            return
+        if "policy" in body:
+            policy = (body.get("policy") or "").strip().lower()
+            if policy not in ("eager", "cost_first", "explore"):
+                self._send_json({"error": "policy must be eager | cost_first | explore"}, 400)
+                return
+            settings.set_routing_policy(policy)
+        if "min_score" in body:
+            try:
+                min_score = max(0.0, min(1.0, float(body["min_score"])))
+            except (TypeError, ValueError):
+                self._send_json({"error": "min_score must be a number 0–1"}, 400)
+                return
+            settings.set_routing_min_score(min_score)
+        from ..api.router import routing_status
+        self._send_json(routing_status(self.config))
 
 
 # ── Usage Stats API ──────────────────────────────────────────────────────────
@@ -2332,6 +2370,13 @@ class DashboardEndpoints:
                     action = "created"
                 session.commit()
             invalidate_registry_cache()
+            # Registry identity/aliases changed → also drop the router's cached
+            # capability matrix so lookups use the new mapping.
+            try:
+                from ..api.router import invalidate_router_matrix
+                invalidate_router_matrix()
+            except Exception:  # noqa: BLE001
+                pass
             self._send_json({"ok": True, "action": action, "logical_name": logical})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)

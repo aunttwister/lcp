@@ -151,6 +151,31 @@ class SettingsStore:
         key = f"{self.TTL_KEY}:{provider}" if provider else self.TTL_KEY
         self.set(key, max(1, int(minutes)))
 
+    # ── Dynamic-routing policy (runtime-editable, like the TTL) ───────────
+
+    ROUTING_POLICY_KEY = "routing_policy"
+    ROUTING_MIN_SCORE_KEY = "routing_min_score"
+    VALID_POLICIES = ("eager", "cost_first", "explore")
+
+    def get_routing_policy(self, default: str = "eager") -> str:
+        raw = self.get(self.ROUTING_POLICY_KEY, default)
+        return raw if raw in self.VALID_POLICIES else default
+
+    def set_routing_policy(self, policy: str) -> None:
+        if policy not in self.VALID_POLICIES:
+            raise ValueError(f"invalid routing policy {policy!r}; expected {self.VALID_POLICIES}")
+        self.set(self.ROUTING_POLICY_KEY, policy)
+
+    def get_routing_min_score(self, default: float = 0.0) -> float:
+        raw = self.get(self.ROUTING_MIN_SCORE_KEY, default)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    def set_routing_min_score(self, value: float) -> None:
+        self.set(self.ROUTING_MIN_SCORE_KEY, float(value))
+
     def clear_ttl_minutes(self, provider: str) -> None:
         """Remove a per-provider override so it falls back to the default."""
         key = f"{self.TTL_KEY}:{provider}"

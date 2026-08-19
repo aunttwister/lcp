@@ -73,6 +73,28 @@ class TestSettingsStore:
         s2 = SettingsStore(engine)
         assert s2.get_ttl_minutes(provider="commandcode") == 3
 
+    def test_routing_policy_default(self, engine):
+        s = SettingsStore(engine)
+        assert s.get_routing_policy() == "eager"
+
+    def test_routing_policy_set_and_persist(self, engine):
+        s = SettingsStore(engine)
+        s.set_routing_policy("explore")
+        s2 = SettingsStore(engine)
+        assert s2.get_routing_policy() == "explore"
+
+    def test_routing_policy_invalid(self, engine):
+        s = SettingsStore(engine)
+        with pytest.raises(ValueError):
+            s.set_routing_policy("bogus")
+
+    def test_routing_min_score(self, engine):
+        s = SettingsStore(engine)
+        assert s.get_routing_min_score() == 0.0
+        s.set_routing_min_score(0.6)
+        s2 = SettingsStore(engine)
+        assert s2.get_routing_min_score() == 0.6
+
 
 class TestCostPluginCache:
     def test_get_missing_is_none(self, engine):

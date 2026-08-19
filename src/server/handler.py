@@ -251,6 +251,8 @@ class LCPHandler(
             self._serve_setup_page()
         elif self.path == "/api/settings" or self.path.startswith("/api/settings?"):
             self._serve_settings_api()
+        elif self.path == "/api/routing/status" or self.path.startswith("/api/routing/status?"):
+            self._serve_routing_status_api()
         elif self.path == "/api/setup" or self.path.startswith("/api/setup?"):
             self._serve_setup_api()
         elif self.path == "/api/setup/progress" or self.path.startswith("/api/setup/progress?"):
@@ -409,6 +411,9 @@ class LCPHandler(
             return
         elif self.path == "/api/settings/cache/clear":
             self._serve_settings_cache_clear()
+            return
+        elif self.path == "/api/routing/policy":
+            self._serve_routing_policy_api()
             return
         elif self.path.startswith("/api/setup/install/") and len(self.path.split("/")) == 6:
             # POST /api/setup/install/{kind}/{name}
