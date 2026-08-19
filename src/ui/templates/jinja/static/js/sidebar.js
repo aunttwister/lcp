@@ -43,30 +43,5 @@ function closeSidebar() {
   pollAlertBadge();
   setInterval(pollAlertBadge, 15000);
 })();
-
-// Usage submenu — provider links deep-link into the /usage page tabs.
-// Nested directly under the Usage nav item (no toggle/collapse).
-(function() {
-  var menu = document.getElementById('usageSubmenu');
-  if (!menu) return;
-
-  var provs = (typeof configuredProviders !== 'undefined' && Array.isArray(configuredProviders)) ? configuredProviders : [];
-  if (!provs.length) {
-    menu.style.display = 'none';
-    return;
-  }
-
-  menu.innerHTML = provs.map(function(p) {
-    return '<a href="/usage#' + encodeURIComponent(p) + '">' + p + '</a>';
-  }).join('');
-
-  function syncActive() {
-    var hashProv = (window.location.hash || '').replace(/^#/, '');
-    menu.querySelectorAll('a').forEach(function(a) {
-      a.classList.toggle('active', a.getAttribute('href') === '/usage#' + hashProv);
-    });
-  }
-
-  syncActive();
-  window.addEventListener('hashchange', syncActive);
-})();
+// The Usage submenu (provider links + usage details) is rendered by
+// plugin-status.js, which runs after sidebar.js in base.html.

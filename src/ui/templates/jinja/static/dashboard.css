@@ -629,6 +629,7 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   display: flex; flex-direction: column;
 }
 .sb-usage-submenu a {
+  display: flex; flex-direction: column;
   padding: 0.3rem 0.75rem; border-radius: var(--radius);
   font-size: 0.75rem; font-weight: 500; text-decoration: none;
   color: hsl(var(--muted-foreground)); transition: all 0.15s;
@@ -636,6 +637,16 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 .sb-usage-submenu a:hover { background: hsl(var(--secondary)); color: hsl(var(--foreground)); }
 .sb-usage-submenu a.active { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.sb-usage-name {
+  font-weight: 600; font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.6875rem;
+}
+.sb-usage-detail {
+  font-size: 0.625rem; color: hsl(var(--muted-foreground));
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  opacity: 0.85; line-height: 1.4;
+  padding-left: 0.125rem;
+}
 
 /* ── Sidebar alert badge ── */
 .sb-alert-badge {
