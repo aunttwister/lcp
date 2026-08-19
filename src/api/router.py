@@ -854,6 +854,14 @@ def routing_status(config: Optional[object] = None) -> dict:
         selected = set()
 
     policy, min_score = router._effective_policy(config)
+    profiles: list = []
+    providers: list = []
+    try:
+        if config is not None:
+            profiles = sorted((config.profiles or {}).keys())
+            providers = sorted((config.providers or {}).keys())
+    except Exception:  # noqa: BLE001
+        pass
     per_task: dict[str, dict] = {}
     try:
         matrix = router.load_matrix()
@@ -877,6 +885,9 @@ def routing_status(config: Optional[object] = None) -> dict:
         "rules": router._rules(config),
         "per_task": per_task,
         "recent_decisions": router.recent_decisions(25),
+        # For rule-dropdowns in the UI: available profiles and providers.
+        "profiles": profiles,
+        "providers": providers,
     }
 
 

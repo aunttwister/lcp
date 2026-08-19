@@ -806,25 +806,76 @@ function renderRoutingDecisions() {
 }
 
 // ── Rules ────────────────────────────────────────────────────────────────
-function ruleSelect(name, options, cur) {
-  const opts = options.map(o => '<option value="' + escC(o.value) + '"' + (String(o.value) === String(cur) ? ' selected' : '') + '>' + escC(o.label) + '</option>').join('');
-  return '<select class="rule-' + name + '" style="padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem;max-width:130px">' + opts + '</select>';
+var PROV_MODELS = {};  // provider -> [models] for rule dropdowns
+
+async function loadProvModels() {
+  try {
+    const d = await api('GET', '/api/providers');
+    for (const [name, p] of Object.entries(d.providers || {})) {
+      PROV_MODELS[name] = (p.models || []).slice();
+    }
+  } catch (e) { /* dropdowns fall back to '*' */ }
+}
+
+function ruleOptionsHtml(options, cur) {
+  return options.map(o =>
+    '<option value="' + escC(o.value) + '"' + (String(o.value) === String(cur) ? ' selected' : '') + '>' +
+    escC(o.label) + '</option>'
+  ).join('');
+}
+
+function ruleSelect(name, options, cur, onchange) {
+  const oc = onchange ? ' onchange="' + onchange + '"' : '';
+  return '<select class="rule-' + name + '"' + oc +
+    ' style="padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem;max-width:170px">' +
+    ruleOptionsHtml(options, cur) + '</select>';
 }
 
 function ruleTaskOptions(cur) {
   const tasks = Object.keys(ROUTING.per_task || {});
-  return [{value:'*',label:'*'}, ...tasks.map(t => ({value:t, label:t}))];
+  return [{value:'*', label:'*'}, ...tasks.map(t => ({value:t, label:t}))];
 }
 
 function ruleProfileOptions(cur) {
-  const profs = (window.configuredProfiles) || [];
-  return [{value:'*',label:'*'}, ...profs.map(p => ({value:p, label:p}))];
+  const profs = ROUTING.profiles || [];
+  const opts = [{value:'*', label:'*'}, ...profs.map(p => ({value:p, label:p}))];
+  if (cur && cur !== '*' && !profs.includes(cur)) opts.push({value: cur, label: cur});
+  return opts;
+}
+
+function ruleProviderOptions(cur) {
+  const names = Object.keys(PROV_MODELS);
+  const opts = [{value:'*', label:'*'}, ...names.map(n => ({value:n, label:n}))];
+  if (cur && cur !== '*' && !names.includes(cur)) opts.push({value: cur, label: cur});
+  return opts;
+}
+
+function ruleModelOptions(provider, cur) {
+  let models = [];
+  if (provider && provider !== '*' && PROV_MODELS[provider]) models = PROV_MODELS[provider].slice();
+  const opts = [{value:'*', label:'*'}, ...models.map(m => ({value:m, label:m}))];
+  if (cur && cur !== '*' && !models.includes(cur)) opts.push({value: cur, label: cur});
+  return opts;
+}
+
+function syncRuleModelSelect(sel) {
+  // Provider changed → repopulate the same row's model dropdown.
+  const tr = sel.closest('tr');
+  const modelSel = tr.querySelector('.rule-model');
+  if (!modelSel) return;
+  const cur = modelSel.value;
+  modelSel.innerHTML = ruleOptionsHtml(ruleModelOptions(sel.value, cur), cur);
 }
 
 function renderRoutingRules() {
   const rows = document.getElementById('routingRulesRows');
+  // Preserve an in-progress draft row across the 15s auto-refresh re-render.
+  // NOTE: outerHTML loses live <select> values (it only keeps the default
+  // 'selected' attributes), so we read the current values and rebuild.
+  const draft = rows.querySelector('tr.rule-draft');
+  const draftRule = draft ? _readRuleRow(draft) : null;
   const rules = ROUTING.rules || [];
-  if (!rules.length) {
+  if (!rules.length && !draftRule) {
     rows.innerHTML = '<tr><td colspan="7" class="empty">No rules — routing uses policy + benchmark scores only.</td></tr>';
     return;
   }
@@ -832,30 +883,35 @@ function renderRoutingRules() {
     '<tr>' +
     '<td>' + ruleSelect('task', ruleTaskOptions(r.task), r.task) + '</td>' +
     '<td>' + ruleSelect('profile', ruleProfileOptions(r.profile), r.profile) + '</td>' +
-    '<td>' + ruleSelect('action', [{value:'prefer',label:'prefer'},{value:'block',label:'block'},{value:'policy',label:'policy'}], r.action) + '</td>' +
-    '<td><input class="rule-provider" value="' + escC(r.provider || '') + '" placeholder="provider" style="width:100px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
-    '<td><input class="rule-model" value="' + escC(r.model || '') + '" placeholder="model" style="width:120px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
+    '<td>' + ruleSelect('action', [{value:'prefer', label:'prefer'}, {value:'block', label:'block'}, {value:'policy', label:'policy'}], r.action) + '</td>' +
+    '<td>' + ruleSelect('provider', ruleProviderOptions(r.provider), r.provider, 'syncRuleModelSelect(this)') + '</td>' +
+    '<td>' + ruleSelect('model', ruleModelOptions(r.provider, r.model), r.model) + '</td>' +
     '<td><input class="rule-min" type="number" min="0" max="1" step="0.05" value="' + escC(r.min_score != null ? r.min_score : '') + '" placeholder="—" style="width:52px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
     '<td style="white-space:nowrap">' +
       '<button class="btn btn-outline btn-sm" onclick="saveRulesRow(' + i + ')">Save</button> ' +
       '<button class="btn btn-outline btn-sm" onclick="deleteRule(' + i + ')">✕</button>' +
     '</td></tr>'
   ).join('');
+  if (draftRule) rows.insertAdjacentHTML('beforeend', ruleDraftHtml(draftRule));
+}
+
+function ruleDraftHtml(rule) {
+  rule = rule || {};
+  return '<tr class="rule-draft">' +
+    '<td>' + ruleSelect('task', ruleTaskOptions(rule.task || '*'), rule.task || '*') + '</td>' +
+    '<td>' + ruleSelect('profile', ruleProfileOptions(rule.profile || '*'), rule.profile || '*') + '</td>' +
+    '<td>' + ruleSelect('action', [{value:'prefer', label:'prefer'}, {value:'block', label:'block'}, {value:'policy', label:'policy'}], rule.action || 'prefer') + '</td>' +
+    '<td>' + ruleSelect('provider', ruleProviderOptions(rule.provider || '*'), rule.provider || '*', 'syncRuleModelSelect(this)') + '</td>' +
+    '<td>' + ruleSelect('model', ruleModelOptions(rule.provider || '*', rule.model || '*'), rule.model || '*') + '</td>' +
+    '<td><input class="rule-min" type="number" min="0" max="1" step="0.05" value="' + escC(rule.min_score != null ? rule.min_score : '') + '" placeholder="—" style="width:52px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
+    '<td><button class="btn btn-primary btn-sm" onclick="saveNewRule(this)">Add</button></td>' +
+    '</tr>';
 }
 
 function addRuleRow() {
   const rows = document.getElementById('routingRulesRows');
   if (rows.querySelector('.empty')) rows.innerHTML = '';
-  rows.insertAdjacentHTML('beforeend',
-    '<tr class="rule-draft">' +
-    '<td>' + ruleSelect('task', ruleTaskOptions('*'), '*') + '</td>' +
-    '<td>' + ruleSelect('profile', ruleProfileOptions('*'), '*') + '</td>' +
-    '<td>' + ruleSelect('action', [{value:'prefer',label:'prefer'},{value:'block',label:'block'},{value:'policy',label:'policy'}], 'prefer') + '</td>' +
-    '<td><input class="rule-provider" placeholder="provider" style="width:100px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
-    '<td><input class="rule-model" placeholder="model" style="width:120px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
-    '<td><input class="rule-min" type="number" min="0" max="1" step="0.05" placeholder="—" style="width:52px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
-    '<td><button class="btn btn-primary btn-sm" onclick="saveNewRule(this)">Add</button></td>' +
-    '</tr>');
+  rows.insertAdjacentHTML('beforeend', ruleDraftHtml({}));
 }
 
 function _readRuleRow(tr) {
@@ -867,12 +923,6 @@ function _readRuleRow(tr) {
   };
   if (min !== '') rule.min_score = parseFloat(min);
   return rule;
-}
-
-function _renderRulesFromRows() {
-  const rows = Array.from(document.querySelectorAll('#routingRulesRows tr'));
-  const rules = rows.map(tr => _readRuleRow(tr)).filter(r => r.action);
-  ROUTING.rules = rules;
 }
 
 async function saveRulesRow(i) {
@@ -919,5 +969,6 @@ async function saveRouting() {
 }
 
 loadRouting();
+loadProvModels();
 setInterval(loadRouting, 15000);
 {% endraw %}</script>{% endblock %}
