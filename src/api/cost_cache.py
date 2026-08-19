@@ -176,6 +176,30 @@ class SettingsStore:
     def set_routing_min_score(self, value: float) -> None:
         self.set(self.ROUTING_MIN_SCORE_KEY, float(value))
 
+    # ── Routing rules (UI-defined, JSON list in the settings table) ───────
+
+    ROUTING_RULES_KEY = "routing_rules"
+
+    def get_routing_rules(self, default: Optional[list] = None) -> list:
+        """Return the routing-rules list (JSON). Empty list when unset.
+
+        Each rule: {task, profile, action, provider?, model?, min_score?,
+        policy?, enabled?}.
+        """
+        raw = self.get(self.ROUTING_RULES_KEY, None)
+        if raw is None:
+            return list(default) if default else []
+        try:
+            import json as _json
+            parsed = _json.loads(raw)
+            return parsed if isinstance(parsed, list) else []
+        except (TypeError, ValueError):
+            return list(default) if default else []
+
+    def set_routing_rules(self, rules: list) -> None:
+        import json as _json
+        self.set(self.ROUTING_RULES_KEY, _json.dumps(rules or []))
+
     def clear_ttl_minutes(self, provider: str) -> None:
         """Remove a per-provider override so it falls back to the default."""
         key = f"{self.TTL_KEY}:{provider}"

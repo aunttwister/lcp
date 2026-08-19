@@ -196,6 +196,36 @@ class TestSettingsApi:
         h.do_POST()
         assert _status(h) == 400
 
+    def test_routing_rules_save(self, engine, mock_config):
+        init_settings(engine)
+        rules = [{"task": "debugging", "action": "prefer",
+                  "provider": "deepseek", "model": "deepseek-v4-pro"}]
+        h = TestHandler(path="/api/routing/rules", method="POST", engine=engine,
+                        body=json.dumps({"rules": rules}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert body["rules"] == rules
+        assert get_settings().get_routing_rules() == rules
+
+    def test_routing_rules_rejects_bad_action(self, engine, mock_config):
+        init_settings(engine)
+        h = TestHandler(path="/api/routing/rules", method="POST", engine=engine,
+                        body=json.dumps({"rules": [{"task": "x", "action": "bogus"}]}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 400
+
+    def test_routing_rules_rejects_empty_prefer(self, engine, mock_config):
+        init_settings(engine)
+        # prefer/block need provider and/or model.
+        h = TestHandler(path="/api/routing/rules", method="POST", engine=engine,
+                        body=json.dumps({"rules": [{"task": "x", "action": "prefer"}]}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 400
+
     def test_provider_create_requests_refresh(self, engine, mock_config, monkeypatch):
         init_settings(engine)
         cache = init_cost_cache(engine)

@@ -100,6 +100,68 @@
 
 ---
 
+## Routing rules (UI-defined) — design
+
+**Status:** implemented (2026-08-19).
+
+Separate **strategy** from **constraints/preferences**. The policy
+(`eager`/`cost_first`/`explore` + `min_score`) is the *how*; rules are the
+*what* — hard, human-readable overrides per task/profile. The router evaluates
+**policy first, then rules**, and every rule that fires is recorded in the
+decision log so the Routing tab can show *why* a step was chosen.
+
+### Implemented
+
+- `SettingsStore.get_routing_rules()` / `set_routing_rules()` — JSON list in the
+  settings table (UI-editable, immediate). `dynamic_routing.rules` in
+  `gateway.yaml` seeds defaults when no setting exists.
+- `CapabilityRouter._rules(config)` (settings wins, config fallback),
+  `_rule_matches(rule, task, profile)` (profile/task `"*"` or list),
+  `_rule_target(rule, step)` (provider and/or model match), and
+  `_apply_rules(chain, task, profile, config)` → `(candidates, fired)`:
+  - **`block`** removes matching steps (provider-wide blocks supported).
+  - **`prefer`** moves the first matching step to the front, with an optional
+    `min_score` gate (skipped → `prefer_skipped_low_score`). First-match wins.
+  - **`policy`** overrides the policy for the matching scope (before scoring).
+- `select_step` applies rules after `classify_task`/policy resolution and before
+  scoring; fired rules are recorded on every decision (`rules` key).
+- API: `GET /api/routing/status` returns `rules`; `POST /api/routing/rules`
+  validates (action ∈ prefer|block|policy, prefer/block need provider and/or
+  model, policy rule needs a valid policy, min_score numeric) and persists.
+- UI (Providers → Routing tab): **Rules card** — table of rules (Task, Profile,
+  Action, Provider, Model, Min) with per-row Save/✕ and a "+ Add rule" draft row
+  (Add button); decisions table gained a **Rules** column.
+
+### Example
+
+```yaml
+dynamic_routing:
+  enabled: true
+  policy: eager
+  rules:
+    - task: debugging
+      action: prefer
+      provider: deepseek
+      model: deepseek-v4-pro
+    - task: casual_chat
+      action: prefer
+      model: deepseek-v4-flash      # cheapest good-enough
+    - profile: cron
+      action: policy
+      policy: cost_first
+    - task: agentic_multi_step
+      action: block
+      provider: opencode            # e.g. credits exhausted
+```
+
+### Decisions (2026-08-19)
+- Prefer-rule gate default **0** (always pin unless `min_score` set).
+- Multiple matching `prefer` rules → **first-match wins** (list order).
+- Rules support **`model`-only** (any provider serving that model) and
+  **provider-only** targets.
+
+---
+
 ## Overview
 
 LCP currently routes requests statically: a profile has a hardcoded provider chain,

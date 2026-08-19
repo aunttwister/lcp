@@ -1755,6 +1755,51 @@ class SettingsEndpoints:
         from ..api.router import routing_status
         self._send_json(routing_status(self.config))
 
+    def _serve_routing_rules_api(self):
+        """POST /api/routing/rules {rules: [...]} — validate + persist rules.
+
+        Each rule: {task, profile, action (prefer|block|policy), provider?,
+        model?, min_score?, policy?, enabled?}. Replaces the whole list.
+        """
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        rules = body.get("rules")
+        if not isinstance(rules, list):
+            self._send_json({"error": "'rules' must be a list"}, 400)
+            return
+        for i, rule in enumerate(rules):
+            if not isinstance(rule, dict):
+                self._send_json({"error": f"rule {i} must be an object"}, 400)
+                return
+            action = rule.get("action")
+            if action not in ("prefer", "block", "policy"):
+                self._send_json({"error": f"rule {i}: action must be prefer | block | policy"}, 400)
+                return
+            if action != "policy":
+                if not rule.get("provider") and not rule.get("model"):
+                    self._send_json({"error": f"rule {i}: prefer/block need provider and/or model"}, 400)
+                    return
+            if action == "policy" and rule.get("policy") not in ("eager", "cost_first", "explore"):
+                self._send_json({"error": f"rule {i}: policy rule needs a valid policy"}, 400)
+                return
+            if rule.get("min_score") is not None:
+                try:
+                    float(rule["min_score"])
+                except (TypeError, ValueError):
+                    self._send_json({"error": f"rule {i}: min_score must be a number"}, 400)
+                    return
+        from ..api.cost_cache import get_settings
+        settings = get_settings()
+        if settings is None:
+            self._send_json({"error": "settings store not initialized"}, 500)
+            return
+        settings.set_routing_rules(rules)
+        from ..api.router import routing_status
+        self._send_json(routing_status(self.config))
+
 
 # ── Usage Stats API ──────────────────────────────────────────────────────────
 

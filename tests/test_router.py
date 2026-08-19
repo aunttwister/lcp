@@ -346,6 +346,81 @@ def test_routing_status(registry_db, monkeypatch):
     init_router(enabled=False)  # restore
 
 
+# ── Routing rules (Phase: UI-defined overrides) ─────────────────────────
+
+def _rule_router(registry_db, monkeypatch, rules, config=None):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+
+    class FakeSettings:
+        def get_routing_rules(self):
+            return rules
+        def get_routing_policy(self, default="eager"):
+            return "eager"
+        def get_routing_min_score(self, default=0.0):
+            return 0.0
+    monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: FakeSettings())
+    return router
+
+def test_apply_rules_block_removes_provider(registry_db, monkeypatch):
+    router = _rule_router(registry_db, monkeypatch,
+                          [{"task": "*", "action": "block", "provider": "opencode"}])
+    chain = [{"provider": "opencode", "model": "m1"},
+             {"provider": "deepseek", "model": "m2"}]
+    candidates, fired = router._apply_rules(chain, "code_generation", "l2")
+    assert [s["provider"] for s in candidates] == ["deepseek"]
+    assert fired and fired[0]["action"] == "block"
+
+def test_apply_rules_prefer_moves_to_front(registry_db, monkeypatch):
+    router = _rule_router(registry_db, monkeypatch,
+                          [{"task": "debugging", "action": "prefer",
+                            "provider": "deepseek", "model": "deepseek-v4-pro"}])
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    candidates, fired = router._apply_rules(chain, "debugging", "l2")
+    assert candidates[0]["provider"] == "deepseek"
+    assert fired[0]["action"] == "prefer"
+    # Non-matching task → no change.
+    candidates2, _ = router._apply_rules(chain, "casual_chat", "l2")
+    assert candidates2[0]["provider"] == "opencode"
+
+def test_apply_rules_prefer_min_score_gate(registry_db, monkeypatch):
+    router = _rule_router(registry_db, monkeypatch,
+                          [{"task": "debugging", "action": "prefer",
+                            "provider": "deepseek", "model": "deepseek-v4-pro",
+                            "min_score": 0.99}])
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    # deepseek-v4-pro's debugging score is ~0.77 < 0.99 → prefer skipped.
+    candidates, fired = router._apply_rules(chain, "debugging", "l2")
+    assert candidates[0]["provider"] == "opencode"
+    assert fired and fired[0]["action"] == "prefer_skipped_low_score"
+
+def test_select_step_policy_rule_override(registry_db, monkeypatch):
+    rules = [{"profile": "cron", "action": "policy", "policy": "cost_first"}]
+    router = _rule_router(registry_db, monkeypatch, rules)
+    monkeypatch.setattr(router, "_effective_policy", lambda config: ("eager", 0.0))
+    monkeypatch.setattr(router, "score_step",
+                        lambda step, task, profile=None, config=None, bias=None:
+                        0.9 if step["model"] == "deepseek-v4-pro" else 0.6)
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    # cron profile → policy rule flips to cost_first (bias > 0) but the outcome
+    # is a reorder regardless; assert the decision recorded the policy.
+    out = router.select_step([{"role": "user", "content": "hi"}], chain=chain, profile="cron")
+    assert router.recent_decisions()[-1]["policy"] == "cost_first"
+
+def test_routing_status_includes_rules(registry_db, monkeypatch):
+    from src.api.router import routing_status, init_router
+    rules = [{"task": "debugging", "action": "prefer", "provider": "deepseek"}]
+    init_router(registry_db, enabled=True)
+    try:
+        _rule_router(registry_db, monkeypatch, rules)
+        st = routing_status(None)
+        assert st["rules"] == rules
+    finally:
+        init_router(enabled=False)
+
+
 # ── Model registry tests (explicit alias → logical → benchmark) ───────────
 
 def test_logical_model_name_maps_provider_alias(registry_db):

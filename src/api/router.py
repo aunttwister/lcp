@@ -562,6 +562,123 @@ class CapabilityRouter:
         score += self._credit_bonus(step["provider"])
         return score
 
+    # ── Routing rules (UI-defined overrides) ─────────────────────────────
+
+    def _rules(self, config: Optional[object] = None) -> list:
+        """Return the effective routing-rules list.
+
+        Runtime settings (settings table, UI-editable) win; ``config``
+        ``dynamic_routing.rules`` seeds defaults when no setting exists.
+        """
+        try:
+            from .cost_cache import get_settings
+            settings = get_settings()
+            if settings is not None:
+                stored = settings.get_routing_rules()
+                if stored:
+                    return stored
+        except Exception:  # noqa: BLE001
+            pass
+        if config is not None:
+            try:
+                dr = config.dynamic_routing or {}
+                return list(dr.get("rules", []) or [])
+            except Exception:  # noqa: BLE001
+                pass
+        return []
+
+    @staticmethod
+    def _rule_matches(rule: dict, task: str, profile: str) -> bool:
+        """A rule matches when its profile/task equal (or '*' / contains)."""
+        if not rule.get("enabled", True):
+            return False
+        rp = rule.get("profile", "*")
+        if rp not in ("*", "") and rp != profile:
+            return False
+        rt = rule.get("task", "*")
+        if rt in ("*", ""):
+            return True
+        if isinstance(rt, list):
+            return task in rt
+        return rt == task
+
+    @staticmethod
+    def _rule_target(rule: dict, step: dict) -> bool:
+        """True if the step matches a prefer/block rule's provider/model."""
+        provider = rule.get("provider")
+        model = rule.get("model")
+        if provider and provider != step["provider"]:
+            return False
+        if model and model != step["model"]:
+            return False
+        # At least one of provider/model must be present.
+        return bool(provider or model)
+
+    def _apply_rules(self, chain: list, task: str, profile: str,
+                     config: Optional[object] = None) -> tuple[list, list]:
+        """Apply block/prefer rules to a COPY of the chain.
+
+        Returns (candidates, fired_rule_descriptions). ``block`` removes
+        matching steps; ``prefer`` moves the first matching step to the front
+        (with an optional ``min_score`` gate). The global ``min_score`` floor
+        still applies afterwards.
+        """
+        rules = self._rules(config)
+        if not rules:
+            return list(chain), []
+        candidates = [dict(step) for step in chain]
+        fired: list[dict] = []
+        blocked_providers: set[str] = set()
+
+        # Pass 1 — blocks (also collect provider-wide blocks).
+        for rule in rules:
+            if rule.get("action") != "block" or not self._rule_matches(rule, task, profile):
+                continue
+            if not rule.get("provider") and not rule.get("model"):
+                continue
+            before = len(candidates)
+            candidates = [s for s in candidates if not self._rule_target(rule, s)]
+            if len(candidates) < before:
+                if rule.get("provider") and not rule.get("model"):
+                    blocked_providers.add(rule["provider"])
+                fired.append({
+                    "action": "block",
+                    "provider": rule.get("provider") or "*",
+                    "model": rule.get("model") or "*",
+                    "profile": rule.get("profile", "*"),
+                    "task": rule.get("task", "*"),
+                })
+
+        # Pass 2 — prefers (first-match wins: move the first matching step up).
+        for rule in rules:
+            if rule.get("action") != "prefer" or not self._rule_matches(rule, task, profile):
+                continue
+            if not rule.get("provider") and not rule.get("model"):
+                continue
+            idx = next((i for i, s in enumerate(candidates)
+                        if self._rule_target(rule, s)), None)
+            if idx is None:
+                continue
+            step = candidates[idx]
+            gate = rule.get("min_score")
+            if gate is not None:
+                cap = self.get_model_score(step["model"], task)
+                if cap < float(gate):
+                    fired.append({
+                        "action": "prefer_skipped_low_score",
+                        "provider": step["provider"], "model": step["model"],
+                        "score": round(cap, 3), "min_score": float(gate),
+                    })
+                    continue
+            candidates.insert(0, candidates.pop(idx))
+            fired.append({
+                "action": "prefer",
+                "provider": step["provider"], "model": step["model"],
+                "profile": rule.get("profile", "*"), "task": rule.get("task", "*"),
+            })
+
+        return candidates, fired
+
     def select_step(self, messages: list[dict], tools: Optional[list[dict]] = None,
                     max_tokens: int = 1024, chain: Optional[list[dict]] = None,
                     profile: Optional[str] = None, config: Optional[object] = None,
@@ -585,6 +702,21 @@ class CapabilityRouter:
         policy, min_score = self._effective_policy(config)
         task = classify_task(messages, tools, max_tokens)
 
+        # Apply UI-defined rules: blocks filter candidates; prefers pin a step;
+        # policy rules override the policy for this scope.
+        for rule in self._rules(config):
+            if rule.get("action") == "policy" and self._rule_matches(rule, task, profile or ""):
+                p = rule.get("policy")
+                if p in ("eager", "cost_first", "explore"):
+                    policy = p
+
+        candidates, fired_rules = self._apply_rules(
+            chain, task, profile or "", config)
+        if not candidates:
+            return None
+        chain = candidates
+        fired_desc = [f["action"] for f in fired_rules]
+
         # cost_first: boost the cost component of the score.
         bias = None
         if policy == "cost_first":
@@ -603,6 +735,7 @@ class CapabilityRouter:
                 "profile": profile or "", "task": task, "policy": policy,
                 "action": "below_min_score", "model": best["model"],
                 "provider": best["provider"], "score": round(best_score, 3),
+                "rules": fired_desc,
             })
             return None
 
@@ -613,14 +746,15 @@ class CapabilityRouter:
             pool = [s for s in scored if s[0] >= cutoff]
             if len(pool) > 1:
                 weights = [max(s[0], 0.0) + 0.05 for s in pool]
-                _, pick_idx, pick = random.choices(pool, weights=weights, k=1)[0]
+                picked_score, pick_idx, pick = random.choices(pool, weights=weights, k=1)[0]
                 if pick_idx != 0:
                     rest = [st for i, st in enumerate(chain) if i != pick_idx]
                     self._record_decision({
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "profile": profile or "", "task": task, "policy": policy,
                         "action": "explore", "model": pick["model"],
-                        "provider": pick["provider"], "score": round(pick[0], 3),
+                        "provider": pick["provider"], "score": round(picked_score, 3),
+                        "rules": fired_desc,
                     })
                     return [pick, *rest]
                 self._record_decision({
@@ -628,6 +762,7 @@ class CapabilityRouter:
                     "profile": profile or "", "task": task, "policy": policy,
                     "action": "keep_default", "model": chain[0]["model"],
                     "provider": chain[0]["provider"], "score": round(best_score, 3),
+                    "rules": fired_desc,
                 })
                 return None
 
@@ -637,6 +772,7 @@ class CapabilityRouter:
                 "profile": profile or "", "task": task, "policy": policy,
                 "action": "keep_default", "model": chain[0]["model"],
                 "provider": chain[0]["provider"], "score": round(default_score, 3),
+                "rules": fired_desc,
             })
             return None
 
@@ -655,6 +791,7 @@ class CapabilityRouter:
             "action": "reorder", "model": best["model"],
             "provider": best["provider"], "score": round(best_score, 3),
             "from_model": chain[0]["model"], "from_provider": chain[0]["provider"],
+            "rules": fired_desc,
         })
         return [best, *rest]
 
@@ -709,6 +846,7 @@ def routing_status(config: Optional[object] = None) -> dict:
         "enabled": router.enabled,
         "policy": policy,
         "min_score": min_score,
+        "rules": router._rules(config),
         "per_task": per_task,
         "recent_decisions": router.recent_decisions(25),
     }

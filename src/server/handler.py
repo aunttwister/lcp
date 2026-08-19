@@ -415,6 +415,9 @@ class LCPHandler(
         elif self.path == "/api/routing/policy":
             self._serve_routing_policy_api()
             return
+        elif self.path == "/api/routing/rules":
+            self._serve_routing_rules_api()
+            return
         elif self.path.startswith("/api/setup/install/") and len(self.path.split("/")) == 6:
             # POST /api/setup/install/{kind}/{name}
             kind = self.path.split("/")[4]

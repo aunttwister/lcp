@@ -95,6 +95,29 @@ class TestSettingsStore:
         s2 = SettingsStore(engine)
         assert s2.get_routing_min_score() == 0.6
 
+    def test_routing_rules_default_empty(self, engine):
+        s = SettingsStore(engine)
+        assert s.get_routing_rules() == []
+
+    def test_routing_rules_set_and_persist(self, engine):
+        s = SettingsStore(engine)
+        rules = [{"task": "debugging", "action": "prefer",
+                  "provider": "deepseek", "model": "deepseek-v4-pro"}]
+        s.set_routing_rules(rules)
+        s2 = SettingsStore(engine)
+        assert s2.get_routing_rules() == rules
+
+    def test_routing_rules_clears_to_empty(self, engine):
+        s = SettingsStore(engine)
+        s.set_routing_rules([{"task": "x", "action": "prefer", "model": "m"}])
+        s.set_routing_rules([])
+        assert s.get_routing_rules() == []
+
+    def test_routing_rules_bad_json_returns_default(self, engine):
+        s = SettingsStore(engine)
+        s.set("routing_rules", "{not json")
+        assert s.get_routing_rules() == []
+
 
 class TestCostPluginCache:
     def test_get_missing_is_none(self, engine):

@@ -121,7 +121,6 @@
         <input class="form-input" type="number" id="defaultTtlMinutes" min="1" step="1" style="width:120px;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
       </div>
       <button class="btn btn-primary btn-sm" onclick="saveTtl()">Save default</button>
-      <button class="btn btn-outline btn-sm" onclick="refreshNow()">Refresh now</button>
     </div>
 
     <div class="ttl-collapse" id="ttlCollapse">
@@ -142,7 +141,7 @@
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
       <h3 style="font-size:0.9rem;margin:0">Cache</h3>
       <div style="display:flex;gap:0.5rem">
-        <button class="btn btn-outline btn-sm" onclick="refreshNow()">Refresh now</button>
+        <button class="btn btn-outline btn-sm" id="refreshNowBtn" onclick="refreshNow()">Refresh now</button>
         <button class="btn btn-outline btn-sm" onclick="clearCache()">Clear cache</button>
       </div>
     </div>
@@ -190,6 +189,26 @@
     <div class="form-help" id="routingStatus"></div>
   </div>
 
+  <div style="max-width:760px;background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem;margin-bottom:1rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+      <h3 style="font-size:0.9rem;margin:0">Rules</h3>
+      <button class="btn btn-outline btn-sm" onclick="addRuleRow()">+ Add rule</button>
+    </div>
+    <p style="font-size:0.75rem;color:hsl(var(--muted-foreground));margin-bottom:0.75rem">
+      Hard overrides evaluated after policy: <b>block</b> removes matching steps,
+      <b>prefer</b> pins a step first (optional min-score gate), <b>policy</b>
+      overrides the policy for a scope. Rules apply immediately on save.
+    </p>
+    <div class="table-wrap">
+      <table class="capability-table"><thead><tr>
+        <th>Task</th><th>Profile</th><th>Action</th><th>Provider</th><th>Model</th><th>Min</th><th></th>
+      </tr></thead><tbody id="routingRulesRows">
+        <tr><td colspan="7" class="empty">Loading…</td></tr>
+      </tbody></table>
+    </div>
+    <div class="form-help" id="routingRulesStatus"></div>
+  </div>
+
   <div style="background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem;margin-bottom:1rem">
     <h3 style="font-size:0.9rem;margin:0 0 0.75rem">Recommended model per task</h3>
     <div class="table-wrap">
@@ -205,9 +224,9 @@
     <h3 style="font-size:0.9rem;margin:0 0 0.75rem">Recent routing decisions</h3>
     <div class="table-wrap">
       <table class="capability-table"><thead><tr>
-        <th>Time</th><th>Profile</th><th>Task</th><th>Policy</th><th>Action</th><th>Chosen</th><th>Score</th>
+        <th>Time</th><th>Profile</th><th>Task</th><th>Policy</th><th>Action</th><th>Chosen</th><th>Score</th><th>Rules</th>
       </tr></thead><tbody id="routingDecRows">
-        <tr><td colspan="7" class="empty">No decisions yet — routing only logs decisions once requests flow through.</td></tr>
+        <tr><td colspan="8" class="empty">No decisions yet — routing only logs decisions once requests flow through.</td></tr>
       </tbody></table>
     </div>
   </div>
@@ -498,6 +517,8 @@ setInterval(loadFailovers, 15000);
 
 // ── Cache tab ─────────────────────────────────────────────────────────────
 var SETTINGS = { ttl_minutes: 30, per_provider_ttl: {}, entries: [], refresh: {} };
+var _justRefreshedKeys = new Set(); // "provider/kind" rows highlighted after a manual refresh
+var _refreshTimer = null;
 
 function fmtAge(sec) {
   if (sec == null) return '—';
@@ -604,10 +625,12 @@ function renderCacheEntries() {
     return;
   }
   rows.innerHTML = ents.map(e => {
+    const key = e.provider + '/' + e.kind;
+    const just = _justRefreshedKeys.has(key);
     const st = e.stale_error
       ? '<span class="badge badge-error" title="' + escC(e.stale_error) + '">stale</span>'
-      : '<span class="badge badge-success">fresh</span>';
-    return '<tr>' +
+      : (just ? '<span class="badge badge-success">fresh · updated</span>' : '<span class="badge badge-success">fresh</span>');
+    return '<tr' + (just ? ' class="cache-row-fresh"' : '') + '>' +
       '<td class="mono">' + escC(e.provider) + '</td>' +
       '<td class="mono">' + escC(e.kind) + '</td>' +
       '<td class="mono">' + fmtTime(e.fetched_at) + '</td>' +
@@ -629,18 +652,98 @@ async function saveTtl() {
   loadCacheSettings();
 }
 
+function setRefreshBusy(busy) {
+  const btn = document.getElementById('refreshNowBtn');
+  if (!btn) return;
+  btn.disabled = busy;
+  btn.textContent = busy ? 'Refreshing…' : 'Refresh now';
+}
+
+function refreshState(before, entries, timedOut) {
+  // `before` maps "provider/kind" → {fetched_at, stale_error} captured before
+  // the refresh was requested. Compare against the latest entries to decide
+  // whether the background worker has actually re-scraped each entry.
+  const after = {};
+  (entries || []).forEach(e => { after[e.provider + '/' + e.kind] = e; });
+  const keys = Object.keys(before);
+  if (!keys.length) {
+    const fresh = Object.keys(after);
+    return { done: timedOut || fresh.length > 0, updated: fresh.length, failed: 0, timeout: timedOut, freshKeys: fresh };
+  }
+  let updated = 0, failed = 0, pending = 0;
+  const freshKeys = [];
+  keys.forEach(k => {
+    const a = after[k];
+    if (!a) { updated++; freshKeys.push(k); return; }
+    const b = before[k];
+    if (a.fetched_at && a.fetched_at > b.fetched_at) { updated++; freshKeys.push(k); }
+    else if (a.stale_error) failed++;
+    else pending++;
+  });
+  return { done: timedOut || pending === 0, updated, failed, timeout: timedOut, freshKeys };
+}
+
 async function refreshNow() {
-  const status = document.getElementById('settingsStatus');
-  status.textContent = 'Refresh requested — running in the background…';
-  const d = await api('POST', '/api/settings/cache/refresh', {});
-  if (d.error) { status.textContent = d.error; return; }
-  setTimeout(loadCacheSettings, 800);
+  const status = document.getElementById('cacheStatus');
+  if (_refreshTimer) { clearTimeout(_refreshTimer); _refreshTimer = null; }
+  setRefreshBusy(true);
+  _justRefreshedKeys = new Set();
+  status.textContent = 'Refresh requested — scraping providers in the background…';
+
+  try { await loadCacheSettings(); } catch (e) { /* keep going with what we have */ }
+
+  const before = {};
+  (SETTINGS.entries || []).forEach(e => {
+    before[e.provider + '/' + e.kind] = { fetched_at: e.fetched_at || '', stale_error: e.stale_error || '' };
+  });
+
+  let d;
+  try {
+    d = await api('POST', '/api/settings/cache/refresh', {});
+  } catch (e) {
+    status.textContent = 'Refresh failed to start: ' + e.message;
+    setRefreshBusy(false);
+    return;
+  }
+  if (d.error) { status.textContent = d.error; setRefreshBusy(false); return; }
+
+  // The worker re-scrapes in the background; poll until every cached entry has
+  // a newer fetched_at (or failed) so the user gets real completion feedback.
+  const deadline = Date.now() + 30000;
+  const poll = async function () {
+    let cur = null;
+    try { cur = await api('GET', '/api/settings'); } catch (e) { /* keep polling */ }
+    if (cur) { SETTINGS = cur; renderTtlRows(); renderCacheEntries(); }
+    const st = refreshState(before, cur ? cur.entries : [], Date.now() >= deadline);
+    if (!st.done) { _refreshTimer = setTimeout(poll, 1500); return; }
+    _refreshTimer = null;
+    setRefreshBusy(false);
+    _justRefreshedKeys = new Set(st.freshKeys);
+    renderCacheEntries();
+    setTimeout(function () { _justRefreshedKeys = new Set(); }, 8000);
+    const now = new Date().toLocaleTimeString();
+    const bits = [];
+    if (st.updated > 0) bits.push(st.updated + ' provider' + (st.updated === 1 ? '' : 's') + ' updated');
+    if (st.failed > 0) bits.push(st.failed + ' failed');
+    const suffix = bits.length ? ' (' + bits.join(', ') + ')' : '';
+    if (st.timeout) {
+      status.textContent = 'Refresh still running in the background — showing the latest data.' + suffix;
+    } else if (!bits.length) {
+      status.textContent = 'Refresh completed at ' + now + ' — no cached entries to update.';
+    } else {
+      status.textContent = 'Refresh completed at ' + now + suffix + '.';
+    }
+  };
+  _refreshTimer = setTimeout(poll, 1200);
 }
 
 async function clearCache() {
   const status = document.getElementById('cacheStatus');
+  status.textContent = 'Clearing cache…';
+  const d = await api('POST', '/api/settings/cache/clear', {});
+  if (d.error) { status.textContent = d.error; return; }
+  _justRefreshedKeys = new Set();
   status.textContent = 'Cache cleared — background worker will re-scrape shortly.';
-  await api('POST', '/api/settings/cache/clear', {});
   setTimeout(loadCacheSettings, 800);
 }
 
@@ -648,7 +751,7 @@ loadCacheSettings();
 setInterval(loadCacheSettings, 15000);
 
 // ── Routing tab ────────────────────────────────────────────────────────────
-var ROUTING = { enabled: false, policy: 'eager', min_score: 0, per_task: {}, recent_decisions: [] };
+var ROUTING = { enabled: false, policy: 'eager', min_score: 0, rules: [], per_task: {}, recent_decisions: [] };
 
 async function loadRouting() {
   try {
@@ -661,6 +764,7 @@ async function loadRouting() {
     document.getElementById('routingMinScore').value = d.min_score;
     renderRoutingTasks();
     renderRoutingDecisions();
+    renderRoutingRules();
   } catch (e) {
     document.getElementById('routingStatus').textContent = 'Failed to load routing: ' + e.message;
   }
@@ -684,7 +788,7 @@ function renderRoutingDecisions() {
   const rows = document.getElementById('routingDecRows');
   const decs = ROUTING.recent_decisions || [];
   if (!decs.length) {
-    rows.innerHTML = '<tr><td colspan="7" class="empty">No decisions yet — routing only logs decisions once requests flow through.</td></tr>';
+    rows.innerHTML = '<tr><td colspan="8" class="empty">No decisions yet — routing only logs decisions once requests flow through.</td></tr>';
     return;
   }
   rows.innerHTML = decs.slice().reverse().map(d =>
@@ -696,8 +800,109 @@ function renderRoutingDecisions() {
     '<td>' + escC(d.action || '—') + '</td>' +
     '<td class="mono">' + escC((d.provider || '') + '/' + (d.model || '')) + '</td>' +
     '<td class="mono">' + (d.score != null ? (d.score * 100).toFixed(1) + '%' : '—') + '</td>' +
+    '<td class="mono">' + escC((d.rules || []).join(', ') || '—') + '</td>' +
     '</tr>'
   ).join('');
+}
+
+// ── Rules ────────────────────────────────────────────────────────────────
+function ruleSelect(name, options, cur) {
+  const opts = options.map(o => '<option value="' + escC(o.value) + '"' + (String(o.value) === String(cur) ? ' selected' : '') + '>' + escC(o.label) + '</option>').join('');
+  return '<select class="rule-' + name + '" style="padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem;max-width:130px">' + opts + '</select>';
+}
+
+function ruleTaskOptions(cur) {
+  const tasks = Object.keys(ROUTING.per_task || {});
+  return [{value:'*',label:'*'}, ...tasks.map(t => ({value:t, label:t}))];
+}
+
+function ruleProfileOptions(cur) {
+  const profs = (window.configuredProfiles) || [];
+  return [{value:'*',label:'*'}, ...profs.map(p => ({value:p, label:p}))];
+}
+
+function renderRoutingRules() {
+  const rows = document.getElementById('routingRulesRows');
+  const rules = ROUTING.rules || [];
+  if (!rules.length) {
+    rows.innerHTML = '<tr><td colspan="7" class="empty">No rules — routing uses policy + benchmark scores only.</td></tr>';
+    return;
+  }
+  rows.innerHTML = rules.map((r, i) =>
+    '<tr>' +
+    '<td>' + ruleSelect('task', ruleTaskOptions(r.task), r.task) + '</td>' +
+    '<td>' + ruleSelect('profile', ruleProfileOptions(r.profile), r.profile) + '</td>' +
+    '<td>' + ruleSelect('action', [{value:'prefer',label:'prefer'},{value:'block',label:'block'},{value:'policy',label:'policy'}], r.action) + '</td>' +
+    '<td><input class="rule-provider" value="' + escC(r.provider || '') + '" placeholder="provider" style="width:100px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
+    '<td><input class="rule-model" value="' + escC(r.model || '') + '" placeholder="model" style="width:120px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
+    '<td><input class="rule-min" type="number" min="0" max="1" step="0.05" value="' + escC(r.min_score != null ? r.min_score : '') + '" placeholder="—" style="width:52px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
+    '<td style="white-space:nowrap">' +
+      '<button class="btn btn-outline btn-sm" onclick="saveRulesRow(' + i + ')">Save</button> ' +
+      '<button class="btn btn-outline btn-sm" onclick="deleteRule(' + i + ')">✕</button>' +
+    '</td></tr>'
+  ).join('');
+}
+
+function addRuleRow() {
+  const rows = document.getElementById('routingRulesRows');
+  if (rows.querySelector('.empty')) rows.innerHTML = '';
+  rows.insertAdjacentHTML('beforeend',
+    '<tr class="rule-draft">' +
+    '<td>' + ruleSelect('task', ruleTaskOptions('*'), '*') + '</td>' +
+    '<td>' + ruleSelect('profile', ruleProfileOptions('*'), '*') + '</td>' +
+    '<td>' + ruleSelect('action', [{value:'prefer',label:'prefer'},{value:'block',label:'block'},{value:'policy',label:'policy'}], 'prefer') + '</td>' +
+    '<td><input class="rule-provider" placeholder="provider" style="width:100px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
+    '<td><input class="rule-model" placeholder="model" style="width:120px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
+    '<td><input class="rule-min" type="number" min="0" max="1" step="0.05" placeholder="—" style="width:52px;padding:0.25rem 0.4rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.72rem"></td>' +
+    '<td><button class="btn btn-primary btn-sm" onclick="saveNewRule(this)">Add</button></td>' +
+    '</tr>');
+}
+
+function _readRuleRow(tr) {
+  const get = (sel) => { const el = tr.querySelector(sel); return el ? el.value.trim() : ''; };
+  const min = tr.querySelector('.rule-min') ? tr.querySelector('.rule-min').value : '';
+  const rule = {
+    task: get('.rule-task'), profile: get('.rule-profile'), action: get('.rule-action'),
+    provider: get('.rule-provider'), model: get('.rule-model'),
+  };
+  if (min !== '') rule.min_score = parseFloat(min);
+  return rule;
+}
+
+function _renderRulesFromRows() {
+  const rows = Array.from(document.querySelectorAll('#routingRulesRows tr'));
+  const rules = rows.map(tr => _readRuleRow(tr)).filter(r => r.action);
+  ROUTING.rules = rules;
+}
+
+async function saveRulesRow(i) {
+  const tr = document.querySelectorAll('#routingRulesRows tr')[i];
+  if (!tr) return;
+  ROUTING.rules[i] = _readRuleRow(tr);
+  await persistRules();
+}
+
+async function saveNewRule(btn) {
+  const tr = btn.closest('tr');
+  const rule = _readRuleRow(tr);
+  ROUTING.rules.push(rule);
+  tr.remove();
+  await persistRules();
+}
+
+async function deleteRule(i) {
+  ROUTING.rules.splice(i, 1);
+  await persistRules();
+}
+
+async function persistRules() {
+  const err = document.getElementById('routingError');
+  const status = document.getElementById('routingStatus');
+  err.textContent = '';
+  const d = await api('POST', '/api/routing/rules', { rules: ROUTING.rules });
+  if (d.error) { err.textContent = d.error; loadRouting(); return; }
+  status.textContent = 'Rules saved — apply immediately to new requests.';
+  loadRouting();
 }
 
 async function saveRouting() {

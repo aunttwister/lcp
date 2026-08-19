@@ -220,6 +220,11 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .badge-error { background: hsl(var(--red-bg)); color: hsl(var(--red-fg)); }
 .badge-success { background: hsl(var(--green-bg)); color: hsl(var(--green-fg)); }
 .badge-cache { background: hsl(var(--cyan-bg)); color: hsl(var(--cyan-fg)); }
+.cache-row-fresh td { animation: cacheFreshFade 3s ease-out; }
+@keyframes cacheFreshFade {
+  from { background: hsl(var(--green-bg) / 0.5); }
+  to { background: transparent; }
+}
 .refresh {
   font-size: 0.75rem; color: hsl(var(--muted-foreground));
   text-align: center; margin-top: 2rem; padding-top: 1rem;
