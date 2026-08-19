@@ -828,9 +828,31 @@ def routing_status(config: Optional[object] = None) -> dict:
     """Return a snapshot for the UI (Providers → Routing tab).
 
     Includes enabled state, effective policy/min_score, the top recommended
-    model per task (from the capability matrix), and recent decisions.
+    model per task (from the capability matrix, restricted to models that are
+    actually selected — i.e. referenced by a profile chain), the active rules,
+    and recent decisions.
     """
     router = get_dynamic_router()
+
+    # Models the router can actually pick = those named in any profile chain.
+    selected: set[str] = set()
+    try:
+        profiles = (config or {}).profiles or {}
+        for pcfg in profiles.values():
+            for step in (pcfg.get("chain") or []):
+                m = step.get("model")
+                if not m:
+                    continue
+                selected.add(m)
+                selected.add(normalize_model_id(m))
+                try:
+                    selected.add(benchmark_model_name(
+                        logical_model_name(m, router.db_path), router.db_path))
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception:  # noqa: BLE001
+        selected = set()
+
     policy, min_score = router._effective_policy(config)
     per_task: dict[str, dict] = {}
     try:
@@ -838,7 +860,13 @@ def routing_status(config: Optional[object] = None) -> dict:
         for task, scores in matrix.items():
             if not scores:
                 continue
-            top = max(scores.items(), key=lambda kv: kv[1])
+            # Only recommend models that are selected; fall back to the overall
+            # top when no selection info is available (e.g. tests/no config).
+            candidates = {k: v for k, v in scores.items()
+                          if not selected or k in selected}
+            if not candidates:
+                continue
+            top = max(candidates.items(), key=lambda kv: kv[1])
             per_task[task] = {"model": top[0], "score": round(top[1], 3)}
     except Exception:  # noqa: BLE001
         pass

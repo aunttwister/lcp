@@ -420,6 +420,40 @@ def test_routing_status_includes_rules(registry_db, monkeypatch):
     finally:
         init_router(enabled=False)
 
+def test_routing_status_restricts_to_selected_models(registry_db, monkeypatch):
+    """Per-task recommendations only include models referenced by a chain."""
+    from src.api.seed_capabilities import seed_livebench
+    from src.api.router import routing_status, init_router
+    seed_livebench(registry_db)
+    init_router(registry_db, enabled=True)
+    try:
+        # Chain selects ONLY deepseek-v4-flash — recommendations must not
+        # mention models like gpt-5.6-sol / claude-fable-5 that aren't selected.
+        class _Cfg:
+            profiles = {"l2": {"chain": [
+                {"provider": "deepseek", "model": "deepseek-v4-flash"},
+            ]}}
+            dynamic_routing = {}
+        st = routing_status(_Cfg())
+        for task, rec in st["per_task"].items():
+            assert rec["model"] == "deepseek-v4-flash", f"{task} -> {rec['model']} (not selected)"
+    finally:
+        init_router(enabled=False)
+
+def test_routing_status_falls_back_without_config(registry_db, monkeypatch):
+    """Without config (tests), the top model per task is still shown."""
+    from src.api.seed_capabilities import seed_livebench
+    from src.api.router import routing_status, init_router
+    seed_livebench(registry_db)
+    init_router(registry_db, enabled=True)
+    try:
+        st = routing_status(None)
+        assert st["per_task"], "expected per_task populated without config"
+        # The top overall model appears for at least one task.
+        assert any(rec["model"] for rec in st["per_task"].values())
+    finally:
+        init_router(enabled=False)
+
 
 # ── Model registry tests (explicit alias → logical → benchmark) ───────────
 
