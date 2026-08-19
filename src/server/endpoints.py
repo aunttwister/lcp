@@ -1519,8 +1519,17 @@ class PluginEndpoints:
         self._send_json({"plugin_usage": data})
 
     def _serve_plugin_balances(self):
-        """Return account balances from all cost tracking plugins."""
-        data = get_registry().fetch_all_balances()
+        """Return account balances from all cost tracking plugins.
+
+        Served from the DB cache (refreshed by the background scraper) when
+        the cache is initialized; otherwise falls back to a live fetch.
+        """
+        from ..api.cost_cache import cached_plugin_payloads, get_cost_cache
+        cache = get_cost_cache()
+        if cache is None:
+            data = get_registry().fetch_all_balances()
+        else:
+            data = cached_plugin_payloads(cache, "balance", get_registry())
         self._send_json({"plugin_balances": data})
 
     def _serve_plugin_summary(self):
@@ -1529,8 +1538,17 @@ class PluginEndpoints:
         self._send_json({"plugin_summaries": data})
 
     def _serve_plugin_subscriptions(self):
-        """Return subscription usage snapshots from all cost plugins."""
-        data = get_registry().fetch_all_subscriptions()
+        """Return subscription usage snapshots from all cost plugins.
+
+        Served from the DB cache (refreshed by the background scraper) when
+        the cache is initialized; otherwise falls back to a live fetch.
+        """
+        from ..api.cost_cache import cached_plugin_payloads, get_cost_cache
+        cache = get_cost_cache()
+        if cache is None:
+            data = get_registry().fetch_all_subscriptions()
+        else:
+            data = cached_plugin_payloads(cache, "subscription", get_registry())
         self._send_json({"plugin_subscriptions": data})
 
     def _serve_plugin_cookie_get(self, provider: str):
@@ -1552,6 +1570,15 @@ class PluginEndpoints:
             self._send_json({"error": "credential store not initialized"}, 500)
             return
         store.set_cookie(provider, cookie)
+        # New/cleared credentials invalidate the cached scrape for this provider
+        # and re-scrape it in the background (never blocking this request).
+        from ..api.cost_cache import get_cost_cache, get_refresher
+        cache = get_cost_cache()
+        if cache is not None:
+            cache.invalidate(provider=provider)
+        refresher = get_refresher()
+        if refresher is not None:
+            refresher.request_refresh(provider=provider)
         self._send_json({"ok": True, "provider": provider, "has_cookie": bool(cookie)})
 
     def _serve_plugin_workspace_id_get(self, provider: str):
@@ -1573,7 +1600,98 @@ class PluginEndpoints:
             self._send_json({"error": "credential store not initialized"}, 500)
             return
         store.set_workspace_id(provider, ws_id)
+        # Invalidate + background re-scrape (see cookie-set handler).
+        from ..api.cost_cache import get_cost_cache, get_refresher
+        cache = get_cost_cache()
+        if cache is not None:
+            cache.invalidate(provider=provider)
+        refresher = get_refresher()
+        if refresher is not None:
+            refresher.request_refresh(provider=provider)
         self._send_json({"ok": True, "provider": provider, "has_workspace_id": bool(ws_id)})
+
+
+# ── Admin Settings API ───────────────────────────────────────────────────────
+
+class SettingsEndpoints:
+    """Admin settings: cost-cache TTL + cache management."""
+
+    config: Any
+    engine: Any
+    _send_json: Any
+    _read_body: Any
+    send_response: Any
+    send_header: Any
+    end_headers: Any
+    wfile: Any
+
+    def _serve_settings_page(self):
+        """Server-rendered admin settings page."""
+        from ..ui.pages import render_settings_page
+        html = render_settings_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_settings_api(self):
+        """GET /api/settings — current TTL, cache entries, refresh diagnostics."""
+        from ..api.cost_cache import get_cost_cache, get_refresher, get_settings
+        settings = get_settings()
+        ttl = settings.get_ttl_minutes() if settings is not None else 30
+        cache = get_cost_cache()
+        refresher = get_refresher()
+        self._send_json({
+            "ttl_minutes": ttl,
+            "entries": cache.entries() if cache is not None else [],
+            "refresh": refresher.diagnostics() if refresher is not None else {},
+        })
+
+    def _serve_settings_update_api(self):
+        """POST /api/settings {ttl_minutes} — persist the cache TTL."""
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        try:
+            ttl = max(1, int(body.get("ttl_minutes")))
+        except (TypeError, ValueError):
+            self._send_json({"error": "ttl_minutes must be an integer >= 1"}, 400)
+            return
+        from ..api.cost_cache import get_settings
+        settings = get_settings()
+        if settings is None:
+            self._send_json({"error": "settings store not initialized"}, 500)
+            return
+        settings.set_ttl_minutes(ttl)
+        # TTL changed → oldest entries may now be stale; re-scrape in background.
+        from ..api.cost_cache import get_refresher
+        refresher = get_refresher()
+        if refresher is not None:
+            refresher.request_refresh()
+        self._send_json({"ok": True, "ttl_minutes": ttl})
+
+    def _serve_settings_refresh_api(self):
+        """POST /api/settings/cache/refresh — enqueue a background re-scrape."""
+        from ..api.cost_cache import get_refresher
+        refresher = get_refresher()
+        if refresher is not None:
+            refresher.request_refresh()
+            self._send_json({"ok": True, "refreshing": True})
+        else:
+            self._send_json({"error": "refresher not initialized"}, 500)
+
+    def _serve_settings_cache_clear(self):
+        """POST /api/settings/cache/clear — wipe the cache (refreshes after)."""
+        from ..api.cost_cache import get_cost_cache, get_refresher
+        cache = get_cost_cache()
+        if cache is not None:
+            cache.clear()
+        refresher = get_refresher()
+        if refresher is not None:
+            refresher.request_refresh()
+        self._send_json({"ok": True})
 
 
 # ── Usage Stats API ──────────────────────────────────────────────────────────

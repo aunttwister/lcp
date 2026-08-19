@@ -10,6 +10,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -278,6 +279,41 @@ class SetupState(Base):
     status = Column(String, nullable=False)  # done | skipped | failed | running
     detail = Column(Text, nullable=True)
     updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class Setting(Base):
+    """Admin-configurable key/value settings (e.g. cost-cache TTL).
+
+    Values are stored as strings (like the rest of the schema); typed
+    accessors live in src.api.cost_cache.SettingsStore.
+    """
+    __tablename__ = "settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String, unique=True, nullable=False, index=True)  # e.g. cost_cache_ttl_minutes
+    value = Column(Text, nullable=False)
+    updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class CostPluginCacheEntry(Base):
+    """Cached cost-plugin scrape results (subscriptions, balances).
+
+    The background refresher writes live-scraped data here; the HTTP
+    endpoints read ONLY from this table so a frontend request never
+    triggers (or blocks on) a live scrape. ``stale_error`` is set when the
+    last refresh failed and we are serving the previous payload.
+    """
+    __tablename__ = "cost_plugin_cache"
+    __table_args__ = (
+        UniqueConstraint("provider", "kind", name="uq_cost_plugin_cache_provider_kind"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String, nullable=False, index=True)
+    kind = Column(String, nullable=False, index=True)  # subscription | balance
+    payload_json = Column(Text, nullable=False)
+    fetched_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+    stale_error = Column(Text, nullable=True)
 
 
 # ── Engine + session factory ───────────────────────────────────────────────

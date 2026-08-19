@@ -67,3 +67,9 @@ def render_setup_page(config, engine=None) -> str:
     """Render the first-run setup wizard page (Jinja2)."""
     from .render import render_page
     return render_page("pages/setup.html", config, engine, active_page="setup")
+
+
+def render_settings_page(config, engine=None) -> str:
+    """Render the admin settings page (Jinja2)."""
+    from .render import render_page
+    return render_page("pages/settings.html", config, engine, active_page="settings")

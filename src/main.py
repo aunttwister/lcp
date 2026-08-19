@@ -66,6 +66,16 @@ def main():
     t0 = _startup_step("cost_plugins_init", t0)
     logger.info("cost_plugins_initialized")
 
+    # Initialize the cost-plugin cache + background refresher. The refresher
+    # owns ALL live scraping; the HTTP endpoints read the cache only.
+    from .api.cost_cache import init_cost_cache, init_refresher, init_settings
+    settings = init_settings(engine)
+    cache = init_cost_cache(engine)
+    refresher = init_refresher(cache, settings)
+    refresher.start()
+    t0 = _startup_step("cost_cache_init", t0)
+    logger.info("cost_cache_initialized", ttl_minutes=settings.get_ttl_minutes())
+
     # Initialize alert manager with DB engine for persistence
     init_alert_manager(engine)
     t0 = _startup_step("alert_manager_init", t0)
@@ -92,6 +102,9 @@ def main():
     except KeyboardInterrupt:
         logger.info("shutdown_requested")
         server.shutdown()
+    finally:
+        from .api.cost_cache import stop_refresher
+        stop_refresher()
 
 
 if __name__ == "__main__":

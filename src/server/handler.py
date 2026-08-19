@@ -49,6 +49,7 @@ from .endpoints import (
     UsageEndpoints,
     DashboardEndpoints,
     SetupEndpoints,
+    SettingsEndpoints,
 )
 
 logger = get_logger("lcp.server")
@@ -113,6 +114,7 @@ class LCPHandler(
     UsageEndpoints,
     DashboardEndpoints,
     SetupEndpoints,
+    SettingsEndpoints,
     BaseHTTPRequestHandler,
 ):
     """HTTP request handler for LCP gateway."""
@@ -247,6 +249,10 @@ class LCPHandler(
             self._serve_models_page()
         elif self.path == "/setup":
             self._serve_setup_page()
+        elif self.path == "/settings":
+            self._serve_settings_page()
+        elif self.path == "/api/settings" or self.path.startswith("/api/settings?"):
+            self._serve_settings_api()
         elif self.path == "/api/setup" or self.path.startswith("/api/setup?"):
             self._serve_setup_api()
         elif self.path == "/api/setup/progress" or self.path.startswith("/api/setup/progress?"):
@@ -396,6 +402,15 @@ class LCPHandler(
             return
         elif self.path == "/api/setup/skip":
             self._serve_setup_skip_api()
+            return
+        elif self.path == "/api/settings":
+            self._serve_settings_update_api()
+            return
+        elif self.path == "/api/settings/cache/refresh":
+            self._serve_settings_refresh_api()
+            return
+        elif self.path == "/api/settings/cache/clear":
+            self._serve_settings_cache_clear()
             return
         elif self.path.startswith("/api/setup/install/") and len(self.path.split("/")) == 6:
             # POST /api/setup/install/{kind}/{name}
