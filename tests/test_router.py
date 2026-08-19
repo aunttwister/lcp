@@ -6,7 +6,7 @@ import pytest
 import sys
 from src.api.router import (
     DynamicRouter, CapabilityRouter, classify_task, get_dynamic_router,
-    logical_model_name, benchmark_model_name,
+    init_router, logical_model_name, benchmark_model_name,
     normalize_model_id, detect_quantization,
 )
 from src.api.seed_capabilities import DEFAULT_MODEL_REGISTRY
@@ -113,6 +113,27 @@ def test_router_ranks_models(registry_db):
 
 def test_singleton():
     assert get_dynamic_router() is get_dynamic_router()
+
+def test_init_router_passes_cost_bias(registry_db):
+    init_router(registry_db, enabled=True, cost_bias=0.4)
+    try:
+        r = get_dynamic_router()
+        assert r.enabled is True
+        assert r.cost_bias == 0.4
+    finally:
+        # restore the default so other tests aren't affected
+        init_router(enabled=False)
+
+def test_get_model_score_resolves_debugging_via_matrix(registry_db):
+    """debugging is derived from code_generation, so scores must resolve."""
+    from src.api.seed_capabilities import seed_livebench, load_capability_matrix
+    seed_livebench(registry_db)
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    matrix = load_capability_matrix(registry_db)
+    assert "debugging" in matrix
+    # A debugging prompt should resolve to a real score (not the 0.5 default).
+    score = router.get_model_score("deepseek-v4-pro", "debugging")
+    assert score > 0.5
 
 
 # ── Model registry tests (explicit alias → logical → benchmark) ───────────

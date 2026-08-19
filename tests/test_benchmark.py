@@ -485,6 +485,8 @@ def test_upsert_scores_normalizes_and_inserts(tmp_path):
         by_task = {r.task_type: (r.score, r.raw_score, r.benchmark_category) for r in rows}
         assert by_task["code_generation"] == (pytest.approx(0.70), pytest.approx(70.0), "coding")
         assert by_task["reasoning_chain"] == (pytest.approx(0.90), pytest.approx(90.0), "math")
+        # Derived: debugging mirrors code_generation (a coding subskill).
+        assert by_task["debugging"] == (pytest.approx(0.70), pytest.approx(70.0), "coding")
 
 
 def test_upsert_scores_overwrites_existing(tmp_path):
@@ -504,6 +506,12 @@ def test_upsert_scores_overwrites_existing(tmp_path):
         ).all()
         assert len(rows) == 1
         assert rows[0].score == pytest.approx(0.80)
+        # Debugging also updated in place, single row.
+        dbg = session.query(ModelCapability).filter_by(
+            model="m1", source="lcp_benchmark", task_type="debugging"
+        ).all()
+        assert len(dbg) == 1
+        assert dbg[0].score == pytest.approx(0.80)
 
 
 # ── Queue-time validation ───────────────────────────────────────────────────

@@ -26,6 +26,26 @@ LB_TO_LCP: dict[str, str] = {
     "instruction_following": "planning",
 }
 
+# Derived LCP task types — LiveBench has no dedicated category, so we mirror
+# the closest related category. ``debugging`` is a coding subskill, so it uses
+# the ``code_generation`` score as a proxy.
+DERIVED_TASKS: dict[str, str] = {
+    "debugging": "code_generation",
+}
+
+
+def derived_task_scores(task_scores: dict[str, float]) -> dict[str, float]:
+    """Return extra task_type scores derived from existing ones.
+
+    e.g. ``{"debugging": 0.85}`` from ``{"code_generation": 0.85}``. Only
+    derived tasks whose source score is present are returned.
+    """
+    out: dict[str, float] = {}
+    for derived, source in DERIVED_TASKS.items():
+        if source in task_scores:
+            out[derived] = task_scores[source]
+    return out
+
 
 # ── Bulk-seeded LiveBench snapshots (opt-in) ─────────────────────────────────
 # Hand-typed leaderboard snapshots (source: livebench.ai). Kept as an OPT-IN
@@ -434,6 +454,13 @@ def load_capability_matrix(db_path: str, release: Optional[str] = None) -> dict[
     matrix: dict[str, dict[str, float]] = defaultdict(dict)
     for (task, model), data in best.items():
         matrix[task][model] = data["score"]
+
+    # Safety net: derived task types (debugging ← code_generation) so the
+    # router always has a debugging score even before a re-seed writes rows.
+    for derived, source in DERIVED_TASKS.items():
+        if source in matrix:
+            matrix.setdefault(derived, {}).update(matrix[source])
+
     return dict(matrix)
 
 

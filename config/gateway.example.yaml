@@ -14,6 +14,11 @@
 server:
   port: 8734
   default_profile: l2
+# Route requests to the best-fit model using benchmark capability scores
+# (per-profile override: profiles.<name>.dynamic_routing: false disables).
+dynamic_routing:
+  enabled: false
+  cost_bias: 0.15
 profiles:
   l2:
     forbidden_tools:

@@ -437,10 +437,12 @@ def get_dynamic_router() -> CapabilityRouter:
     return _dynamic_router
 
 
-def init_router(db_path: str = "data/costs.db", enabled: bool = False):
+def init_router(db_path: str = "data/costs.db", enabled: bool = False,
+                cost_bias: float = DEFAULT_COST_BIAS):
     """Initialize the global router. Call once at startup."""
     global _dynamic_router
-    _dynamic_router = CapabilityRouter(enabled=enabled, db_path=db_path)
+    _dynamic_router = CapabilityRouter(enabled=enabled, db_path=db_path,
+                                       cost_bias=cost_bias)
     if enabled:
         _dynamic_router.load_matrix()  # warm the cache
 

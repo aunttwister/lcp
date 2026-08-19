@@ -112,6 +112,18 @@ class Config:
         return self._data["database"]
 
     @property
+    def dynamic_routing(self) -> dict:
+        """Dynamic routing config, with sensible defaults when absent.
+
+        ``enabled`` gates the CapabilityRouter; ``cost_bias`` controls how
+        strongly cheaper models are favored (0.0 = pure capability).
+        """
+        return self._data.get("dynamic_routing", {
+            "enabled": False,
+            "cost_bias": 0.15,
+        })
+
+    @property
     def model_limits(self) -> dict:
         return self._data.get("model_limits", {})
 

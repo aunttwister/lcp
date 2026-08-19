@@ -145,6 +145,27 @@ class TestConfigAccessors:
         finally:
             os.unlink(path)
 
+    def test_dynamic_routing_defaults_disabled(self):
+        path = _write_config(_base_config())
+        try:
+            cfg = Config(path)
+            dr = cfg.dynamic_routing
+            assert dr["enabled"] is False
+            assert dr["cost_bias"] == 0.15
+        finally:
+            os.unlink(path)
+
+    def test_dynamic_routing_from_config(self):
+        data = _base_config()
+        data["dynamic_routing"] = {"enabled": True, "cost_bias": 0.3}
+        path = _write_config(data)
+        try:
+            cfg = Config(path)
+            assert cfg.dynamic_routing["enabled"] is True
+            assert cfg.dynamic_routing["cost_bias"] == 0.3
+        finally:
+            os.unlink(path)
+
 
 class TestConfigEdgeCases:
     """Tests for validation edge cases and lesser-tested methods."""

@@ -2,6 +2,85 @@
 
 **Created:** 2026-08-10
 **Status:** draft (pre-implementation research complete)
+**Last updated:** 2026-08-19 — implementation plan added below (Tier 1 activation)
+
+---
+
+## Implementation Plan (2026-08-19) — activate benchmark-driven routing
+
+> Grounded in current code (`src/api/router.py`, `src/api/request_pipeline.py`,
+> `src/api/benchmark.py`). The capability infrastructure is **already built but
+> disabled**; this plan activates and corrects it in safe phases.
+
+### Current state (verified)
+
+- `CapabilityRouter` (`router.py:304`) already does task classify → score → rank
+  (`capability + cost_bias × (1 − cost_factor)`) → recommend, with a 5% hysteresis.
+- It is **disabled**: constructed `enabled=False` and `init_router()` is never
+  called in `src/main.py`, so routing is currently pure chain-order fallback
+  (+ circuit breaker + degraded gating) in `try_chain`.
+- Benchmarks already flow into `model_capabilities` (`benchmark.py::_upsert_scores`,
+  `source="lcp_benchmark"`), consumed by `load_capability_matrix` at priority 2
+  (above `livebench`=3, below `manual`=1). They are just never used for routing.
+
+### Known defects to fix while activating
+
+1. **Disabled by default** — `init_router()` never called in `main.py`.
+2. **In-place mutation** — `profile_cfg["chain"][0]["model"] = router_model`
+   (`request_pipeline.py:612`) mutates the profile config dict permanently.
+3. **Narrow cost model** — `_MODEL_PRICES` hardcodes only deepseek pro/flash;
+   should use `config.pricing` / cost-plugin pricing.
+4. **Model-only, not provider-aware** — returns a model name, ignoring which
+   provider serves it (commandcode vs deepseek vs opencode).
+5. **Stale taxonomy** — `classify_task` can emit `debugging`, which has no matrix
+   rows and falls back to 0.5.
+
+### Phases
+
+#### Phase 1 — Activate + correct (low risk) ✅ DONE (2026-08-19)
+- Add `dynamic_routing:` config section to `gateway.yaml` + `Config` accessor
+  (`enabled`, `cost_bias`).
+- Call `init_router(db_path, enabled, cost_bias)` in `main.py`.
+- Fix mutation bug — `try_chain` now operates on a **copy** of the chain
+  (`[dict(step) for step in profile_cfg["chain"]]`), so a router override never
+  mutates the profile config permanently. `available_models` is deduped.
+- **Taxonomy: added `debugging`** — LiveBench has no dedicated debugging
+  category, so `debugging` is derived from `code_generation` (a coding
+  subskill): `DERIVED_TASKS = {"debugging": "code_generation"}` in
+  `seed_capabilities.py`, written as real rows in both write paths
+  (`benchmark_import.materialize_capability_rows` for `source="livebench"` and
+  `benchmark._upsert_scores` for `source="lcp_benchmark"`), plus a read-time
+  safety net in `load_capability_matrix`. `classify_task` already emitted
+  `debugging`; it now resolves to a real score.
+- **Kept as-is:** deterministic top-1, model-only override, 5% hysteresis,
+  hardcoded `_MODEL_PRICES`.
+
+#### Phase 2 — Task-aware (provider, model) selection
+- Extend selection from *model* to *(provider, model)* pairs (each chain step is
+  `{provider, model}`); rank steps themselves using `provider_model_name` + matrix
+  score + cost.
+- Add a **provider health/credits tiebreaker** (from circuit breaker uptime + the
+  new cost cache) so a 96% model on a degraded provider loses to 94% on a healthy one.
+- Selection policy: deterministic top-1 by default, optional weighted sampling
+  (`explore`) for spread + A/B-style exploration.
+
+#### Phase 3 — Benchmark closed loop + routing policy
+- Auto-enqueue benchmarks for new/edited registry models; invalidate the router's
+  cached matrix on completion (mirror `invalidate_registry_cache`).
+- Configurable per-profile routing policy: `eager` (always best), `cost_first`,
+  `latency_first`, `explore` (weighted), plus a `min_score` floor.
+- Record routing decisions on `requests` (currently only a log line) for analysis.
+
+#### Phase 4 (optional) — learning / profile benchmarks
+- Feedback loop: track error/latency/cost per route; nudge weights.
+- Implement `target_kind="profile"` benchmark runs (stubbed in `benchmark.py`).
+
+### Decisions (2026-08-19)
+- **Taxonomy:** add `debugging` (derived from `code_generation`) — DONE.
+- **Selection:** keep deterministic top-1 for now.
+- **Ranking:** keep model-only override for now (Phase 2 later).
+- **Hysteresis:** keep 5% hardcoded for now.
+- **Cost model:** keep `_MODEL_PRICES` for now (config-pricing migration later).
 
 ---
 

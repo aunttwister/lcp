@@ -348,9 +348,11 @@ def materialize_capability_rows(engine, schema_id: Optional[str] = None,
     """Write typed ``model_capabilities`` rows from top-level metrics.
 
     Iterates in canonical category order so ``reasoning_chain`` ends up with
-    the ``math`` value (matching the hand-typed seed order).
+    the ``math`` value (matching the hand-typed seed order). Derived task
+    types (``debugging`` ← ``code_generation``) are written alongside.
     """
     from .models import ModelCapability, get_session
+    from .seed_capabilities import DERIVED_TASKS
 
     rows = _metric_rows(engine, schema_id, release, top_level=True)
     order = {c: i for i, c in enumerate(CATEGORY_ORDER)}
@@ -358,33 +360,45 @@ def materialize_capability_rows(engine, schema_id: Optional[str] = None,
 
     now = datetime.now(timezone.utc).isoformat()
     count = 0
+
+    def _upsert(model, task_type, score, raw, category, release_label, source="livebench"):
+        nonlocal count
+        existing = session.query(ModelCapability).filter_by(
+            model=model, task_type=task_type, source=source,
+            release_label=release_label,
+        ).first()
+        if existing is not None:
+            existing.score = score
+            existing.raw_score = raw
+            existing.benchmark_category = category
+            existing.updated_at = now
+        else:
+            session.add(ModelCapability(
+                model=model,
+                task_type=task_type,
+                score=score,
+                source=source,
+                benchmark_category=category,
+                raw_score=raw,
+                release_label=release_label,
+                updated_at=now,
+            ))
+        count += 1
+
     with get_session(engine) as session:
+        code_scores: dict[tuple[str, str], tuple[float, float]] = {}
         for r in rows:
             task_type = LB_TO_LCP.get(r.category)
             if task_type is None:
                 continue  # "overall" + unknown categories
             score = round(r.value / 100.0, 4)
-            existing = session.query(ModelCapability).filter_by(
-                model=r.model, task_type=task_type, source="livebench",
-                release_label=r.release_label,
-            ).first()
-            if existing is not None:
-                existing.score = score
-                existing.raw_score = r.value
-                existing.benchmark_category = r.category
-                existing.updated_at = now
-            else:
-                session.add(ModelCapability(
-                    model=r.model,
-                    task_type=task_type,
-                    score=score,
-                    source="livebench",
-                    benchmark_category=r.category,
-                    raw_score=r.value,
-                    release_label=r.release_label,
-                    updated_at=now,
-                ))
-            count += 1
+            _upsert(r.model, task_type, score, r.value, r.category, r.release_label)
+            if task_type == "code_generation":
+                code_scores[(r.model, r.release_label)] = (score, r.value)
+        # Derived tasks (debugging mirrors code_generation — a coding subskill).
+        for (model, release_label), (score, raw) in code_scores.items():
+            for derived in DERIVED_TASKS:
+                _upsert(model, derived, score, raw, "coding", release_label)
         session.commit()
     return count
 

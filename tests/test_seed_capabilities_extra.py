@@ -104,6 +104,15 @@ class TestCapabilityMatrix:
         matrix = load_capability_matrix(db_path, release=LIVEBENCH_RELEASE)
         assert "gpt-5.6-luna" in matrix.get("casual_chat", {})
 
+    def test_matrix_includes_derived_debugging(self, db_path):
+        seed_model_registry(db_path)
+        seed_livebench(db_path)
+        matrix = load_capability_matrix(db_path)
+        # debugging is derived from code_generation (a coding subskill), so it
+        # must be present with the same per-model scores.
+        assert "debugging" in matrix
+        assert matrix["debugging"]["deepseek-v4-pro"] == matrix["code_generation"]["deepseek-v4-pro"]
+
 
 # ── benchmark_import edge cases ──────────────────────────────────────────────
 

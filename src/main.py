@@ -51,6 +51,20 @@ def main():
     t0 = _startup_step("db_init", t0)
     logger.info("db_initialized", path=db_path)
 
+    # Initialize the dynamic router (benchmark-driven model selection) with
+    # the config's enabled/cost_bias. Disabled when not configured.
+    from .api.router import init_router
+    try:
+        dr = config.dynamic_routing or {}
+        if not isinstance(dr, dict):
+            dr = {}
+    except Exception:  # noqa: BLE001 — mocked/partial configs fall back to disabled
+        dr = {}
+    init_router(db_path, enabled=bool(dr.get("enabled", False)),
+                cost_bias=float(dr.get("cost_bias", 0.15)))
+    t0 = _startup_step("router_init", t0)
+    logger.info("dynamic_router_initialized", enabled=bool(dr.get("enabled", False)))
+
     # Recover benchmark runs left queued/running by a previous process.
     try:
         from .api.benchmark import recover_stale_runs

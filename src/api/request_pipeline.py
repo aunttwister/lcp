@@ -599,8 +599,12 @@ def _has_healthy_alternative(cb, chain: list[dict], profile_name: str,
 def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple[dict, int, str, str]:
     """Try each provider in the chain. Returns (response, status, provider, model)."""
     cb = get_circuit_breaker()
+    # Work on a COPY of the chain — a dynamic-router override must never mutate
+    # the profile config in place, or every later request would use the rerouted
+    # model permanently.
+    chain = [dict(step) for step in profile_cfg["chain"]]
+    chain_len = len(chain)
     errors = []
-    chain_len = len(profile_cfg["chain"])
 
     # ── Dynamic router: override model in first chain step if smarter ──────
     router = get_dynamic_router()
@@ -609,19 +613,20 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
             messages=body.get("messages", []),
             tools=body.get("tools"),
             max_tokens=body.get("max_tokens", 1024),
-            available_models=[step["model"] for step in profile_cfg["chain"]],
+            available_models=list(dict.fromkeys(step["model"] for step in chain)),
         )
         if router_model:
-            # Override the model in the first chain step
-            profile_cfg["chain"][0]["model"] = router_model
+            # Override the model in the first chain step (on the copy only).
+            original = chain[0].get("model", "?")
+            chain[0]["model"] = router_model
             logger.info(
                 "router_model_override",
                 profile=profile_name,
-                original=profile_cfg["chain"][0].get("model", "?"),
+                original=original,
                 selected=router_model,
             )
 
-    for i, step in enumerate(profile_cfg["chain"]):
+    for i, step in enumerate(chain):
         provider_name = step["provider"]
         base_url = step.get("base_url") or config.providers.get(provider_name, {}).get("api_base", "")
         model = step["model"]
@@ -661,7 +666,7 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
         # Degraded gating — prefer healthy alternatives over a degraded provider.
         # Only route to degraded when no healthy option remains in the chain.
         if cb.status_of(provider_name, base_url, profile_name) == "degraded" \
-                and _has_healthy_alternative(cb, profile_cfg["chain"], profile_name, i, config):
+                and _has_healthy_alternative(cb, chain, profile_name, i, config):
             logger.warning(
                 "provider_degraded_skipped",
                 provider=provider_name,
@@ -763,7 +768,7 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
             errors.append(f"{provider_name}: {e}")
             # Log a failover event when a next provider exists in the chain
             if i + 1 < chain_len:
-                next_provider = profile_cfg["chain"][i + 1]["provider"]
+                next_provider = chain[i + 1]["provider"]
                 cb.record_failover(
                     profile_name, provider_name, next_provider,
                     reason=type(e).__name__,
@@ -777,7 +782,7 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
                 attempt=i + 1,
                 chain_len=chain_len,
                 error=str(e),
-                next=profile_cfg["chain"][i + 1]["provider"] if i + 1 < chain_len else "none",
+                next=chain[i + 1]["provider"] if i + 1 < chain_len else "none",
             )
         except ConfigError as e:
             # Provider config problem (e.g. missing API key env var) — this
@@ -787,7 +792,7 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
                               error_reason=str(e))
             errors.append(f"{provider_name}: {e}")
             if i + 1 < chain_len:
-                next_provider = profile_cfg["chain"][i + 1]["provider"]
+                next_provider = chain[i + 1]["provider"]
                 cb.record_failover(
                     profile_name, provider_name, next_provider,
                     reason="ConfigError",

@@ -134,6 +134,29 @@ def test_import_bundled_seeds_known_models(db_path):
         engine.dispose()
 
 
+def test_import_bundled_writes_derived_debugging_rows(db_path):
+    """materialize_capability_rows writes derived 'debugging' rows mirroring
+    code_generation (a coding subskill proxy)."""
+    import_bundled(db_path)
+
+    from src.api.models import ModelCapability, get_engine, get_session
+    engine = get_engine(db_path)
+    session = get_session(engine)
+    try:
+        # Every model with a code_generation row must also have a debugging row
+        # with the same score (source livebench).
+        for row in session.query(ModelCapability).filter_by(task_type="code_generation", source="livebench").all():
+            dbg = session.query(ModelCapability).filter_by(
+                model=row.model, task_type="debugging", source="livebench",
+                release_label=row.release_label,
+            ).first()
+            assert dbg is not None, f"missing debugging row for {row.model}"
+            assert dbg.score == row.score
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_parse_multipart_upload_csv_filename():
     """A CSV upload reports its filename so the endpoint can dispatch on it."""
     from src.server.endpoints import _parse_multipart_upload

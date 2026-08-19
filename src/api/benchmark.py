@@ -823,38 +823,47 @@ def _upsert_scores(engine, target: dict, category_scores: dict[str, float],
     instead of overwriting it. Only rows for the SAME (model, task, source,
     release) are replaced.
     """
-    from .seed_capabilities import LB_TO_LCP
+    from .seed_capabilities import LB_TO_LCP, DERIVED_TASKS
     from .models import ModelCapability, get_session
 
     logical_model = target.get("model", "")
     label = release_label or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     now = datetime.now(timezone.utc).isoformat()
 
+    def _upsert(task_type, raw, category):
+        existing = session.query(ModelCapability).filter_by(
+            model=logical_model, task_type=task_type, source="lcp_benchmark",
+            release_label=label,
+        ).first()
+        score = round(raw / 100.0, 4)
+        if existing is not None:
+            existing.score = score
+            existing.raw_score = raw
+            existing.benchmark_category = category
+            existing.updated_at = now
+        else:
+            session.add(ModelCapability(
+                model=logical_model,
+                task_type=task_type,
+                score=score,
+                source="lcp_benchmark",
+                benchmark_category=category,
+                raw_score=raw,
+                release_label=label,
+                updated_at=now,
+            ))
+
     with get_session(engine) as session:
+        code_raw = None
         for lb_cat, raw in category_scores.items():
             task_type = LB_TO_LCP.get(lb_cat)
             if task_type is None:
                 continue
-            # Upsert: replace prior lcp_benchmark row for this model+task+release.
-            existing = session.query(ModelCapability).filter_by(
-                model=logical_model, task_type=task_type, source="lcp_benchmark",
-                release_label=label,
-            ).first()
-            score = round(raw / 100.0, 4)
-            if existing is not None:
-                existing.score = score
-                existing.raw_score = raw
-                existing.benchmark_category = lb_cat
-                existing.updated_at = now
-            else:
-                session.add(ModelCapability(
-                    model=logical_model,
-                    task_type=task_type,
-                    score=score,
-                    source="lcp_benchmark",
-                    benchmark_category=lb_cat,
-                    raw_score=raw,
-                    release_label=label,
-                    updated_at=now,
-                ))
+            _upsert(task_type, raw, lb_cat)
+            if task_type == "code_generation":
+                code_raw = raw
+        # Derived tasks (debugging mirrors code_generation — a coding subskill).
+        if code_raw is not None:
+            for derived in DERIVED_TASKS:
+                _upsert(derived, code_raw, "coding")
         session.commit()
