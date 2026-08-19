@@ -123,9 +123,14 @@
       <button class="btn btn-outline btn-sm" onclick="refreshNow()">Refresh now</button>
     </div>
 
-    <div style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.375rem">Per-provider refresh</div>
-    <div style="display:flex;flex-direction:column;gap:0.375rem" id="ttlRows">
-      <div class="form-help">Loading…</div>
+    <div class="ttl-collapse" id="ttlCollapse">
+      <div class="ttl-collapse-head" onclick="toggleTtlSection()" role="button" tabindex="0" aria-expanded="true">
+        <span style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground))">Per-provider refresh</span>
+        <span class="ttl-collapse-chev" style="font-size:0.625rem;color:hsl(var(--muted-foreground))">▾</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:0.375rem" id="ttlRows">
+        <div class="form-help">Loading…</div>
+      </div>
     </div>
 
     <div class="form-error" id="settingsError"></div>
@@ -450,6 +455,35 @@ function fmtTime(iso) {
 }
 
 const escC = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// ── Per-provider section collapse (persisted) ─────────────────────────────
+function applyTtlCollapsed(collapsed) {
+  const wrap = document.getElementById('ttlCollapse');
+  const rows = document.getElementById('ttlRows');
+  if (!wrap || !rows) return;
+  wrap.classList.toggle('collapsed', collapsed);
+  rows.style.display = collapsed ? 'none' : 'flex';
+  wrap.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+}
+
+function toggleTtlSection() {
+  const wrap = document.getElementById('ttlCollapse');
+  const collapsed = !wrap.classList.contains('collapsed');
+  localStorage.setItem('lcp-cache-ttl-collapsed', collapsed ? '1' : '0');
+  applyTtlCollapsed(collapsed);
+}
+
+(function () {
+  var wrap = document.getElementById('ttlCollapse');
+  if (!wrap) return;
+  applyTtlCollapsed(localStorage.getItem('lcp-cache-ttl-collapsed') === '1');
+  wrap.querySelector('.ttl-collapse-head').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleTtlSection();
+    }
+  });
+})();
 
 async function loadCacheSettings() {
   try {
