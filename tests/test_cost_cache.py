@@ -46,6 +46,33 @@ class TestSettingsStore:
         s.set("k", "2")
         assert s.get("k") == "2"
 
+    def test_per_provider_ttl_override(self, engine):
+        s = SettingsStore(engine)
+        s.set_ttl_minutes(5, provider="deepseek")
+        assert s.get_ttl_minutes(provider="deepseek") == 5
+        # Other providers fall back to the default.
+        assert s.get_ttl_minutes(provider="opencode") == 30
+        assert s.ttl_overrides() == {"deepseek": 5}
+
+    def test_per_provider_ttl_global_default_applies(self, engine):
+        s = SettingsStore(engine)
+        s.set_ttl_minutes(10)  # global default
+        assert s.get_ttl_minutes(provider="opencode") == 10
+        assert s.get_ttl_minutes() == 10
+
+    def test_clear_ttl_override(self, engine):
+        s = SettingsStore(engine)
+        s.set_ttl_minutes(7, provider="opencode")
+        s.clear_ttl_minutes("opencode")
+        assert s.get_ttl_minutes(provider="opencode") == 30
+        assert s.ttl_overrides() == {}
+
+    def test_per_provider_ttl_persisted(self, engine):
+        s = SettingsStore(engine)
+        s.set_ttl_minutes(3, provider="commandcode")
+        s2 = SettingsStore(engine)
+        assert s2.get_ttl_minutes(provider="commandcode") == 3
+
 
 class TestCostPluginCache:
     def test_get_missing_is_none(self, engine):

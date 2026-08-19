@@ -125,6 +125,24 @@ class TestRefreshBasics:
         assert plugin.calls["sub"] == 1
         assert r._cache.get("opencode", "subscription")["payload"] == {"monthly_pct": 99.0}
 
+    def test_per_provider_ttl_respected(self, engine):
+        deep = FakeNoSubPlugin(bal={"balance": 1.0})
+        openc = FakeSubPlugin(sub={"monthly_pct": 1.0})
+        reg = FakeRegistry({"deepseek": deep, "opencode": openc})
+        r = _make_refresher(engine, reg, ttl=30)
+        # deepseek gets a 1-minute override; opencode uses the 30-min default.
+        r._settings.set_ttl_minutes(1, provider="deepseek")
+        r._pass()  # both scraped first time
+        assert deep.calls["bal"] == 1 and openc.calls["sub"] == 1
+
+        # Backdate deepseek by 2 min (past its 1-min TTL), opencode by ~12s
+        # (still within its 30-min default).
+        _age_row(engine, "deepseek", "balance", 2)
+        _age_row(engine, "opencode", "subscription", 0.2)
+        r._pass()
+        assert deep.calls["bal"] == 2   # deepseek is stale → rescraped
+        assert openc.calls["sub"] == 1  # opencode still fresh → untouched
+
     def test_unsupported_kind_not_scraped(self, engine):
         plugin = FakeNoSubPlugin(bal={"balance": 10.0})
         reg = FakeRegistry({"deepseek": plugin})

@@ -120,15 +120,59 @@ class SettingsStore:
             self._cache[key] = text
             self._loaded = True
 
-    def get_ttl_minutes(self, default: int = _DEFAULT_TTL_MINUTES) -> int:
-        raw = self.get("cost_cache_ttl_minutes", default)
+    TTL_KEY = "cost_cache_ttl_minutes"
+
+    def _ttl_from_raw(self, raw, default: int) -> int:
         try:
             return max(1, int(float(raw)))
         except (TypeError, ValueError):
             return default
 
-    def set_ttl_minutes(self, minutes: int) -> None:
-        self.set("cost_cache_ttl_minutes", max(1, int(minutes)))
+    def get_ttl_minutes(self, provider: Optional[str] = None,
+                        default: int = _DEFAULT_TTL_MINUTES) -> int:
+        """Return the refresh TTL in minutes.
+
+        A per-provider override (``cost_cache_ttl_minutes:<provider>``) wins
+        when set; otherwise the global default applies.
+        """
+        if provider:
+            raw = self.get(f"{self.TTL_KEY}:{provider}", None)
+            if raw is not None:
+                return self._ttl_from_raw(raw, default)
+        raw = self.get(self.TTL_KEY, default)
+        return self._ttl_from_raw(raw, default)
+
+    def set_ttl_minutes(self, minutes: int, provider: Optional[str] = None) -> None:
+        """Set the refresh TTL.
+
+        With *provider*, set a per-provider override; otherwise set the global
+        default that new/other providers fall back to.
+        """
+        key = f"{self.TTL_KEY}:{provider}" if provider else self.TTL_KEY
+        self.set(key, max(1, int(minutes)))
+
+    def clear_ttl_minutes(self, provider: str) -> None:
+        """Remove a per-provider override so it falls back to the default."""
+        key = f"{self.TTL_KEY}:{provider}"
+        with get_session(self._engine) as session:
+            row = session.query(Setting).filter(Setting.key == key).first()
+            if row is not None:
+                session.delete(row)
+                session.commit()
+        with self._lock:
+            self._cache.pop(key, None)
+
+    def ttl_overrides(self) -> dict[str, int]:
+        """Return {provider: minutes} for every per-provider TTL override."""
+        self._ensure_loaded()
+        prefix = f"{self.TTL_KEY}:"
+        out: dict[str, int] = {}
+        for key, raw in self._cache.items():
+            if key.startswith(prefix):
+                prov = key[len(prefix):]
+                if prov:
+                    out[prov] = self._ttl_from_raw(raw, _DEFAULT_TTL_MINUTES)
+        return out
 
 
 _settings_store: Optional[SettingsStore] = None
@@ -387,7 +431,6 @@ class CacheRefresher:
 
     def _pass(self) -> None:
         registry = self._registry_getter()
-        ttl = self._settings.get_ttl_minutes() * 60
         now = time.time()
 
         with self._lock:
@@ -400,6 +443,9 @@ class CacheRefresher:
             plugin = registry.for_provider(prov)
             if plugin is None:
                 continue
+            # Per-provider TTL: each provider has its own refresh interval,
+            # falling back to the global default when no override is set.
+            ttl = self._settings.get_ttl_minutes(provider=prov) * 60
             for kind in KINDS:
                 if not plugin_supports(plugin, kind):
                     continue
@@ -469,7 +515,8 @@ class CacheRefresher:
                 delay = min(self._backoff_base * (2 ** (fails - 1)), self._backoff_cap)
                 delay += random.uniform(0, min(delay * 0.2, 30))  # jitter
             else:
-                delay = self._settings.get_ttl_minutes() * 60  # retry when stale again
+                # Auth failure → retry only when this provider's entry is stale again.
+                delay = self._settings.get_ttl_minutes(provider=prov) * 60
             self._next_attempt[key] = time.time() + delay
         logger.warning("cost_cache_refresh_failed", provider=prov, kind=kind,
                        error_kind=error_kind, detail=detail, consecutive=fails)

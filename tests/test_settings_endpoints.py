@@ -90,7 +90,37 @@ class TestSettingsApi:
         h.do_GET()
         body = _json_body(h)
         assert body["ttl_minutes"] == 30
+        assert body["per_provider_ttl"] == {}
         assert body["entries"] == []
+
+    def test_settings_update_per_provider(self, engine, mock_config):
+        init_settings(engine)
+        h = TestHandler(path="/api/settings", method="POST", engine=engine,
+                        body=json.dumps({"provider": "deepseek", "ttl_minutes": 5}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert body["provider"] == "deepseek"
+        assert body["ttl_minutes"] == 5
+        assert body["per_provider_ttl"] == {"deepseek": 5}
+        # Other providers still use the default.
+        assert get_settings().get_ttl_minutes(provider="deepseek") == 5
+        assert get_settings().get_ttl_minutes(provider="opencode") == 30
+
+    def test_settings_update_reset_provider(self, engine, mock_config):
+        init_settings(engine)
+        get_settings().set_ttl_minutes(9, provider="deepseek")
+        h = TestHandler(path="/api/settings", method="POST", engine=engine,
+                        body=json.dumps({"provider": "deepseek"}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert body["provider"] == "deepseek"
+        assert body["ttl_minutes"] == 30  # back to default
+        assert body["per_provider_ttl"] == {}
+        assert get_settings().get_ttl_minutes(provider="deepseek") == 30
 
     def test_settings_update_persists(self, engine, mock_config):
         init_settings(engine)

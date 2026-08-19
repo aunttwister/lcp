@@ -1636,7 +1636,7 @@ class SettingsEndpoints:
     _read_body: Any
 
     def _serve_settings_api(self):
-        """GET /api/settings — current TTL, cache entries, refresh diagnostics."""
+        """GET /api/settings — default TTL, per-provider TTLs, cache entries."""
         from ..api.cost_cache import get_cost_cache, get_refresher, get_settings
         settings = get_settings()
         ttl = settings.get_ttl_minutes() if settings is not None else 30
@@ -1644,34 +1644,57 @@ class SettingsEndpoints:
         refresher = get_refresher()
         self._send_json({
             "ttl_minutes": ttl,
+            "per_provider_ttl": settings.ttl_overrides() if settings is not None else {},
             "entries": cache.entries() if cache is not None else [],
             "refresh": refresher.diagnostics() if refresher is not None else {},
         })
 
     def _serve_settings_update_api(self):
-        """POST /api/settings {ttl_minutes} — persist the cache TTL."""
+        """POST /api/settings — persist the cache TTL.
+
+        Body ``{ttl_minutes: N}`` sets the global default.
+        Body ``{provider: p, ttl_minutes: N}`` sets a per-provider override.
+        Body ``{provider: p}`` (no ttl_minutes) resets that provider to the
+        default.
+        """
         try:
             body = self._read_body()
         except Exception:
             self._send_json({"error": "invalid JSON body"}, 400)
             return
+        provider = (body.get("provider") or "").strip().lower() or None
+        from ..api.cost_cache import get_refresher, get_settings
+        settings = get_settings()
+        if settings is None:
+            self._send_json({"error": "settings store not initialized"}, 500)
+            return
+        refresher = get_refresher()
+
+        if provider and "ttl_minutes" not in body:
+            # Reset this provider to the global default.
+            settings.clear_ttl_minutes(provider)
+            if refresher is not None:
+                refresher.request_refresh(provider=provider)
+            self._send_json({
+                "ok": True, "provider": provider,
+                "ttl_minutes": settings.get_ttl_minutes(provider=provider),
+                "per_provider_ttl": settings.ttl_overrides(),
+            })
+            return
+
         try:
             ttl = max(1, int(body.get("ttl_minutes")))
         except (TypeError, ValueError):
             self._send_json({"error": "ttl_minutes must be an integer >= 1"}, 400)
             return
-        from ..api.cost_cache import get_settings
-        settings = get_settings()
-        if settings is None:
-            self._send_json({"error": "settings store not initialized"}, 500)
-            return
-        settings.set_ttl_minutes(ttl)
-        # TTL changed → oldest entries may now be stale; re-scrape in background.
-        from ..api.cost_cache import get_refresher
-        refresher = get_refresher()
+        settings.set_ttl_minutes(ttl, provider=provider)
+        # TTL changed → affected entries may now be stale; re-scrape in background.
         if refresher is not None:
-            refresher.request_refresh()
-        self._send_json({"ok": True, "ttl_minutes": ttl})
+            refresher.request_refresh(provider=provider)
+        self._send_json({
+            "ok": True, "provider": provider, "ttl_minutes": ttl,
+            "per_provider_ttl": settings.ttl_overrides(),
+        })
 
     def _serve_settings_refresh_api(self):
         """POST /api/settings/cache/refresh — enqueue a background re-scrape."""
