@@ -8,7 +8,9 @@ import tempfile
 import pytest
 
 from src.api.seed_capabilities import (
+    DERIVED_TASKS,
     LIVEBENCH_RELEASE,
+    derived_task_scores,
     load_capability_matrix,
     seed_livebench,
     seed_livebench_tasks,
@@ -98,7 +100,6 @@ class TestCapabilityMatrix:
         # deepseek-v4-pro should be present under reasoning_chain.
         assert "reasoning_chain" in matrix
         assert "deepseek-v4-pro" in matrix["reasoning_chain"]
-
     def test_matrix_release_filter(self, db_path):
         seed_livebench(db_path)
         matrix = load_capability_matrix(db_path, release=LIVEBENCH_RELEASE)
@@ -112,6 +113,25 @@ class TestCapabilityMatrix:
         # must be present with the same per-model scores.
         assert "debugging" in matrix
         assert matrix["debugging"]["deepseek-v4-pro"] == matrix["code_generation"]["deepseek-v4-pro"]
+
+
+# ── derived_task_scores ──────────────────────────────────────────────────────
+
+class TestDerivedTaskScores:
+    def test_derives_debugging_from_code_generation(self):
+        out = derived_task_scores({"code_generation": 0.85, "reasoning_chain": 0.9})
+        assert out == {"debugging": 0.85}
+
+    def test_no_derivation_when_source_missing(self):
+        out = derived_task_scores({"reasoning_chain": 0.9})
+        assert out == {}
+
+    def test_empty_input(self):
+        assert derived_task_scores({}) == {}
+
+    def test_derived_tasks_registry(self):
+        # debugging is the only derived task, sourced from code_generation.
+        assert DERIVED_TASKS == {"debugging": "code_generation"}
 
 
 # ── benchmark_import edge cases ──────────────────────────────────────────────

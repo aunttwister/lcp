@@ -817,3 +817,27 @@ class TestTryChainDynamicRouter:
         # And the router's deduped available_models were passed the chain models.
         _, kwargs = fake_router.select_model.call_args
         assert kwargs["available_models"] == ["m1", "m2"]
+
+    def test_router_returning_none_keeps_default(self, chain_config):
+        """When the router recommends no override, the chain model is kept."""
+        from unittest.mock import patch as _patch
+
+        good_resp = MagicMock()
+        good_resp.status = 200
+        good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
+
+        def fake_forward(provider_cfg, body, config):
+            return json.loads(good_resp.read()), 200
+
+        fake_router = MagicMock()
+        fake_router.enabled = True
+        fake_router.select_model.return_value = None  # keep default
+
+        profile_cfg = chain_config.profiles["l2"]
+        with _patch("src.api.request_pipeline.get_dynamic_router", return_value=fake_router), \
+                _patch("src.api.request_pipeline.forward_request", side_effect=fake_forward):
+            result_body, status, provider, model = try_chain(
+                "l2", profile_cfg, self._body(), chain_config)
+
+        assert model == "m1"  # default first-step model used
+        assert profile_cfg["chain"][0]["model"] == "m1"

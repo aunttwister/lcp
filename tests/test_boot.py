@@ -84,6 +84,44 @@ class TestMain:
 
         server.shutdown.assert_called_once()
 
+    def test_main_initializes_router_with_config(self, boot_config):
+        """main() wires the dynamic router from config.dynamic_routing."""
+        import src.main
+        boot_config.dynamic_routing = {"enabled": True, "cost_bias": 0.3}
+        engine = MagicMock()
+
+        with patch.object(src.main, "init_config", return_value=boot_config), \
+             patch.object(src.main, "get_engine", return_value=engine), \
+             patch.object(src.main, "init_alert_manager"), \
+             patch.object(src.main, "create_server", return_value=MagicMock()), \
+             patch("src.api.cost_plugins.init_plugins"), \
+             patch("src.api.router.init_router") as mock_router:
+
+            src.main.main()
+
+        mock_router.assert_called_once()
+        args, kwargs = mock_router.call_args
+        assert kwargs["enabled"] is True
+        assert kwargs["cost_bias"] == 0.3
+
+    def test_main_router_defaults_disabled(self, boot_config):
+        """A config without dynamic_routing leaves the router disabled."""
+        import src.main
+        # boot_config is a MagicMock → dynamic_routing returns a non-dict → disabled.
+        engine = MagicMock()
+
+        with patch.object(src.main, "init_config", return_value=boot_config), \
+             patch.object(src.main, "get_engine", return_value=engine), \
+             patch.object(src.main, "init_alert_manager"), \
+             patch.object(src.main, "create_server", return_value=MagicMock()), \
+             patch("src.api.cost_plugins.init_plugins"), \
+             patch("src.api.router.init_router") as mock_router:
+
+            src.main.main()
+
+        _, kwargs = mock_router.call_args
+        assert kwargs["enabled"] is False
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # src.server.server.create_server()

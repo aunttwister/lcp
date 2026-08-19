@@ -135,6 +135,23 @@ def test_get_model_score_resolves_debugging_via_matrix(registry_db):
     score = router.get_model_score("deepseek-v4-pro", "debugging")
     assert score > 0.5
 
+def test_get_model_score_falls_back_for_unknown_model(registry_db):
+    """A model with no debugging row falls back to the 0.5 default."""
+    from src.api.seed_capabilities import seed_livebench
+    seed_livebench(registry_db)
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    assert router.get_model_score("some-unknown-model", "debugging") == 0.5
+
+def test_select_model_debugging_prompt_returns_choice(registry_db):
+    """A debugging-flavored prompt classifies + ranks and returns a model."""
+    from src.api.seed_capabilities import seed_livebench
+    seed_livebench(registry_db)
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    msgs = [{"role": "user", "content": "why does this fail with a TypeError? please debug"}]
+    result = router.select_model(
+        msgs, available_models=["deepseek-v4-flash", "deepseek-v4-pro"])
+    assert result in ("deepseek-v4-flash", "deepseek-v4-pro")
+
 
 # ── Model registry tests (explicit alias → logical → benchmark) ───────────
 
