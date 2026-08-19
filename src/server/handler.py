@@ -249,8 +249,6 @@ class LCPHandler(
             self._serve_models_page()
         elif self.path == "/setup":
             self._serve_setup_page()
-        elif self.path == "/settings":
-            self._serve_settings_page()
         elif self.path == "/api/settings" or self.path.startswith("/api/settings?"):
             self._serve_settings_api()
         elif self.path == "/api/setup" or self.path.startswith("/api/setup?"):

@@ -708,6 +708,13 @@ class ProviderEndpoints:
             else:
                 self._send_json({"error": "credential store not initialized"}, 500)
                 return
+        # A newly added/updated provider should get its cache entry (if its
+        # cost plugin exposes usage/balance/credits) populated on the next
+        # background pass rather than waiting for the TTL.
+        from ..api.cost_cache import get_refresher
+        refresher = get_refresher()
+        if refresher is not None:
+            refresher.request_refresh(provider=name)
         self._send_json({"ok": True, "provider": name})
 
     def _serve_provider_update(self, name: str):
@@ -733,6 +740,11 @@ class ProviderEndpoints:
         if "models" in body:
             pdata["models"] = body["models"]
         cfg.save()
+        # See create: request a background cache refresh for this provider.
+        from ..api.cost_cache import get_refresher
+        refresher = get_refresher()
+        if refresher is not None:
+            refresher.request_refresh(provider=name)
         self._send_json({"ok": True, "provider": name})
 
     def _serve_provider_delete(self, name: str):
@@ -1614,25 +1626,14 @@ class PluginEndpoints:
 # ── Admin Settings API ───────────────────────────────────────────────────────
 
 class SettingsEndpoints:
-    """Admin settings: cost-cache TTL + cache management."""
+    """Admin settings API: cost-cache TTL + cache management.
 
-    config: Any
-    engine: Any
+    The UI for these lives in the Providers page's Cache tab; these endpoints
+    back it. There is no standalone /settings page anymore.
+    """
+
     _send_json: Any
     _read_body: Any
-    send_response: Any
-    send_header: Any
-    end_headers: Any
-    wfile: Any
-
-    def _serve_settings_page(self):
-        """Server-rendered admin settings page."""
-        from ..ui.pages import render_settings_page
-        html = render_settings_page(self.config, self.engine)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(html.encode("utf-8"))
 
     def _serve_settings_api(self):
         """GET /api/settings — current TTL, cache entries, refresh diagnostics."""

@@ -67,15 +67,21 @@ def _cleanup_singletons():
 
 
 class TestSettingsApi:
-    def test_settings_page_renders(self, engine, mock_config):
-        init_settings(engine)
+    def test_providers_page_has_cache_tab(self, mock_config):
+        # The settings cache lives in the Providers page's Cache tab.
+        from src.ui.pages import render_providers_page
+        html = render_providers_page(mock_config)
+        assert 'data-tab="cache"' in html
+        assert "Cost data refresh" in html
+        assert 'id="cacheRows"' in html
+        assert "/api/settings" in html
+
+    def test_settings_page_route_removed(self, engine, mock_config):
+        # /settings no longer exists; it should 404.
         h = TestHandler(path="/settings", engine=engine)
         h.config = mock_config
         h.do_GET()
-        assert _status(h) == 200
-        html = h.wfile.write.call_args[0][0].decode("utf-8")
-        assert "Cost data refresh" in html
-        assert "Cache" in html
+        assert _status(h) == 404
 
     def test_settings_api_default(self, engine):
         init_settings(engine)
@@ -121,6 +127,37 @@ class TestSettingsApi:
         h.do_POST()
         assert _status(h) == 200
         assert get_cost_cache().entries() == []
+
+    def test_provider_create_requests_refresh(self, engine, mock_config, monkeypatch):
+        init_settings(engine)
+        cache = init_cost_cache(engine)
+        refresher = init_refresher(cache, get_settings())
+        # The refresher must receive a refresh request for the provider.
+        requested = []
+        monkeypatch.setattr(refresher, "request_refresh",
+                            lambda provider=None, kind=None: requested.append(provider))
+        h = TestHandler(path="/api/providers", method="POST", engine=engine,
+                        body=json.dumps({"name": "newco", "api_base": "https://x", "models": []}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        assert "newco" in requested
+
+    def test_provider_update_requests_refresh(self, engine, mock_config, monkeypatch):
+        init_settings(engine)
+        cache = init_cost_cache(engine)
+        refresher = init_refresher(cache, get_settings())
+        requested = []
+        monkeypatch.setattr(refresher, "request_refresh",
+                            lambda provider=None, kind=None: requested.append(provider))
+        # newco must already exist in config.raw
+        mock_config.raw.setdefault("providers", {})["newco"] = {"api_base": "https://x", "models": []}
+        h = TestHandler(path="/api/providers/newco", method="PUT", engine=engine,
+                        body=json.dumps({"api_base": "https://y"}))
+        h.config = mock_config
+        h.do_PUT()
+        assert _status(h) == 200
+        assert "newco" in requested
 
 
 class TestPluginEndpointsCacheRead:

@@ -9,6 +9,7 @@
 <div class="tab-bar">
   <button class="tab-btn active" data-tab="health" onclick="switchProvTab('health', this)">Health</button>
   <button class="tab-btn" data-tab="config" onclick="switchProvTab('config', this)">Configuration</button>
+  <button class="tab-btn" data-tab="cache" onclick="switchProvTab('cache', this)">Cache</button>
 </div>
 
 <!-- ═══ HEALTH TAB ═══ -->
@@ -101,6 +102,47 @@
 <td><button class="btn-sm" onclick="editProvider('{{ name }}')">Edit</button><button class="btn-sm btn-danger" onclick="deleteProvider('{{ name }}')">Del</button></td></tr>
 {% endfor %}{% else %}<tr><td colspan="5" class="empty">No providers configured.</td></tr>{% endif %}
 </tbody></table></div>
+</div>
+
+<!-- ═══ CACHE TAB ═══ -->
+<div id="tab-cache" class="tab-panel">
+  <div style="max-width:720px;background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem;margin-bottom:1rem">
+    <h3 style="font-size:0.9rem;margin-bottom:0.25rem">Cost data refresh</h3>
+    <p style="font-size:0.75rem;color:hsl(var(--muted-foreground));margin-bottom:1rem">
+      Live provider usage and credits (subscriptions, balances) are scraped by a background worker
+      and cached in the database. The dashboard and usage pages always read the cache, so page loads
+      never trigger a scrape. New providers are picked up automatically — an entry appears here on the
+      next refresh cycle whenever a provider exposes usage/balance/credits data.
+    </p>
+    <div style="display:flex;align-items:flex-end;gap:0.75rem;flex-wrap:wrap">
+      <div>
+        <label class="form-label" for="ttlMinutes" style="display:block;margin-bottom:0.25rem">Refresh every (minutes)</label>
+        <input class="form-input" type="number" id="ttlMinutes" min="1" step="1" style="width:120px;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="saveTtl()">Save</button>
+      <button class="btn btn-outline btn-sm" onclick="refreshNow()">Refresh now</button>
+    </div>
+    <div class="form-error" id="settingsError"></div>
+    <div class="form-help" id="settingsStatus"></div>
+  </div>
+
+  <div style="background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+      <h3 style="font-size:0.9rem;margin:0">Cache</h3>
+      <div style="display:flex;gap:0.5rem">
+        <button class="btn btn-outline btn-sm" onclick="refreshNow()">Refresh now</button>
+        <button class="btn btn-outline btn-sm" onclick="clearCache()">Clear cache</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="capability-table"><thead><tr>
+        <th>Provider</th><th>Kind</th><th>Fetched</th><th>Age</th><th>Status</th>
+      </tr></thead><tbody id="cacheRows">
+        <tr><td colspan="5" class="empty">Loading…</td></tr>
+      </tbody></table>
+    </div>
+    <div class="form-help" id="cacheStatus"></div>
+  </div>
 </div>
 {% endblock %}
 
@@ -385,4 +427,83 @@ loadProviderHealth();
 loadFailovers();
 setInterval(loadProviderHealth, 10000);
 setInterval(loadFailovers, 15000);
+
+// ── Cache tab ─────────────────────────────────────────────────────────────
+var SETTINGS = { ttl_minutes: 30, entries: [], refresh: {} };
+
+function fmtAge(sec) {
+  if (sec == null) return '—';
+  if (sec < 60) return Math.round(sec) + 's';
+  if (sec < 3600) return (sec / 60).toFixed(1) + 'm';
+  return (sec / 3600).toFixed(1) + 'h';
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  return String(iso).replace('T', ' ').slice(0, 19);
+}
+
+const escC = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function loadCacheSettings() {
+  try {
+    const d = await api('GET', '/api/settings');
+    SETTINGS = d;
+    document.getElementById('ttlMinutes').value = d.ttl_minutes;
+    renderCacheEntries();
+  } catch (e) {
+    document.getElementById('settingsStatus').textContent = 'Failed to load settings: ' + e.message;
+  }
+}
+
+function renderCacheEntries() {
+  const rows = document.getElementById('cacheRows');
+  const ents = SETTINGS.entries || [];
+  if (!ents.length) {
+    rows.innerHTML = '<tr><td colspan="5" class="empty">No cached entries yet — new providers are picked up on the next refresh cycle.</td></tr>';
+    return;
+  }
+  rows.innerHTML = ents.map(e => {
+    const st = e.stale_error
+      ? '<span class="badge badge-error" title="' + escC(e.stale_error) + '">stale</span>'
+      : '<span class="badge badge-success">fresh</span>';
+    return '<tr>' +
+      '<td class="mono">' + escC(e.provider) + '</td>' +
+      '<td class="mono">' + escC(e.kind) + '</td>' +
+      '<td class="mono">' + fmtTime(e.fetched_at) + '</td>' +
+      '<td class="mono">' + fmtAge(e.age_seconds) + '</td>' +
+      '<td>' + st + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function saveTtl() {
+  const err = document.getElementById('settingsError');
+  const status = document.getElementById('settingsStatus');
+  err.textContent = '';
+  const v = parseInt(document.getElementById('ttlMinutes').value, 10);
+  if (!v || v < 1) { err.textContent = 'Enter a refresh interval >= 1 minute.'; return; }
+  const d = await api('POST', '/api/settings', { ttl_minutes: v });
+  if (d.error) { err.textContent = d.error; return; }
+  status.textContent = 'Saved — entries refresh every ' + d.ttl_minutes + ' minute(s).';
+  loadCacheSettings();
+}
+
+async function refreshNow() {
+  const status = document.getElementById('settingsStatus');
+  status.textContent = 'Refresh requested — running in the background…';
+  const d = await api('POST', '/api/settings/cache/refresh', {});
+  if (d.error) { status.textContent = d.error; return; }
+  setTimeout(loadCacheSettings, 800);
+}
+
+async function clearCache() {
+  const status = document.getElementById('cacheStatus');
+  status.textContent = 'Cache cleared — background worker will re-scrape shortly.';
+  await api('POST', '/api/settings/cache/clear', {});
+  setTimeout(loadCacheSettings, 800);
+}
+
+loadCacheSettings();
+setInterval(loadCacheSettings, 15000);
 {% endraw %}</script>{% endblock %}
