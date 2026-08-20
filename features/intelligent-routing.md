@@ -85,6 +85,36 @@
   when a benchmark run completes (`benchmark.py`) and on registry upsert — so
   fresh scores/identity are picked up without a restart.
 
+#### Phase 3b — runtime enable toggle ✅ DONE (2026-08-20)
+- **UI toggle**: `SettingsStore` gained `routing_enabled` (`get_routing_enabled()`
+  / `set_routing_enabled(bool)`, stored as `"1"`/`"0"` in the settings table).
+  `CapabilityRouter.is_enabled(config)` returns the effective state — runtime
+  toggle wins, otherwise the boot-time value (seeded from
+  `config.dynamic_routing.enabled`). `select_step`, `select_model`,
+  `routing_status`, and `try_chain` all use `is_enabled`, so flipping the toggle
+  applies **immediately, no restart**, without touching the gitignored
+  `gateway.yaml` (which stays `enabled: false` as the safe default).
+- **API**: `POST /api/routing/policy` now accepts an optional `enabled` boolean
+  (rejects non-bool with 400) and persists it via the settings store.
+- **UI**: Providers → Routing tab has an **Enabled** checkbox next to the status
+  badge; `saveRouting()` sends `enabled` alongside policy/min_score.
+
+#### Phase 3c — `unit_tests` taxonomy ✅ DONE (2026-08-20)
+- **New derived task**: `unit_tests` derives from `code_generation` (a coding
+  subskill, like `debugging`): `DERIVED_TASKS` now has both
+  `"debugging": "code_generation"` and `"unit_tests": "code_generation"`. This
+  flows through `derived_task_scores`, both write paths
+  (`materialize_capability_rows`, `_upsert_scores`), and the `load_capability_matrix`
+  read-time safety net — so `unit_tests` resolves to real scores immediately.
+- **Classifier**: `unit_tests` added to `TASK_SIGNALS` (before `code_generation`
+  so first-match wins): "unit test", "write tests", "test case", "test suite",
+  "pytest", "unittest", "test coverage", "mocking", … Deliberately no bare
+  "assert"/"fixture" (too many false positives in code-gen prompts).
+- **Intent wiring (UI-only)**: add these rules in the Routing tab to express
+  fine-grained intent — `planning → prefer deepseek-v4-pro`,
+  `code_generation → prefer deepseek-v4-flash`,
+  `unit_tests → prefer deepseek-v4-flash`.
+
 #### Phase 4 (optional) — learning / profile benchmarks
 - Feedback loop: track error/latency/cost per route; nudge weights.
 - Implement `target_kind="profile"` benchmark runs (stubbed in `benchmark.py`).

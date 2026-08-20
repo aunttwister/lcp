@@ -6,8 +6,9 @@ Three routing strategies, from simple to smart:
   3. Disabled — static chain (current default)
 
 The CapabilityRouter loads per-model scores from the model_capabilities DB table,
-classifies each incoming prompt into a task type (agentic, coding, debugging,
-reasoning, planning, chat), and scores all available models to pick the best fit.
+classifies each incoming prompt into a task type (agentic, unit tests, coding,
+debugging, reasoning, planning, chat), and scores all available models to pick
+the best fit.
 """
 
 from __future__ import annotations
@@ -82,6 +83,12 @@ TASK_SIGNALS: dict[str, list[str]] = {
         "you are an ai agent", "you are a coding agent",
         "autonomous", "multi-step", "multi step",
         "tools:", "function call", "tool call",
+    ],
+    "unit_tests": [
+        "unit test", "unit tests", "write tests", "write a test",
+        "test case", "test cases", "test suite", "add tests",
+        "create tests", "pytest", "unittest", "test coverage",
+        "mocking", "mock object", "mock the",
     ],
     "code_generation": [
         "write a function", "implement", "create a script",
@@ -380,6 +387,24 @@ class CapabilityRouter:
                 pass
         return policy, min_score
 
+    def is_enabled(self, config: Optional[object] = None) -> bool:
+        """Effective enabled state: a runtime toggle (settings table, UI) wins,
+        otherwise fall back to the boot-time value (seeded from config).
+
+        ``config`` is accepted for API symmetry (callers pass it through) but
+        the boot-time ``self.enabled`` already reflects config at startup.
+        """
+        try:
+            from .cost_cache import get_settings
+            settings = get_settings()
+            if settings is not None:
+                override = settings.get_routing_enabled(default=None)
+                if override is not None:
+                    return override
+        except Exception:  # noqa: BLE001 — toggle must never break routing
+            pass
+        return self.enabled
+
     def _record_decision(self, decision: dict) -> None:
         self._decisions.append(decision)
         if len(self._decisions) > 50:
@@ -449,7 +474,7 @@ class CapabilityRouter:
 
         Returns the recommended model name, or None to use the chain's default.
         """
-        if not self.enabled:
+        if not self.is_enabled():
             return None
 
         task = classify_task(messages, tools, max_tokens)
@@ -697,7 +722,7 @@ class CapabilityRouter:
         >= it. Returns None to keep the chain's existing order. The caller
         applies it to its own copy — this never mutates the profile config.
         """
-        if not self.enabled or not chain:
+        if not self.is_enabled(config) or not chain:
             return None
         policy, min_score = self._effective_policy(config)
         task = classify_task(messages, tools, max_tokens)
@@ -879,7 +904,7 @@ def routing_status(config: Optional[object] = None) -> dict:
     except Exception:  # noqa: BLE001
         pass
     return {
-        "enabled": router.enabled,
+        "enabled": router.is_enabled(config),
         "policy": policy,
         "min_score": min_score,
         "rules": router._rules(config),

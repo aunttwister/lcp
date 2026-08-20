@@ -168,6 +168,13 @@
     </p>
     <div style="display:flex;align-items:flex-end;gap:0.75rem;flex-wrap:wrap">
       <div>
+        <label class="form-label" for="routingEnabled" style="display:block;margin-bottom:0.25rem">Enabled</label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.75rem;color:hsl(var(--muted-foreground));cursor:pointer">
+          <input type="checkbox" id="routingEnabled" style="transform:scale(1.25);accent-color:hsl(var(--primary));cursor:pointer">
+          route by capability
+        </label>
+      </div>
+      <div>
         <label class="form-label" for="routingStatusBadge" style="display:block;margin-bottom:0.25rem">Status</label>
         <span class="badge badge-success" id="routingStatusBadge">…</span>
       </div>
@@ -760,6 +767,7 @@ async function loadRouting() {
     const badge = document.getElementById('routingStatusBadge');
     badge.textContent = d.enabled ? 'enabled' : 'disabled';
     badge.className = 'badge ' + (d.enabled ? 'badge-success' : 'badge-error');
+    document.getElementById('routingEnabled').checked = !!d.enabled;
     document.getElementById('routingPolicy').value = d.policy;
     document.getElementById('routingMinScore').value = d.min_score;
     renderRoutingTasks();
@@ -960,6 +968,7 @@ async function saveRouting() {
   const status = document.getElementById('routingStatus');
   err.textContent = '';
   const body = { policy: document.getElementById('routingPolicy').value };
+  body.enabled = document.getElementById('routingEnabled').checked;
   const ms = parseFloat(document.getElementById('routingMinScore').value);
   if (!isNaN(ms)) body.min_score = ms;
   const d = await api('POST', '/api/routing/policy', body);

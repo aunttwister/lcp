@@ -176,6 +176,24 @@ class SettingsStore:
     def set_routing_min_score(self, value: float) -> None:
         self.set(self.ROUTING_MIN_SCORE_KEY, float(value))
 
+    # ── Dynamic-routing enable/disable (runtime toggle) ───────────────────
+
+    ROUTING_ENABLED_KEY = "routing_enabled"
+
+    def get_routing_enabled(self, default: Optional[bool] = None) -> Optional[bool]:
+        """Return the runtime enable override, or *default* when unset.
+
+        ``None`` (unset) means "no override" — the caller falls back to the
+        boot-time config value. Stored as ``"1"``/``"0"``.
+        """
+        raw = self.get(self.ROUTING_ENABLED_KEY, None)
+        if raw is None:
+            return default
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+    def set_routing_enabled(self, enabled: bool) -> None:
+        self.set(self.ROUTING_ENABLED_KEY, "1" if enabled else "0")
+
     # ── Routing rules (UI-defined, JSON list in the settings table) ───────
 
     ROUTING_RULES_KEY = "routing_rules"

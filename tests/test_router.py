@@ -91,6 +91,23 @@ def test_classify_many_tools():
     msgs = [{"role": "user", "content": "do something"}]
     assert classify_task(msgs, tools=tools) == "agentic_multi_step"
 
+def test_classify_unit_tests():
+    msgs = [{"role": "user", "content": "write unit tests for the payment module"}]
+    assert classify_task(msgs) == "unit_tests"
+
+def test_classify_pytest_suite():
+    msgs = [{"role": "user", "content": "add a pytest test suite with mocks for the auth service"}]
+    assert classify_task(msgs) == "unit_tests"
+
+def test_classify_unit_tests_beats_code_gen_class_kw():
+    # "class " is a code_generation signal, but unit tests must win first-match.
+    msgs = [{"role": "user", "content": "add unit tests to this class"}]
+    assert classify_task(msgs) == "unit_tests"
+
+def test_classify_code_gen_not_unit_tests():
+    msgs = [{"role": "user", "content": "implement a sorting algorithm in python"}]
+    assert classify_task(msgs) == "code_generation"
+
 def test_router_disabled_returns_none():
     router = CapabilityRouter(enabled=False)
     msgs = [{"role": "user", "content": "write a function"}]
@@ -269,6 +286,32 @@ def test_effective_policy_config_fallback(registry_db, monkeypatch):
     policy, min_score = router._effective_policy(_Cfg())
     assert policy == "explore"
     assert min_score == 0.4
+
+def test_is_enabled_runtime_setting_wins(registry_db, monkeypatch):
+    router = CapabilityRouter(enabled=False, db_path=registry_db)
+
+    class FakeSettings:
+        def get_routing_enabled(self, default=None):
+            return True
+    monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: FakeSettings())
+    assert router.is_enabled() is True
+
+def test_is_enabled_falls_back_to_boot_value(registry_db, monkeypatch):
+    monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: None)
+    assert CapabilityRouter(enabled=True, db_path=registry_db).is_enabled() is True
+    assert CapabilityRouter(enabled=False, db_path=registry_db).is_enabled() is False
+
+def test_select_step_disabled_via_runtime_toggle(registry_db, monkeypatch):
+    """select_step honors the runtime disable even when the router boots enabled."""
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+
+    class FakeSettings:
+        def get_routing_enabled(self, default=None):
+            return False
+    monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: FakeSettings())
+    chain = [{"provider": "opencode", "model": "deepseek-v4-pro"},
+             {"provider": "deepseek", "model": "deepseek-v4-flash"}]
+    assert router.select_step([{"role": "user", "content": "hi"}], chain=chain) is None
 
 def test_select_step_min_score_floor(registry_db, monkeypatch):
     router = CapabilityRouter(enabled=True, db_path=registry_db)

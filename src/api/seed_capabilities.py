@@ -27,10 +27,11 @@ LB_TO_LCP: dict[str, str] = {
 }
 
 # Derived LCP task types — LiveBench has no dedicated category, so we mirror
-# the closest related category. ``debugging`` is a coding subskill, so it uses
-# the ``code_generation`` score as a proxy.
+# the closest related category. ``debugging`` and ``unit_tests`` are coding
+# subskills, so both use the ``code_generation`` score as a proxy.
 DERIVED_TASKS: dict[str, str] = {
     "debugging": "code_generation",
+    "unit_tests": "code_generation",
 }
 
 

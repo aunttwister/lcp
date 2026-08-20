@@ -105,22 +105,24 @@ class TestCapabilityMatrix:
         matrix = load_capability_matrix(db_path, release=LIVEBENCH_RELEASE)
         assert "gpt-5.6-luna" in matrix.get("casual_chat", {})
 
-    def test_matrix_includes_derived_debugging(self, db_path):
+    def test_matrix_includes_derived_coding_subskills(self, db_path):
         seed_model_registry(db_path)
         seed_livebench(db_path)
         matrix = load_capability_matrix(db_path)
-        # debugging is derived from code_generation (a coding subskill), so it
-        # must be present with the same per-model scores.
-        assert "debugging" in matrix
-        assert matrix["debugging"]["deepseek-v4-pro"] == matrix["code_generation"]["deepseek-v4-pro"]
+        # debugging + unit_tests are derived from code_generation (coding
+        # subskills), so they must be present with the same per-model scores.
+        for derived in ("debugging", "unit_tests"):
+            assert derived in matrix
+            assert matrix[derived]["deepseek-v4-pro"] == matrix["code_generation"]["deepseek-v4-pro"]
 
 
 # ── derived_task_scores ──────────────────────────────────────────────────────
 
 class TestDerivedTaskScores:
-    def test_derives_debugging_from_code_generation(self):
+    def test_derives_coding_subskills_from_code_generation(self):
         out = derived_task_scores({"code_generation": 0.85, "reasoning_chain": 0.9})
-        assert out == {"debugging": 0.85}
+        # debugging + unit_tests are coding subskills, derived from code_generation.
+        assert out == {"debugging": 0.85, "unit_tests": 0.85}
 
     def test_no_derivation_when_source_missing(self):
         out = derived_task_scores({"reasoning_chain": 0.9})
@@ -130,8 +132,11 @@ class TestDerivedTaskScores:
         assert derived_task_scores({}) == {}
 
     def test_derived_tasks_registry(self):
-        # debugging is the only derived task, sourced from code_generation.
-        assert DERIVED_TASKS == {"debugging": "code_generation"}
+        # debugging + unit_tests are derived from code_generation.
+        assert DERIVED_TASKS == {
+            "debugging": "code_generation",
+            "unit_tests": "code_generation",
+        }
 
 
 # ── benchmark_import edge cases ──────────────────────────────────────────────

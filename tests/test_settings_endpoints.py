@@ -196,6 +196,35 @@ class TestSettingsApi:
         h.do_POST()
         assert _status(h) == 400
 
+    def test_routing_enabled_update(self, engine, mock_config):
+        init_settings(engine)
+        h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,
+                        body=json.dumps({"enabled": True}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        body = _json_body(h)
+        assert body["enabled"] is True
+        assert get_settings().get_routing_enabled() is True
+
+    def test_routing_enabled_disable(self, engine, mock_config):
+        init_settings(engine)
+        get_settings().set_routing_enabled(True)
+        h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,
+                        body=json.dumps({"enabled": False}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        assert get_settings().get_routing_enabled() is False
+
+    def test_routing_enabled_rejects_non_bool(self, engine, mock_config):
+        init_settings(engine)
+        h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,
+                        body=json.dumps({"enabled": "yes"}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 400
+
     def test_routing_rules_save(self, engine, mock_config):
         init_settings(engine)
         rules = [{"task": "debugging", "action": "prefer",

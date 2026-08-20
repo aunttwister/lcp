@@ -1752,6 +1752,12 @@ class SettingsEndpoints:
                 self._send_json({"error": "min_score must be a number 0–1"}, 400)
                 return
             settings.set_routing_min_score(min_score)
+        if "enabled" in body:
+            enabled = body.get("enabled")
+            if not isinstance(enabled, bool):
+                self._send_json({"error": "enabled must be a boolean"}, 400)
+                return
+            settings.set_routing_enabled(enabled)
         from ..api.router import routing_status
         self._send_json(routing_status(self.config))
 

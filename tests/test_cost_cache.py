@@ -118,6 +118,29 @@ class TestSettingsStore:
         s.set("routing_rules", "{not json")
         assert s.get_routing_rules() == []
 
+    def test_routing_enabled_default_none(self, engine):
+        s = SettingsStore(engine)
+        assert s.get_routing_enabled() is None
+        assert s.get_routing_enabled(default=True) is True
+
+    def test_routing_enabled_set_and_persist(self, engine):
+        s = SettingsStore(engine)
+        s.set_routing_enabled(True)
+        s2 = SettingsStore(engine)
+        assert s2.get_routing_enabled() is True
+        s2.set_routing_enabled(False)
+        s3 = SettingsStore(engine)
+        assert s3.get_routing_enabled() is False
+
+    def test_routing_enabled_parses_stored_strings(self, engine):
+        s = SettingsStore(engine)
+        s.set("routing_enabled", "1")
+        assert s.get_routing_enabled() is True
+        s.set("routing_enabled", "0")
+        assert s.get_routing_enabled() is False
+        s.set("routing_enabled", "true")
+        assert s.get_routing_enabled() is True
+
 
 class TestCostPluginCache:
     def test_get_missing_is_none(self, engine):

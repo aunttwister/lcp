@@ -608,7 +608,7 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
 
     # ── Dynamic router: reorder chain so best (provider, model) step is first ─
     router = get_dynamic_router()
-    if router.enabled and chain_len > 0:
+    if router.is_enabled(config) and chain_len > 0:
         reordered = router.select_step(
             messages=body.get("messages", []),
             tools=body.get("tools"),
