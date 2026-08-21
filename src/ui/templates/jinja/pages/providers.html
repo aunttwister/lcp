@@ -491,7 +491,7 @@ function loadFailovers(){
 }
 
 // ── Profile-grouped provider health (lcp-stack pattern, like Keys page) ────
-var PROV_COLS = '<colgroup><col style="width:16%"><col style="width:10%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:7%"><col style="width:16%"><col style="width:12%"></colgroup>';
+var PROV_COLS = '<colgroup><col style="width:16%"><col style="width:10%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:7%"><col style="width:17%"><col style="width:14%"></colgroup>';
 var PROV_HDR = '<tr class="lcp-stack-header"><th>Provider</th><th>Status</th><th>Uptime 24h</th><th>Uptime 7d</th><th>Uptime 30d</th><th style="text-align:center">Failures</th><th>Last Error</th><th></th></tr>';
 
 function provBadge(st){
@@ -501,10 +501,10 @@ function provBadge(st){
 
 function provSelect(prov, prof, st){
   var p = prov.replace(/'/g,"\\'"), f = prof.replace(/'/g,"\\'");
-  var html = '<select class="btn-sm" onclick="event.stopPropagation()" onchange="if(this.value){toggleProviderState(\''+p+'\',\''+f+'\',this.value);this.value=\'\'}" style="padding:0.2rem 0.3rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.6875rem;cursor:pointer" title="Circuit breaker override">';
+  var html = '<select class="btn-sm prov-override" onclick="event.stopPropagation()" onchange="if(this.value){toggleProviderState(\''+p+'\',\''+f+'\',this.value);this.value=\'\'}" style="width:100%;max-width:118px;min-width:0;padding:0.2rem 0.25rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.6875rem;cursor:pointer;text-overflow:ellipsis" title="Circuit breaker override">';
   html += '<option value="">Override…</option>';
-  html += '<option value="degrade">Force Degrade</option>';
-  html += '<option value="kill">Force Kill</option>';
+  html += '<option value="degrade">Degrade</option>';
+  html += '<option value="kill">Kill</option>';
   if(st !== 'healthy'){ html += '<option value="resume">Resume</option>'; }
   html += '</select>';
   return html;
@@ -585,7 +585,7 @@ function loadProviderHealth(){
         html += '<tr class="lcp-stack-trigger" onclick="toggleProvProfile(\''+sid+'\')" title="Click to '+(open?'collapse':'expand')+' '+esc(prof)+' providers">';
         html += '<td><b>'+esc(prof)+'</b> <span style="font-size:0.625rem;color:hsl(var(--muted-foreground))">'+esc(act.prov)+'</span> <span class="lcp-stack-count">'+entries.length+'</span> <span class="lcp-stack-chevron">▾</span></td>';
         html += provMidCells(ah);
-        html += '<td style="white-space:nowrap">'+provSelect(act.prov, act.prof, ah.status)+'</td>';
+        html += '<td></td>';
         html += '</tr>';
 
         // Expanded body: one row (+ optional detail) per provider.
