@@ -35,50 +35,24 @@ class CircuitBreaker:
     def attach_engine(self, engine) -> None:
         """Attach a SQLAlchemy engine so failover events can be persisted.
 
-        Also seeds the in-memory health map from the configured profile chains
-        (first step = expected active) and overlays any persisted
-        ``provider_health`` rows, so circuit-breaker state — and the Health tab
-        listing itself — survives a restart/redeploy. Best-effort: a DB problem
-        logs a warning and leaves the in-memory state untouched.
+        Also reloads persisted ``provider_health`` rows into memory so circuit
+        breaker state survives a restart/redeploy. Because rows are only ever
+        written by an actual request (or a manual override), the Health tab
+        lists exactly the profiles that have been used — unused profiles stay
+        hidden until their first request. Best-effort: a DB problem logs a
+        warning and leaves the in-memory state untouched.
         """
         self._engine = engine
         self._load_health()
 
-    def _seed_from_config(self) -> None:
-        """Seed ``self._health`` with an entry for every profile-chain step.
-
-        The first chain step is the expected active provider → healthy; later
-        (fallback) steps start as 'degraded' WITHOUT a cooldown — they are
-        available for probing but visibly marked as not-yet-active. Persisted
-        state (loaded first by ``_load_health``) wins over these defaults.
-        """
-        try:
-            profiles = (self._config.profiles or {}) if self._config else {}
-            providers = (getattr(self._config, "providers", None) or {})
-            for name, pcfg in profiles.items():
-                for i, step in enumerate(pcfg.get("chain") or []):
-                    prov = step.get("provider")
-                    if not prov:
-                        continue
-                    base_url = step.get("base_url") \
-                        or (providers.get(prov, {}) or {}).get("api_base", "")
-                    key = (prov, base_url or "", name)
-                    if key not in self._health:
-                        self.get_health(prov, base_url or "", name)
-                        if i > 0:
-                            # Fallback steps: visible + probeable, not "active".
-                            self._health[key]["status"] = "degraded"
-                            self._health[key]["tripped_until"] = None
-        except Exception as exc:  # noqa: BLE001 — seeding must never break boot
-            logger.warning("circuit_breaker_seed_failed", error=str(exc))
-
     def _load_health(self) -> None:
         """Load persisted circuit-breaker state into ``self._health``.
 
-        ALL persisted rows are materialized (not just non-healthy ones), so the
-        Health tab keeps listing known providers across restarts — uptime and
-        failure stats come from the ``requests`` table either way, but the
-        listing itself should not blink empty after a redeploy.
+        ALL persisted rows are materialized (healthy included). Persisted rows
+        correspond one-to-one with profiles that have actually served requests
+        (or been manually overridden), so this both keeps state across restarts
+        and keeps the listing request-driven — no configured-but-unused
+        profiles appear.
         """
         if self._engine is None:
             return
@@ -102,12 +76,8 @@ class CircuitBreaker:
                 loaded += 1
             if loaded:
                 logger.info("circuit_breaker_health_loaded", entries=loaded)
-            # Seed any configured chain steps that have no persisted row yet,
-            # so a fresh install still shows its full Health-tab listing.
-            self._seed_from_config()
         except Exception as exc:
             logger.warning("circuit_breaker_health_load_failed", error=str(exc))
-            self._seed_from_config()
 
     def _persist(self, provider: str, base_url: str, profile: str) -> None:
         """Upsert a provider's in-memory health entry to the ``provider_health``
