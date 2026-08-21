@@ -210,9 +210,17 @@ _CREDIT_SPECIFIC_KEYS = frozenset({
     "availablecredits", "available_credits", "creditsavailable", "creditbalance",
 })
 
-# Plausible upper bound for USD credit balances. Generic keys (balance,
-# available, credits) on the OpenCode billing page can carry huge non-USD
-# numbers (token ledgers etc.); anything above this is treated as not-credits.
+# The live OpenCode billing page stores the available balance in the
+# ``billing.get`` object as an INTEGER in 8-decimal fixed-point:
+#   balance: 949260397  ==  $9.49260397  (949260397 * 1e-8)
+# ``balance`` is therefore the real credit figure — just scaled — NOT a
+# token/ledger number, so we scale it by 1e-8 into USD.
+_BALANCE_FIXED_POINT = 1e-8
+
+# Plausible upper bound for USD credit balances. Generic keys (available,
+# credits) on the OpenCode billing page can carry huge non-USD numbers (token
+# ledgers etc.); anything above this is treated as not-credits. (``balance``
+# is handled separately — it is scaled, not rejected.)
 _MAX_PLAUSIBLE_CREDITS = 1_000_000.0
 
 
@@ -226,10 +234,10 @@ def _parse_ssr_billing(text: str) -> Optional[dict]:
     billing block when present), then:
       1. unambiguous credit fields (``availableCredits``/``creditBalance``/…)
          are preferred,
-      2. generic keys (``balance``/``available``/``credits``) are only used as
-         a fallback, and
-      3. values above ``_MAX_PLAUSIBLE_CREDITS`` from generic keys are skipped
-         (they're usually token/ledger numbers, not USD credits).
+      2. ``balance`` (the billing page's 8-decimal fixed-point credit balance)
+         is scaled by 1e-8 and treated as a strong candidate,
+      3. generic keys (``available``/``credits``) are a final fallback, with
+         implausibly-large values (token ledgers) skipped.
     """
     if not text:
         return None
@@ -243,6 +251,7 @@ def _parse_ssr_billing(text: str) -> Optional[dict]:
         block = text
 
     specific: list[float] = []
+    balance_scaled: list[float] = []
     generic: list[float] = []
     skipped: list[tuple[str, float]] = []
     plan: Optional[str] = None
@@ -256,6 +265,9 @@ def _parse_ssr_billing(text: str) -> Optional[dict]:
                 continue
             if key in _CREDIT_SPECIFIC_KEYS:
                 specific.append(val)
+            elif key == "balance":
+                # billing.get: 8-decimal fixed point → USD.
+                balance_scaled.append(val * _BALANCE_FIXED_POINT)
             elif val > _MAX_PLAUSIBLE_CREDITS:
                 skipped.append((key, val))
                 continue
@@ -280,6 +292,8 @@ def _parse_ssr_billing(text: str) -> Optional[dict]:
     available: Optional[float] = None
     if specific:
         available = specific[-1]
+    elif balance_scaled:
+        available = balance_scaled[-1]
     elif generic:
         available = generic[-1]
 

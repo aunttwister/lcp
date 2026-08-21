@@ -342,8 +342,8 @@ from src.api.cost_plugins.opencode_api import (
 
 _BILLING_TEMPLATE = (
     'lite.billing.get["wrk_abc123"]={{{{...}}}};\n'
-    "availableCredits:$R[0]={{{{available: 25.75, plan: \"pro\"}}}};\n"
-    "credits:$R[1]={{{{totalCredits: 100, balance: 25.75}}}};\n"
+    "credits:$R[0]={{{{availableCredits: 25.75, plan: \"pro\"}}}};\n"
+    "credits:$R[1]={{{{totalCredits: 100, balance: 2575000000}}}};\n"
 )
 
 
@@ -362,8 +362,9 @@ class TestParseSsrBilling:
         assert _parse_ssr_billing("<html>no ssr</html>") is None
 
     def test_balances_at_top_level(self):
-        """A bare top-level balance: X (not in $R block) is still found."""
-        text = 'lite.billing.get["wrk_1"]={{{balance: 42.5}}};\n'
+        """A bare top-level balance: X (not in $R block) is still found and
+        scaled (8-decimal fixed point)."""
+        text = 'lite.billing.get["wrk_1"]={{{balance: 4250000000}}};\n'
         result = _parse_ssr_billing(text)
         assert result is not None
         assert result["available_credits"] == 42.5
@@ -391,10 +392,25 @@ class TestParseSsrBilling:
         assert result is not None
         assert result["available_credits"] == 9.49
 
-    def test_implausible_generic_only_falls_back_to_plausible(self):
-        """When only generic keys exist, implausible ones are skipped."""
+    def test_balance_is_fixed_point_scaled(self):
+        """The live billing page stores ``balance`` as 8-decimal fixed-point.
+
+        ``balance: 949260397`` == $9.49260397 → scaled to $9.49.
+        """
         text = (
-            "billing:$R[0]={{{{balance: 949260397, credits: 12.34}}}};\n"
+            'billing.get["wrk_1"]=$R[25]={customerID:"cus_x",'
+            "balance: 949260397, reload: null, reloadAmount: 20,"
+            "monthlyUsage: 39331703};\n"
+        )
+        result = _parse_ssr_billing(text)
+        assert result is not None
+        assert result["available_credits"] == 9.49
+
+    def test_implausible_generic_credits_still_skipped(self):
+        """Generic non-balance keys with huge values (token ledgers) are skipped,
+        but a plausible generic value still wins the fallback."""
+        text = (
+            "billing:$R[0]={{{{monthlyUsage: 39331703, available: 12.34}}}};\n"
         )
         result = _parse_ssr_billing(text)
         assert result is not None
