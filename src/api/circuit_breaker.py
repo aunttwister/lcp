@@ -33,8 +33,103 @@ class CircuitBreaker:
         self._engine = None  # optional DB engine for failover event persistence
 
     def attach_engine(self, engine) -> None:
-        """Attach a SQLAlchemy engine so failover events can be persisted."""
+        """Attach a SQLAlchemy engine so failover events can be persisted.
+
+        Also reloads any persisted ``provider_health`` rows into memory so
+        circuit-breaker state survives a restart/redeploy. Best-effort: a DB
+        problem logs a warning and leaves the in-memory state untouched (all
+        providers start healthy, as before).
+        """
         self._engine = engine
+        self._load_health()
+
+    def _load_health(self) -> None:
+        """Load persisted circuit-breaker state into ``self._health``.
+
+        Only rows with *meaningful* state are materialized — a non-healthy
+        status, any failures, a pending cooldown, or a manual override. Rows
+        for fully-healthy providers (0 failures, no override) are skipped so a
+        long-lived deployment doesn't accumulate stale provider/profile entries
+        in the Health tab. Best-effort: a DB problem logs a warning and leaves
+        ``self._health`` untouched (all providers start healthy, as before).
+        """
+        if self._engine is None:
+            return
+        try:
+            from .models import ProviderHealth, get_session
+            with get_session(self._engine) as session:
+                rows = session.query(ProviderHealth).all()
+            loaded = 0
+            for row in rows:
+                meaningful = (
+                    (row.status or "healthy") != "healthy"
+                    or (row.consecutive_failures or 0) > 0
+                    or row.tripped_until is not None
+                    or row.manual_override is not None
+                )
+                if not meaningful:
+                    continue
+                key = (row.provider, row.base_url, row.profile)
+                self._health[key] = {
+                    "consecutive_failures": row.consecutive_failures or 0,
+                    "last_failure": row.last_failure,
+                    "last_failure_reason": row.last_failure_reason,
+                    "last_success": row.last_success,
+                    "status": row.status or "healthy",
+                    "tripped_until": row.tripped_until,
+                    "manual_override": row.manual_override,
+                    "_key": key,
+                }
+                loaded += 1
+            if loaded:
+                logger.info("circuit_breaker_health_loaded", entries=loaded)
+        except Exception as exc:
+            logger.warning("circuit_breaker_health_load_failed", error=str(exc))
+
+    def _persist(self, provider: str, base_url: str, profile: str) -> None:
+        """Upsert a provider's in-memory health entry to the ``provider_health``
+        table. Best-effort: a DB problem is logged, never raised, so the
+        breaker keeps working (state just won't survive a restart).
+        """
+        if self._engine is None:
+            return
+        try:
+            from .models import ProviderHealth, get_session
+            h = self._health.get((provider, base_url, profile))
+            if h is None:
+                return
+            now = datetime.now(timezone.utc).isoformat()
+            with get_session(self._engine) as session:
+                row = session.query(ProviderHealth).filter_by(
+                    provider=provider, base_url=base_url, profile=profile,
+                ).first()
+                if row is None:
+                    session.add(ProviderHealth(
+                        provider=provider,
+                        base_url=base_url,
+                        profile=profile,
+                        status=h["status"],
+                        consecutive_failures=h["consecutive_failures"],
+                        last_failure=h["last_failure"],
+                        last_failure_reason=h["last_failure_reason"],
+                        last_success=h["last_success"],
+                        tripped_until=h["tripped_until"],
+                        manual_override=h["manual_override"],
+                        updated_at=now,
+                    ))
+                else:
+                    row.status = h["status"]
+                    row.consecutive_failures = h["consecutive_failures"]
+                    row.last_failure = h["last_failure"]
+                    row.last_failure_reason = h["last_failure_reason"]
+                    row.last_success = h["last_success"]
+                    row.tripped_until = h["tripped_until"]
+                    row.manual_override = h["manual_override"]
+                    row.updated_at = now
+                session.commit()
+        except Exception as exc:
+            logger.warning("circuit_breaker_health_persist_failed",
+                           provider=provider, profile=profile, error=str(exc))
 
     def _key(self, provider: str, base_url: str, profile: str) -> tuple:
         return (provider, base_url, profile)
@@ -51,6 +146,7 @@ class CircuitBreaker:
                 "status": "healthy",
                 "tripped_until": None,
                 "manual_override": None,  # None | 'degraded' | 'dead'
+                "_key": key,  # (provider, base_url, profile) for persistence
             }
         return self._health[key]
 
@@ -86,6 +182,8 @@ class CircuitBreaker:
         old_status = h["status"]
         h["status"] = new_status
         h["tripped_until"] = None
+        # The caller only reaches here via is_available with a known key.
+        self._persist(h["_key"][0], h["_key"][1], h["_key"][2])
         logger.info(
             "circuit_breaker_probe",
             old_status=old_status,
@@ -111,6 +209,7 @@ class CircuitBreaker:
                 old_status=old_status,
                 new_status="healthy",
             )
+        self._persist(provider, base_url, profile)
 
     def record_failure(self, provider: str, base_url: str, profile: str,
                        error_type: str | None = None,
@@ -159,6 +258,7 @@ class CircuitBreaker:
                 error_type=error_type,
                 error_reason=error_reason,
             )
+        self._persist(provider, base_url, profile)
 
     def get_all_health(self) -> dict:
         """Return all tracked provider health entries keyed by (provider, url, profile)."""
@@ -173,6 +273,7 @@ class CircuitBreaker:
         h["last_failure_reason"] = None
         h["tripped_until"] = None
         h["manual_override"] = None
+        self._persist(provider, base_url, profile)
         logger.info(
             "circuit_breaker_reset",
             provider=provider,
@@ -217,6 +318,7 @@ class CircuitBreaker:
                         provider=provider, base_url=base_url, profile=profile)
         else:
             raise ValueError(f"unknown circuit breaker action: {action}")
+        self._persist(provider, base_url, profile)
         return h["status"]
 
     def record_failover(self, profile: str, from_provider: str, to_provider: str,

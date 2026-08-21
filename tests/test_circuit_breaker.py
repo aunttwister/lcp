@@ -411,3 +411,120 @@ class TestRecordFailover:
         cb.reset("p", "https://x", "l2")
         assert cb.status_of("p", "https://x", "l2") == "healthy"
         assert cb.is_available("p", "https://x", "l2") is True
+
+
+class TestHealthPersistence:
+    """Persisted circuit-breaker state survives a restart/redeploy."""
+
+    def _restart(self, engine):
+        """A fresh CircuitBreaker attached to the same DB (simulates a restart)."""
+        cfg = MagicMock()
+        cfg.circuit_breaker = {
+            "failures_degraded": 3,
+            "failures_dead": 6,
+            "degraded_cooldown_seconds": 2,
+            "dead_cooldown_seconds": 5,
+        }
+        cb2 = CircuitBreaker(cfg)
+        cb2.attach_engine(engine)
+        return cb2
+
+    def test_failure_state_survives_restart(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        # Drive a provider to dead (6 weighted failures).
+        for _ in range(6):
+            cb.record_failure("persist_prov", "https://x", "l2")
+        assert cb.status_of("persist_prov", "https://x", "l2") == "dead"
+
+        cb2 = self._restart(engine)
+        h = cb2.get_health("persist_prov", "https://x", "l2")
+        assert h["status"] == "dead"
+        assert h["consecutive_failures"] == 6
+        assert cb2.is_available("persist_prov", "https://x", "l2") is False
+
+    def test_partial_failure_count_survives_restart(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        # 2 of 3 failures → still healthy but the count must survive.
+        for _ in range(2):
+            cb.record_failure("partial", "https://x", "l2")
+
+        cb2 = self._restart(engine)
+        h = cb2.get_health("partial", "https://x", "l2")
+        assert h["consecutive_failures"] == 2
+        assert h["status"] == "healthy"
+
+    def test_manual_kill_survives_restart(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        cb.force_status("kill_prov", "https://x", "l2", "kill")
+
+        cb2 = self._restart(engine)
+        h = cb2.get_health("kill_prov", "https://x", "l2")
+        assert h["manual_override"] == "dead"
+        assert h["status"] == "dead"
+        # Indefinite kill (tripped_until None) must stay unavailable.
+        assert cb2.is_available("kill_prov", "https://x", "l2") is False
+
+    def test_manual_resume_persists_healthy(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        cb.force_status("r", "https://x", "l2", "kill")
+        cb.force_status("r", "https://x", "l2", "resume")
+
+        cb2 = self._restart(engine)
+        h = cb2.get_health("r", "https://x", "l2")
+        # Fully healthy → not materialized on load → fresh default entry.
+        assert h["status"] == "healthy"
+        assert h["consecutive_failures"] == 0
+        assert h["manual_override"] is None
+
+    def test_tripped_until_persisted(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        for _ in range(3):
+            cb.record_failure("trip", "https://x", "l2")
+        h1 = cb.get_health("trip", "https://x", "l2")
+        assert h1["status"] == "degraded"
+        assert h1["tripped_until"] is not None
+
+        cb2 = self._restart(engine)
+        h2 = cb2.get_health("trip", "https://x", "l2")
+        assert h2["status"] == "degraded"
+        assert h2["tripped_until"] == h1["tripped_until"]
+
+    def test_success_clears_persisted_state(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        for _ in range(3):
+            cb.record_failure("s", "https://x", "l2")
+        assert cb.status_of("s", "https://x", "l2") == "degraded"
+        cb.record_success("s", "https://x", "l2")
+
+        cb2 = self._restart(engine)
+        h = cb2.get_health("s", "https://x", "l2")
+        assert h["status"] == "healthy"
+        assert h["consecutive_failures"] == 0
+
+    def test_health_persistence_best_effort_no_raise(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        with patch("src.api.models.get_session", side_effect=RuntimeError("db down")):
+            cb.record_failure("p", "https://x", "l2")
+            cb.record_success("p", "https://x", "l2")
+            cb.force_status("p", "https://x", "l2", "kill")
+        # In-memory state still updated despite the DB being down.
+        assert cb.status_of("p", "https://x", "l2") == "dead"
+
+    def test_db_rows_written(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        for _ in range(3):
+            cb.record_failure("dbrow", "https://x", "l2")
+        from src.api.models import ProviderHealth, get_session
+        with get_session(engine) as session:
+            rows = session.query(ProviderHealth).filter_by(provider="dbrow").all()
+        assert len(rows) == 1
+        assert rows[0].status == "degraded"
+        assert rows[0].consecutive_failures == 3

@@ -138,6 +138,37 @@ class FailoverEvent(Base):
     request_id = Column(Integer, ForeignKey("requests.id"), nullable=True)
 
 
+class ProviderHealth(Base):
+    """Persisted circuit-breaker health for a (provider, base_url, profile).
+
+    The in-memory circuit breaker writes through to this table on every
+    mutation (``record_success`` / ``record_failure`` / ``reset`` /
+    ``force_status``) and reloads it at boot via ``attach_engine``, so live
+    provider health — status, failure counts, cooldown timers, manual
+    overrides — survives a restart/redeploy instead of resetting to healthy.
+
+    ``tripped_until`` is epoch seconds (so a persisted cooldown stays correct
+    across restarts); ``updated_at`` is an ISO timestamp for diagnostics.
+    """
+    __tablename__ = "provider_health"
+    __table_args__ = (
+        UniqueConstraint("provider", "base_url", "profile", name="uq_provider_health_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String, nullable=False, index=True)
+    base_url = Column(String, nullable=False)
+    profile = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="healthy")  # healthy | degraded | dead
+    consecutive_failures = Column(Integer, nullable=False, default=0)
+    last_failure = Column(String, nullable=True)  # ISO timestamp
+    last_failure_reason = Column(Text, nullable=True)
+    last_success = Column(String, nullable=True)  # ISO timestamp
+    tripped_until = Column(Float, nullable=True)  # epoch seconds; None = not tripped / indefinite
+    manual_override = Column(String, nullable=True)  # None | 'degraded' | 'dead'
+    updated_at = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat())
+
+
 class ModelCapability(Base):
     """Per-task capability scores for model routing.
 
