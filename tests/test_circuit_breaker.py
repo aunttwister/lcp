@@ -17,6 +17,8 @@ def cb():
         "degraded_cooldown_seconds": 2,
         "dead_cooldown_seconds": 5,
     }
+    cfg.profiles = {}
+    cfg.providers = {}
     return CircuitBreaker(cfg)
 
 
@@ -528,3 +530,78 @@ class TestHealthPersistence:
         assert len(rows) == 1
         assert rows[0].status == "degraded"
         assert rows[0].consecutive_failures == 3
+
+    def test_healthy_row_survives_restart(self, cb, temp_db):
+        """A fully-healthy provider stays LISTED after a restart (no blink)."""
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        cb.record_success("opencode", "https://oc/v1", "coder")
+
+        cb2 = self._restart(engine)
+        h = cb2.get_health("opencode", "https://oc/v1", "coder")
+        assert h["status"] == "healthy"
+        assert h["last_success"] is not None
+
+
+class TestBootSeeding:
+    """On boot, every profile-chain step becomes a tracked entry."""
+
+    def _cb_with_chains(self, engine):
+        cfg = MagicMock()
+        cfg.circuit_breaker = {
+            "failures_degraded": 3, "failures_dead": 6,
+            "degraded_cooldown_seconds": 2, "dead_cooldown_seconds": 5,
+        }
+        cfg.profiles = {
+            "l2": {"chain": [
+                {"provider": "opencode", "model": "m-pro", "base_url": "https://oc/v1"},
+                {"provider": "deepseek", "model": "m-pro", "base_url": "https://ds/v1"},
+            ]},
+            "cron": {"chain": [
+                {"provider": "deepseek", "model": "m-flash", "base_url": "https://ds/v1"},
+            ]},
+        }
+        cfg.providers = {}
+        breaker = CircuitBreaker(cfg)
+        breaker.attach_engine(engine)
+        return breaker
+
+    def test_fresh_boot_lists_all_chain_steps(self, cb, temp_db):
+        _db_path, engine = temp_db
+        breaker = self._cb_with_chains(engine)
+        keys = breaker.get_all_health().keys()
+        assert ("opencode", "https://oc/v1", "l2") in keys
+        assert ("deepseek", "https://ds/v1", "l2") in keys
+        assert ("deepseek", "https://ds/v1", "cron") in keys
+
+    def test_first_in_chain_healthy_fallbacks_degraded(self, cb, temp_db):
+        _db_path, engine = temp_db
+        breaker = self._cb_with_chains(engine)
+        first = breaker.get_health("opencode", "https://oc/v1", "l2")
+        fallback = breaker.get_health("deepseek", "https://ds/v1", "l2")
+        assert first["status"] == "healthy"
+        # Fallback steps are visibly not-active but still probeable.
+        assert fallback["status"] == "degraded"
+        assert fallback["tripped_until"] is None
+        assert breaker.is_available("deepseek", "https://ds/v1", "l2") is True
+
+    def test_persisted_state_wins_over_seed(self, cb, temp_db):
+        _db_path, engine = temp_db
+        # Persist a dead state BEFORE the seeded boot.
+        cb.attach_engine(engine)
+        for _ in range(6):
+            cb.record_failure("opencode", "https://oc/v1", "l2")
+        assert cb.status_of("opencode", "https://oc/v1", "l2") == "dead"
+
+        breaker = self._cb_with_chains(engine)
+        h = breaker.get_health("opencode", "https://oc/v1", "l2")
+        assert h["status"] == "dead"
+        assert h["consecutive_failures"] == 6
+
+    def test_seed_does_not_override_runtime_entries(self, cb, temp_db):
+        _db_path, engine = temp_db
+        cb.attach_engine(engine)
+        cb.record_success("custom", "https://x", "p1")
+        self._cb_with_chains(engine)  # re-seed over the same engine
+        h = cb.get_health("custom", "https://x", "p1")
+        assert h["status"] == "healthy"
