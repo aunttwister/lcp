@@ -41,12 +41,10 @@
   </div>
 </div>
 
-<div class="table-wrap">
-<table><thead><tr>
-  <th>Provider / Profile</th><th>Status</th><th>Uptime 24h</th><th>Uptime 7d</th><th>Uptime 30d</th><th>Failures</th><th>Last Error</th><th></th>
-</tr></thead><tbody id="providerHealthBody">
-<tr><td colspan="8" class="empty">Loading…</td></tr>
-</tbody></table></div>
+<!-- Provider health: grouped per profile (collapsed = latest active provider) -->
+<div class="table-wrap" id="providerHealthBody">
+  <div class="empty">Loading…</div>
+</div>
 
 <!-- Failover log -->
 <div style="display:flex;align-items:center;justify-content:space-between;margin:1rem 0 0.5rem">
@@ -415,6 +413,17 @@ function toggleProviderState(provider, profile, action){
   });
 }
 
+// Profile-grouped health stacks. Expanded groups + open detail rows survive
+// the 10s auto-refresh re-render via these maps.
+var _provOpen = {};   // profile-stack sid -> true when expanded
+var _hdetOpen = {};   // provider-detail sid -> true when open
+
+function toggleProvProfile(sid){
+  toggleStack(sid);
+  var el = document.getElementById(sid);
+  _provOpen[sid] = !!(el && el.classList.contains('expanded'));
+}
+
 function toggleHealthDetail(id){
   var tr = document.getElementById('hdet-'+id);
   var chev = document.getElementById('hchev-'+id);
@@ -422,6 +431,7 @@ function toggleHealthDetail(id){
   var show = tr.style.display !== 'table-row';
   tr.style.display = show ? 'table-row' : 'none';
   if(chev) chev.textContent = show ? '▴' : '▾';
+  _hdetOpen[id] = show;
 }
 
 function uptimeBar(pct){
@@ -480,6 +490,70 @@ function loadFailovers(){
   });
 }
 
+// ── Profile-grouped provider health (lcp-stack pattern, like Keys page) ────
+var PROV_COLS = '<colgroup><col style="width:16%"><col style="width:10%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:7%"><col style="width:16%"><col style="width:12%"></colgroup>';
+var PROV_HDR = '<tr class="lcp-stack-header"><th>Provider</th><th>Status</th><th>Uptime 24h</th><th>Uptime 7d</th><th>Uptime 30d</th><th style="text-align:center">Failures</th><th>Last Error</th><th></th></tr>';
+
+function provBadge(st){
+  var cls = st === 'healthy' ? 'badge-success' : st === 'degraded' ? 'badge-warning' : 'badge-error';
+  return '<span class="badge '+cls+'">'+esc(st)+'</span>';
+}
+
+function provSelect(prov, prof, st){
+  var p = prov.replace(/'/g,"\\'"), f = prof.replace(/'/g,"\\'");
+  var html = '<select class="btn-sm" onclick="event.stopPropagation()" onchange="if(this.value){toggleProviderState(\''+p+'\',\''+f+'\',this.value);this.value=\'\'}" style="padding:0.2rem 0.3rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.6875rem;cursor:pointer" title="Circuit breaker override">';
+  html += '<option value="">Override…</option>';
+  html += '<option value="degrade">Force Degrade</option>';
+  html += '<option value="kill">Force Kill</option>';
+  if(st !== 'healthy'){ html += '<option value="resume">Resume</option>'; }
+  html += '</select>';
+  return html;
+}
+
+function provMidCells(h){
+  var reason = h.last_failure_reason || '—';
+  if(reason.length > 70) reason = reason.slice(0,67)+'…';
+  return '<td>'+provBadge(h.status)+'</td>'+
+    '<td>'+uptimeBar(h.uptime_24h)+'</td>'+
+    '<td>'+uptimeBar(h.uptime_7d)+'</td>'+
+    '<td>'+uptimeBar(h.uptime_30d)+'</td>'+
+    '<td style="text-align:center">'+h.failures+'</td>'+
+    '<td class="mono" style="font-size:0.6875rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(h.last_failure_reason||'')+'">'+esc(reason)+'</td>';
+}
+
+function provDetailRow(h, dsid, show){
+  var html = '<tr class="hdet" id="hdet-'+dsid+'" data-id="'+dsid+'" style="display:'+(show?'table-row':'none')+'"><td colspan="8" style="padding:0">';
+  html += '<div style="background:hsl(var(--secondary)/0.15);border-top:1px solid hsl(var(--card-border));border-bottom:1px solid hsl(var(--card-border));padding:0.75rem 1rem;font-size:0.75rem">';
+  html += '<div style="font-weight:600;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Last Error</div>';
+  html += '<pre style="white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.6875rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:0.5rem;margin:0 0 0.75rem;max-height:120px;overflow:auto">'+esc(h.last_failure_reason||'—')+'</pre>';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0.75rem">';
+  html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.25rem">Failure Breakdown (24h)</div>'+failureBars(h.failures_24h||{})+'</div>';
+  html += '<div><div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">';
+  html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Status</div><div>'+esc(h.status)+'</div></div>';
+  html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Failures</div><div>'+h.failures+'</div></div>';
+  html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Last Failure</div><div class="mono" style="font-size:0.625rem">'+esc(h.last_failure||'—')+'</div></div>';
+  html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Last Success</div><div class="mono" style="font-size:0.625rem">'+esc(h.last_success||'—')+'</div></div>';
+  html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Base URL</div><div class="mono" style="word-break:break-all;font-size:0.625rem">'+esc(h.base_url||'—')+'</div></div>';
+  html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Cooldown Until</div><div class="mono" style="font-size:0.625rem">'+esc(h.tripped_until||'—')+'</div></div>';
+  html += '</div></div>';
+  html += '</div>';
+  html += '</div></td></tr>';
+  return html;
+}
+
+// Latest active provider for a profile's collapsed row: healthiest first,
+// then most-recently-active as the tiebreaker.
+function pickActiveProv(entries){
+  var rank = {healthy:0, degraded:1, dead:2};
+  return entries.slice().sort(function(a,b){
+    var ra = rank[a.h.status]!=null?rank[a.h.status]:3, rb = rank[b.h.status]!=null?rank[b.h.status]:3;
+    if(ra !== rb) return ra - rb;
+    var ta = a.h.last_success || a.h.last_failure || '';
+    var tb = b.h.last_success || b.h.last_failure || '';
+    return tb > ta ? 1 : -1;
+  })[0];
+}
+
 function loadProviderHealth(){
   api('GET','/api/providers/health').then(function(d){
     var ps = d.providers || {};
@@ -487,51 +561,48 @@ function loadProviderHealth(){
     var keys = Object.keys(ps).sort();
     var html = '';
     if (keys.length === 0) {
-      html = '<tr><td colspan="8" class="empty">No provider health data yet — send a request to populate.</td></tr>';
+      html = '<div class="empty">No provider health data yet — send a request to populate.</div>';
     } else {
+      // Group by profile.
+      var groups = {};
       keys.forEach(function(k){
-        var h = ps[k];
-        var badgeClass = h.status === 'healthy' ? 'badge-success' : h.status === 'degraded' ? 'badge-warning' : 'badge-error';
-        var reason = h.last_failure_reason || '—';
-        if (reason.length > 70) reason = reason.slice(0,67)+'…';
         var parts = k.split('/');
-        var prov = parts[0], prof = parts.slice(1).join('/');
-        var sid = ('h' + prov + '-' + prof).replace(/[^a-zA-Z0-9]/g, '_');
-        var manual = h.manual_override ? ' <span style="font-size:0.5625rem;color:hsl(var(--amber-fg));text-transform:uppercase">manual</span>' : '';
-        html += '<tr class="health-trigger" style="cursor:pointer" onclick="toggleHealthDetail(\''+sid+'\')" title="Click to expand details">';
-        html += '<td><b>'+esc(prov)+'</b> <span style="font-size:0.625rem;color:hsl(var(--muted-foreground))">'+esc(prof)+'</span>'+manual+' <span class="lcp-stack-chevron" id="hchev-'+sid+'">▾</span></td>';
-        html += '<td><span class="badge '+badgeClass+'">'+esc(h.status)+'</span></td>';
-        html += '<td>'+uptimeBar(h.uptime_24h)+'</td>';
-        html += '<td>'+uptimeBar(h.uptime_7d)+'</td>';
-        html += '<td>'+uptimeBar(h.uptime_30d)+'</td>';
-        html += '<td style="text-align:center">'+h.failures+'</td>';
-        html += '<td class="mono" style="font-size:0.6875rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(reason)+'</td>';
-        html += '<td style="white-space:nowrap">';
-        html += '<select class="btn-sm" onchange="if(this.value){toggleProviderState(\''+prov.replace(/'/g,"\\'")+'\',\''+prof.replace(/'/g,"\\'")+'\',this.value);this.value=\'\'}" style="padding:0.2rem 0.3rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.6875rem;cursor:pointer" title="Circuit breaker override">';
-        html += '<option value="">Override…</option>';
-        html += '<option value="degrade">Force Degrade</option>';
-        html += '<option value="kill">Force Kill</option>';
-        if(h.status!=='healthy'){ html += '<option value="resume">Resume</option>'; }
-        html += '</select>';
-        html += '</td>';
+        var prov = parts[0], prof = parts.slice(1).join('/') || prov;
+        if(!groups[prof]) groups[prof] = [];
+        groups[prof].push({prov:prov, prof:prof, h:ps[k]});
+      });
+      Object.keys(groups).sort().forEach(function(prof){
+        var entries = groups[prof];
+        var act = pickActiveProv(entries);
+        var sid = 'ph-' + prof.replace(/[^a-zA-Z0-9]/g, '_');
+        var open = !!_provOpen[sid];
+        var ah = act.h;
+
+        html += '<table class="lcp-stack">'+PROV_COLS+'<thead>'+PROV_HDR+'</thead>';
+        html += '<tbody class="key-stack'+(open?' expanded':'')+'" id="'+sid+'" aria-expanded="'+open+'">';
+
+        // Collapsed trigger row = the profile's latest active provider.
+        html += '<tr class="lcp-stack-trigger" onclick="toggleProvProfile(\''+sid+'\')" title="Click to '+(open?'collapse':'expand')+' '+esc(prof)+' providers">';
+        html += '<td><b>'+esc(prof)+'</b> <span style="font-size:0.625rem;color:hsl(var(--muted-foreground))">'+esc(act.prov)+'</span> <span class="lcp-stack-count">'+entries.length+'</span> <span class="lcp-stack-chevron">▾</span></td>';
+        html += provMidCells(ah);
+        html += '<td style="white-space:nowrap">'+provSelect(act.prov, act.prof, ah.status)+'</td>';
         html += '</tr>';
-        // ── Expandable detail row ──
-        html += '<tr id="hdet-'+sid+'" style="display:none"><td colspan="8" style="padding:0">';
-        html += '<div style="background:hsl(var(--secondary)/0.15);border-top:1px solid hsl(var(--card-border));border-bottom:1px solid hsl(var(--card-border));padding:0.75rem 1rem;font-size:0.75rem">';
-        html += '<div style="font-weight:600;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Last Error</div>';
-        html += '<pre style="white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.6875rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:0.5rem;margin:0 0 0.75rem;max-height:120px;overflow:auto">'+esc(h.last_failure_reason||'—')+'</pre>';
-        html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0.75rem">';
-        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.25rem">Failure Breakdown (24h)</div>'+failureBars(h.failures_24h||{})+'</div>';
-        html += '<div><div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">';
-        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Status</div><div>'+esc(h.status)+'</div></div>';
-        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Failures</div><div>'+h.failures+'</div></div>';
-        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Last Failure</div><div class="mono" style="font-size:0.625rem">'+esc(h.last_failure||'—')+'</div></div>';
-        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Last Success</div><div class="mono" style="font-size:0.625rem">'+esc(h.last_success||'—')+'</div></div>';
-        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Base URL</div><div class="mono" style="word-break:break-all;font-size:0.625rem">'+esc(h.base_url||'—')+'</div></div>';
-        html += '<div><div style="font-size:0.6rem;color:hsl(var(--muted-foreground));text-transform:uppercase;margin-bottom:0.125rem">Cooldown Until</div><div class="mono" style="font-size:0.625rem">'+esc(h.tripped_until||'—')+'</div></div>';
-        html += '</div></div>';
-        html += '</div>';
-        html += '</div></td></tr>';
+
+        // Expanded body: one row (+ optional detail) per provider.
+        entries.forEach(function(e){
+          var h = e.h;
+          var dsid = ('h' + e.prov + '-' + e.prof).replace(/[^a-zA-Z0-9]/g, '_');
+          var detOpen = open && !!_hdetOpen[dsid];
+          var manual = h.manual_override ? ' <span style="font-size:0.5625rem;color:hsl(var(--amber-fg));text-transform:uppercase">manual</span>' : '';
+          html += '<tr class="lcp-stack-body health-trigger" style="cursor:pointer" onclick="toggleHealthDetail(\''+dsid+'\')" title="Click to expand details">';
+          html += '<td><b>'+esc(e.prov)+'</b>'+manual+' <span class="lcp-stack-chevron" id="hchev-'+dsid+'">'+(detOpen?'▴':'▾')+'</span></td>';
+          html += provMidCells(h);
+          html += '<td style="white-space:nowrap">'+provSelect(e.prov, e.prof, h.status)+'</td>';
+          html += '</tr>';
+          html += provDetailRow(h, dsid, detOpen);
+        });
+
+        html += '</tbody></table>';
       });
     }
     document.getElementById('providerHealthBody').innerHTML = html;
