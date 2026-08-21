@@ -612,10 +612,16 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   flex-shrink: 0; max-width: 60%; white-space: nowrap;
   position: relative;
 }
-/* Global variant — fixed to the top-right of the content area on every page */
+/* Global variant — fixed to the top-right of the content area on every page.
+   Two stacked rows so the provider/credits line and the usage bar never
+   overflow the compact top-right position. */
 .header-plugin-badge.global {
   position: absolute; top: 0.75rem; right: 1.5rem; z-index: 40;
-  max-width: 45%;
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 0.375rem; max-width: 45%; white-space: nowrap;
+}
+.hp-head-row {
+  display: flex; align-items: center; gap: 0.5rem; min-width: 0;
 }
 .header-plugin-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
@@ -624,16 +630,16 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .header-plugin-dot.off { background: hsl(var(--muted-foreground)); }
 .header-plugin-text {
   overflow: hidden; text-overflow: ellipsis; font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 0.6875rem;
+  font-size: 0.6875rem; white-space: nowrap;
 }
 
-/* ── OpenCode usage bar + hover popover inside the header badge ── */
+/* ── Usage bar (row 2) — full width of the widget, never overflows ── */
 .hp-usage {
-  display: flex; align-items: center; gap: 0.5rem;
+  display: flex; align-items: center; gap: 0.5rem; width: 100%; min-width: 0;
 }
 .hp-usage-track {
-  width: 56px; height: 6px; border-radius: 3px; overflow: hidden;
-  background: hsl(var(--secondary)); flex-shrink: 0;
+  flex: 1; height: 6px; border-radius: 3px; overflow: hidden;
+  background: hsl(var(--secondary)); min-width: 0;
 }
 .hp-usage-fill {
   height: 100%; border-radius: 3px; width: 0;

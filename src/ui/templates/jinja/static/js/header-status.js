@@ -192,7 +192,11 @@
         if (ocBal && ocBal.balance != null) hdrLabel += ' \u00b7 $' + ocBal.balance.toFixed(2) + ' credits';
         renderOpencodeUsage(subscriptions['opencode'], ocBal);
       } else if (latest === 'commandcode') {
-        renderCommandCodeUsage(subscriptions['commandcode']);
+        var ccSub = subscriptions['commandcode'];
+        if (ccSub && ccSub.monthly_credits_remaining != null) {
+          hdrLabel += ' \u00b7 $' + ccSub.monthly_credits_remaining.toFixed(2) + ' credits';
+        }
+        renderCommandCodeUsage(ccSub);
       } else if (latest === 'llamacpp') {
         hideUsage();
         var mt = (window.monthly && window.monthly[latest]) ? (window.monthly[latest].tokens || 0) : 0;
