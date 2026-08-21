@@ -48,21 +48,23 @@ function loadPluginStatus() {
       if (prov === 'opencode') {
         var sub = subscriptions[prov];
         var ocbal = bal && bal.balance != null ? bal.balance : null;
-        if (ocbal != null) {
-          detail = 'credits: $' + ocbal.toFixed(2);
-          if (sub && sub.monthly_pct != null) {
-            detail += ' · monthly: ' + sub.monthly_pct.toFixed(0) + '%';
-          }
-        } else if (sub && sub.monthly_pct != null) {
-          detail = 'monthly: ' + sub.monthly_pct.toFixed(0) + '%';
-        }
+        var parts = [];
+        if (ocbal != null) parts.push('credits: $' + ocbal.toFixed(2));
+        if (sub && sub.monthly_pct != null) parts.push('monthly: ' + sub.monthly_pct.toFixed(0) + '%');
+        detail = parts.join(' · ');
       } else if (prov === 'commandcode') {
         var ccsub = subscriptions[prov];
+        var ccparts = [];
         if (ccsub && ccsub.monthly_credits_remaining != null) {
-          detail = 'credits: $' + ccsub.monthly_credits_remaining.toFixed(2);
-        } else if (ccsub && ccsub.five_hour_pct != null) {
-          detail = '5h: ' + ccsub.five_hour_pct.toFixed(0) + '%';
+          ccparts.push('credits: $' + ccsub.monthly_credits_remaining.toFixed(2));
         }
+        if (ccsub && ccsub.monthly_pct != null && ccsub.monthly_pct > 0) {
+          ccparts.push('monthly: ' + ccsub.monthly_pct.toFixed(0) + '%');
+        }
+        if (ccparts.length === 0 && ccsub && ccsub.five_hour_pct != null) {
+          ccparts.push('5h: ' + ccsub.five_hour_pct.toFixed(0) + '%');
+        }
+        detail = ccparts.join(' · ');
       } else if (prov === 'deepseek' && sum && sum.balance) {
         detail = 'available balance: $' + sum.balance.available.toFixed(2);
       } else if (bal && bal.balance !== null && bal.balance !== undefined) {
