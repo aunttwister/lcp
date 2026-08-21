@@ -73,6 +73,7 @@
   margin-left: var(--sidebar-width);
   padding: 2rem;
   transition: margin-left 0.25s cubic-bezier(0.4,0,0.2,1);
+  position: relative;
 }
 .sidebar.collapsed ~ .main-content { margin-left: 0; }
 /* overlay on mobile */
@@ -611,6 +612,11 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   flex-shrink: 0; max-width: 60%; white-space: nowrap;
   position: relative;
 }
+/* Global variant — fixed to the top-right of the content area on every page */
+.header-plugin-badge.global {
+  position: absolute; top: 0.75rem; right: 1.5rem; z-index: 40;
+  max-width: 45%;
+}
 .header-plugin-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
@@ -915,6 +921,7 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 @media (max-width: 768px) {
   .header-row { flex-direction: column; gap: 0.5rem; }
   .header-plugin-badge { max-width: 100%; }
+  .header-plugin-badge.global { top: 0.5rem; right: 0.75rem; max-width: 60%; }
 }
 
 /* ── Budget cards on dashboard ── */

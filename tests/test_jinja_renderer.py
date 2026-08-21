@@ -593,7 +593,6 @@ def _dashboard_kwargs(**overrides):
         "pm_data_json": json.dumps({"dates": [], "models": {}}),
         "monthly_json": json.dumps({"deepseek": {"reqs": 1, "tokens": 100, "cost": 0.01}}),
         "configured_providers_json": json.dumps(["deepseek", "opencode"]),
-        "plugin_header_info": "// plugin header snippet",
     }
     base.update(overrides)
     return base

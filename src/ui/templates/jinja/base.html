@@ -14,7 +14,19 @@
 <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
 <button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()" title="Toggle sidebar">☰</button>
 <div class="main-content">
-{% block content %}{% endblock %}
+  <!-- Global top-right widget: latest active provider + usage/credits (all pages) -->
+  <div class="header-plugin-badge global" id="pluginHeaderBadge" title="">
+    <span class="header-plugin-dot" id="pluginHeaderDot"></span>
+    <span class="header-plugin-text" id="pluginHeaderText">…</span>
+    <div class="hp-usage" id="hpUsage" style="display:none">
+      <div class="hp-usage-track">
+        <div class="hp-usage-fill" id="hpUsageFill"></div>
+      </div>
+      <span class="hp-usage-label" id="hpUsageLabel"></span>
+      <div class="hp-usage-popover" id="hpUsagePopover"></div>
+    </div>
+  </div>
+  {% block content %}{% endblock %}
 </div>
 
 <script>
@@ -25,6 +37,7 @@ var configuredProviders = {{ configured_providers_json | safe }};
 <script src="/static/js/api.js?v={{ cache_buster }}"></script>
 <script src="/static/js/sidebar.js?v={{ cache_buster }}"></script>
 <script src="/static/js/plugin-status.js?v={{ cache_buster }}"></script>
+<script src="/static/js/header-status.js?v={{ cache_buster }}"></script>
 <script src="/static/js/modal.js?v={{ cache_buster }}"></script>
 <script src="/static/js/stack.js?v={{ cache_buster }}"></script>
 {% endblock %}

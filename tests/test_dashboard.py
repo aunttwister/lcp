@@ -151,7 +151,9 @@ class TestRenderDashboard:
         html = render_dashboard(dash_config, engine, dash_headers)
         assert "<!DOCTYPE html>" in html
         assert "$0.000000" in html  # _fmt_cost(0)
-        assert "No requests yet" in html or "No requests" in html
+        # The global header widget renders (empty state is now client-side JS).
+        assert 'id="pluginHeaderBadge"' in html
+        assert 'header-status.js' in html
 
     def test_budget_query_failure_swallowed(self, temp_db, dash_config, dash_headers):
         """A failure in the budget-cards query is caught and skipped."""

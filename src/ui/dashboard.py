@@ -408,25 +408,6 @@ def render_dashboard(config, engine, headers, profile_filter=None):
     cache_entries = cache_stats["entries"]
     cache_max_entries = cache_stats.get("max_entries", "N/A")
 
-    # ── Latest responding (current) provider ──
-    # ── Latest responding (current) provider ──
-    _latest_provider = None
-    with get_session(engine) as _s:
-        _latest_prov_row = _s.query(RequestModel.provider).filter(
-            RequestModel.success == 1,
-            RequestModel.provider != None,
-            RequestModel.provider != 'error',
-        )
-        if profile_filter:
-            _latest_prov_row = _latest_prov_row.filter(
-                RequestModel.profile == profile_filter
-            )
-        _latest_prov_row = _latest_prov_row.order_by(
-            RequestModel.timestamp.desc()
-        ).first()
-        if _latest_prov_row:
-            _latest_provider = _latest_prov_row[0]
-
     # ── Monthly usage per provider (for OpenCode display) ──
     from datetime import date as _date
     _first_of_month = _date.today().replace(day=1).isoformat()
@@ -454,44 +435,8 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         }
 
     # Serialize for JS
-    _latest_provider_json = json.dumps(_latest_provider)
     _monthly_data_json = json.dumps(_monthly_data)
     _configured_providers_json = json.dumps(sorted(config.providers.keys()))
-
-    # Template snippet for header badge — key stat per active provider
-    plugin_header_info = (
-        "var latestProvider = " + _latest_provider_json + ";\n"
-        "var summaries = pluginSummaries || {};\n"
-        "if (latestProvider && hdrText) {\n"
-        "  if (hdrDot) hdrDot.className = 'header-plugin-dot on';\n"
-        "  var sum = summaries[latestProvider];\n"
-        "  var cur, hdrLabel = latestProvider;\n"
-        "  if (latestProvider === 'deepseek' && sum && sum.balance) {\n"
-        "    hideOpencodeHeaderUsage();\n"
-        "    cur = sum.balance.currency || 'USD';\n"
-        "    hdrLabel += ' \\u00b7 ' + cur + ' ' + sum.balance.available.toFixed(2) + ' available';\n"
-        "  } else if (latestProvider === 'opencode') {\n"
-        "    renderOpencodeHeaderUsage(subscriptions['opencode']);\n"
-        "  } else if (latestProvider === 'commandcode') {\n"
-        "    renderCommandCodeHeaderUsage(subscriptions['commandcode']);\n"
-        "  } else if (latestProvider === 'llamacpp') {\n"
-        "    hideOpencodeHeaderUsage();\n"
-        "    var mt = (monthly[latestProvider] || {}).tokens || 0;\n"
-        "    hdrLabel += ' \\u00b7 ' + formatTokens(mt) + ' tokens';\n"
-        "  } else {\n"
-        "    hideOpencodeHeaderUsage();\n"
-        "    var usg = allUsage[latestProvider] || [];\n"
-        "    var totalCost = usg.reduce(function(s,r){return s + r.cost}, 0);\n"
-        "    hdrLabel += ' \\u00b7 $' + totalCost.toFixed(4);\n"
-        "  }\n"
-        "  hdrText.textContent = hdrLabel;\n"
-        "  if (hdrDot) hdrDot.title = latestProvider + ' \\u2014 latest successful provider';\n"
-        "} else {\n"
-        "  hideOpencodeHeaderUsage();\n"
-        "  if (hdrText) hdrText.textContent = 'No requests yet';\n"
-        "  if (hdrDot) hdrDot.className = 'header-plugin-dot off';\n"
-        "}"
-    )
 
     # ── Full HTML ──
     filter_title = f" — {profile_filter.upper()}" if profile_filter else ""
@@ -579,5 +524,4 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         pm_data_json=pm_data_json,
         monthly_json=_monthly_data_json,
         configured_providers_json=_configured_providers_json,
-        plugin_header_info=plugin_header_info,
     )

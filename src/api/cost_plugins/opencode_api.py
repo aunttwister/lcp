@@ -189,9 +189,10 @@ _BILLING_BLOCK_START_RE = re.compile(
 # Match `$R[N]={ ... }` blocks (SolidJS SSR). Multi-line, non-greedy.
 _R_BLOCK_RE = re.compile(r'\$R\[\d+\]=\{(.*?)\}\s*;', re.DOTALL)
 
-# Credit/balance-ish keys → captured numeric value (any order).
+# Credit/balance-ish keys → captured numeric value (any order). Captures the
+# field NAME so we can prefer unambiguous credit fields over generic ones.
 _CREDIT_VALUE_RE = re.compile(
-    r'(?:availableCredits|available_credits|creditsAvailable|creditBalance'
+    r'(availableCredits|available_credits|creditsAvailable|creditBalance'
     r'|balance|available|totalCredits|total_credits|remainingCredits'
     r'|remaining|monthlyCredits|monthly_credits|credits)\s*:\s*'
     r'([+-]?\d+(?:\.\d+)?)'
@@ -199,17 +200,36 @@ _CREDIT_VALUE_RE = re.compile(
 
 # Plan name (string or quoted).
 _PLAN_RE = re.compile(
-    r'(?:plan|planId|plan_name|tier)\s*:\s*"?([A-Za-z0-9_ .-]+)"?'
+    r'(?:plan|planId|plan_name|tier|currentPlan)\s*:\s*"?([A-Za-z0-9_ .-]+)"?'
 )
+
+# Unambiguous "available credits" field names — these win over generic
+# ``balance``/``available``/``credits`` which may hold token counts, ledger
+# totals, or other large numbers on the billing page.
+_CREDIT_SPECIFIC_KEYS = frozenset({
+    "availablecredits", "available_credits", "creditsavailable", "creditbalance",
+})
+
+# Plausible upper bound for USD credit balances. Generic keys (balance,
+# available, credits) on the OpenCode billing page can carry huge non-USD
+# numbers (token ledgers etc.); anything above this is treated as not-credits.
+_MAX_PLAUSIBLE_CREDITS = 1_000_000.0
 
 
 def _parse_ssr_billing(text: str) -> Optional[dict]:
     """Parse the SolidJS SSR $R blocks for billing/credit data.
 
     Returns ``{"available_credits": float, "currency": "USD", "plan": str}``
-    or ``None`` when nothing credit-like is found. Scans all ``$R[N]`` blocks
-    (preferring those near a ``lite.billing.get`` block) and collects any
-    credit/balance/available keys, taking the last non-zero value seen.
+    or ``None`` when nothing credit-like is found.
+
+    Candidate values are collected across all ``$R[N]`` blocks (scoped to the
+    billing block when present), then:
+      1. unambiguous credit fields (``availableCredits``/``creditBalance``/…)
+         are preferred,
+      2. generic keys (``balance``/``available``/``credits``) are only used as
+         a fallback, and
+      3. values above ``_MAX_PLAUSIBLE_CREDITS`` from generic keys are skipped
+         (they're usually token/ledger numbers, not USD credits).
     """
     if not text:
         return None
@@ -222,41 +242,46 @@ def _parse_ssr_billing(text: str) -> Optional[dict]:
     else:
         block = text
 
-    available: Optional[float] = None
+    specific: list[float] = []
+    generic: list[float] = []
+    skipped: list[tuple[str, float]] = []
     plan: Optional[str] = None
 
-    # Fallback: scan a window around any credit-like keyword for a number.
-    for m in _R_BLOCK_RE.finditer(block):
-        body = m.group(1)
-        for cm in _CREDIT_VALUE_RE.finditer(body):
-            val = float(cm.group(1))
-            # Skip obvious zero-fields that aren't "available" — take the last
-            # non-zero "available"/"balance" match; totals we ignore.
-            key = cm.group(0).split(":")[0].strip()
-            if key in ("totalCredits", "total_credits", "monthlyCredits",
-                       "monthly_credits", "credits", "remainingCredits",
-                       "remaining"):
-                # Prefer specific "available" keys; only fall back to these
-                # if nothing else was found.
-                if available is None:
-                    available = val
+    def _scan(segment: str) -> None:
+        nonlocal plan
+        for m in _CREDIT_VALUE_RE.finditer(segment):
+            key = m.group(1).lower()
+            val = float(m.group(2))
+            if val <= 0:
                 continue
-            available = val  # availableCredits / balance / available / creditBalance
+            if key in _CREDIT_SPECIFIC_KEYS:
+                specific.append(val)
+            elif val > _MAX_PLAUSIBLE_CREDITS:
+                skipped.append((key, val))
+                continue
+            else:
+                generic.append(val)
         if plan is None:
-            pm = _PLAN_RE.search(body)
+            pm = _PLAN_RE.search(segment)
             if pm:
                 plan = pm.group(1).strip()
 
-    if available is None:
-        # One more heuristic: a bare "balance: X" or "credits: X" at top-level
-        # (not inside $R blocks) — some SSR shapes inline them.
-        m = re.search(
-            r'(?:availableCredits|creditsAvailable|creditBalance|balance)'
-            r'\s*:\s*([+-]?\d+(?:\.\d+)?)',
-            block,
+    for m in _R_BLOCK_RE.finditer(block):
+        _scan(m.group(1))
+    # Top-level (non-$R) keys — some SSR shapes inline them.
+    _scan(block)
+
+    if skipped:
+        logger.warning(
+            "opencode_billing_skipped_implausible keys=%s",
+            [(k, v) for k, v in skipped],
         )
-        if m:
-            available = float(m.group(1))
+
+    available: Optional[float] = None
+    if specific:
+        available = specific[-1]
+    elif generic:
+        available = generic[-1]
 
     if available is None:
         _debug_billing_failure(block)

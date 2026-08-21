@@ -377,6 +377,29 @@ class TestParseSsrBilling:
         assert result is not None
         assert result["available_credits"] == 12.5
 
+    def test_ignores_implausible_generic_balance(self):
+        """A huge generic 'balance' (token ledger) must not override real credits.
+
+        Regression: prod returned $949,260,397 instead of $9.49 because the
+        parser took a large non-credit ``balance`` value.
+        """
+        text = (
+            "billing:$R[0]={{{{balance: 949260397, plan: \"pro\"}}}};\n"
+            "credits:$R[1]={{{{availableCredits: 9.49}}}};\n"
+        )
+        result = _parse_ssr_billing(text)
+        assert result is not None
+        assert result["available_credits"] == 9.49
+
+    def test_implausible_generic_only_falls_back_to_plausible(self):
+        """When only generic keys exist, implausible ones are skipped."""
+        text = (
+            "billing:$R[0]={{{{balance: 949260397, credits: 12.34}}}};\n"
+        )
+        result = _parse_ssr_billing(text)
+        assert result is not None
+        assert result["available_credits"] == 12.34
+
 
 class TestBillingSnapshot:
     def test_defaults(self):
