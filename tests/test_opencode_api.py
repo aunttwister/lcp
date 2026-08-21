@@ -327,3 +327,103 @@ class TestHttpGet:
         with patch("src.api.cost_plugins.opencode_api.urlopen", return_value=mock_resp):
             body = _http_get("https://x", {"Cookie": "c"})
         assert body == "<html>hello</html>"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Billing (credits) parsing + fetch
+# ═══════════════════════════════════════════════════════════════════════
+
+from src.api.cost_plugins.opencode_api import (
+    BillingSnapshot,
+    _parse_ssr_billing,
+    fetch_billing,
+    fetch_billing_dict,
+)
+
+_BILLING_TEMPLATE = (
+    'lite.billing.get["wrk_abc123"]={{{{...}}}};\n'
+    "availableCredits:$R[0]={{{{available: 25.75, plan: \"pro\"}}}};\n"
+    "credits:$R[1]={{{{totalCredits: 100, balance: 25.75}}}};\n"
+)
+
+
+class TestParseSsrBilling:
+    def test_parses_available_credits(self):
+        result = _parse_ssr_billing(_BILLING_TEMPLATE)
+        assert result is not None
+        assert result["available_credits"] == 25.75
+        assert result["currency"] == "USD"
+        assert result["plan"] == "pro"
+
+    def test_returns_none_for_empty(self):
+        assert _parse_ssr_billing("") is None
+
+    def test_returns_none_for_garbage(self):
+        assert _parse_ssr_billing("<html>no ssr</html>") is None
+
+    def test_balances_at_top_level(self):
+        """A bare top-level balance: X (not in $R block) is still found."""
+        text = 'lite.billing.get["wrk_1"]={{{balance: 42.5}}};\n'
+        result = _parse_ssr_billing(text)
+        assert result is not None
+        assert result["available_credits"] == 42.5
+
+    def test_prefers_available_over_total(self):
+        """'available' beats 'totalCredits' as the balance source."""
+        text = (
+            "credits:$R[0]={{{{totalCredits: 100, availableCredits: 12.5}}}};\n"
+        )
+        result = _parse_ssr_billing(text)
+        assert result is not None
+        assert result["available_credits"] == 12.5
+
+
+class TestBillingSnapshot:
+    def test_defaults(self):
+        snap = BillingSnapshot()
+        assert snap.available_credits is None
+        assert snap.currency == "USD"
+        assert snap.plan is None
+        assert snap.workspace_id is None
+
+
+class TestFetchBilling:
+    def test_missing_cookie_returns_none(self):
+        assert fetch_billing(None) is None
+        assert fetch_billing("") is None
+        assert fetch_billing("   ") is None
+
+    def test_uses_workspace_id_from_arg(self):
+        with patch("src.api.cost_plugins.opencode_api._http_get", return_value="<html/>") as mock_get:
+            with patch("src.api.cost_plugins.opencode_api._parse_ssr_billing",
+                       return_value={"available_credits": 9.99, "currency": "USD", "plan": "pro"}):
+                snap = fetch_billing(" cookie ", workspace_id="wrk_bill")
+        assert snap is not None
+        assert snap.available_credits == 9.99
+        assert snap.plan == "pro"
+        assert snap.workspace_id == "wrk_bill"
+        urls = [c[0][0] for c in mock_get.call_args_list]
+        assert len(urls) == 1
+        assert "/billing" in urls[0]
+
+    def test_parse_failure_returns_none(self):
+        with patch("src.api.cost_plugins.opencode_api._http_get", return_value="<html/>"):
+            with patch("src.api.cost_plugins.opencode_api._parse_ssr_billing", return_value=None):
+                assert fetch_billing("cookie", workspace_id="wrk_1") is None
+
+
+class TestFetchBillingDict:
+    def test_returns_none_when_fetch_returns_none(self):
+        with patch("src.api.cost_plugins.opencode_api.fetch_billing", return_value=None):
+            assert fetch_billing_dict("cookie") is None
+
+    def test_returns_contract_dict(self):
+        snap = BillingSnapshot(available_credits=12.34, plan="pro",
+                               workspace_id="wrk_1")
+        with patch("src.api.cost_plugins.opencode_api.fetch_billing", return_value=snap):
+            result = fetch_billing_dict("cookie")
+        assert result["balance"] == 12.34
+        assert result["available_credits"] == 12.34
+        assert result["currency"] == "USD"
+        assert result["plan"] == "pro"
+        assert result["workspace_id"] == "wrk_1"

@@ -184,10 +184,51 @@ class OpenCodeCostPlugin(CostPlugin):
             logger.warning("usage_query_failed", error=str(exc))
             return []
 
-    # ── Balance (not available) ────────────────────────────────────────────
+    # ── Balance / available credits (from OpenCode billing page) ─────────
 
     def fetch_balance(self) -> Optional[dict]:
-        return None
+        """Fetch available credits from the OpenCode billing page.
+
+        Requires the OpenCode ``auth`` cookie and workspace ID — read from the
+        encrypted credential store (UI-managed), same as ``fetch_subscription``.
+        Returns::
+
+            {"available_credits": 12.34, "balance": 12.34,
+             "currency": "USD", "plan": "pro", "workspace_id": "wrk_..."}
+
+        Returns ``None`` (as before) when no cookie/workspace is configured, or
+        an error dict (``{"_error": ...}``) when the fetch fails.
+        """
+        try:
+            if os.environ.get("LCP_MOCK_PLUGIN_DATA"):
+                return {
+                    "available_credits": 12.34, "balance": 12.34,
+                    "currency": "USD", "plan": "pro",
+                    "workspace_id": "wrk_mock", "fetched_at": None,
+                }
+            from .opencode_api import fetch_billing_dict
+            cookie = ""
+            workspace_id = ""
+            try:
+                from ..credential_store import get_credential_store
+                store = get_credential_store()
+                if store is not None:
+                    cookie = store.get_cookie("opencode") or ""
+                    workspace_id = store.get_workspace_id("opencode") or ""
+            except Exception:
+                cookie = ""
+                workspace_id = ""
+            if not cookie:
+                logger.debug("opencode_cookie_not_configured")
+                return None  # plugin "doesn't support balance" → stays quiet
+            data = fetch_billing_dict(cookie, workspace_id=workspace_id or None)
+            if data is None:
+                logger.warning("billing_fetch_returned_none")
+                return {"_error": "api_error", "detail": "No credit data on OpenCode billing page (cookie may be invalid/expired)"}
+            return data
+        except Exception as exc:
+            logger.warning("billing_fetch_failed", error=str(exc))
+            return {"_error": "api_error", "detail": str(exc)}
 
     # ── Rich summary — daily / weekly / monthly from gateway DB ────────────
 

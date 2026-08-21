@@ -221,8 +221,59 @@ class TestOpenCodeFetchUsage:
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestOpenCodeFetchBalance:
-    def test_balance_always_none(self, plugin):
-        assert plugin.fetch_balance() is None
+    def test_no_cookie_returns_none(self, plugin):
+        """No configured cookie → plugin stays quiet (returns None)."""
+        store = MagicMock()
+        store.get_cookie.return_value = ""
+        with patch("src.api.credential_store.get_credential_store", return_value=store):
+            assert plugin.fetch_balance() is None
+
+    def test_returns_error_when_api_returns_none(self, plugin):
+        """Cookie present but no credit data → error dict (not quiet)."""
+        store = MagicMock()
+        store.get_cookie.return_value = "auth=test-cookie"
+        store.get_workspace_id.return_value = "wrk_1"
+        with patch("src.api.credential_store.get_credential_store", return_value=store):
+            with patch("src.api.cost_plugins.opencode_api.fetch_billing_dict",
+                       return_value=None):
+                result = plugin.fetch_balance()
+        assert result is not None
+        assert result["_error"] == "api_error"
+
+    def test_returns_balance_data(self, plugin):
+        """Happy path: returns available credits from the billing page."""
+        mock_data = {"available_credits": 12.34, "balance": 12.34,
+                     "currency": "USD", "plan": "pro"}
+        store = MagicMock()
+        store.get_cookie.return_value = "auth=test-cookie"
+        store.get_workspace_id.return_value = "wrk_1"
+        with patch("src.api.credential_store.get_credential_store", return_value=store):
+            with patch("src.api.cost_plugins.opencode_api.fetch_billing_dict",
+                       return_value=mock_data):
+                result = plugin.fetch_balance()
+        assert result == mock_data
+
+    def test_uses_credential_store_cookie_and_workspace(self, plugin, tmp_path):
+        """The UI-managed cookie + workspace ID are passed to the billing fetch."""
+        from src.api.credential_store import CredentialStore
+        import src.api.credential_store as cs_module
+        from src.api.models import get_engine, Base
+        import os as _os
+
+        engine = get_engine(":memory:")
+        Base.metadata.create_all(engine)
+        cs_module._credential_store = CredentialStore(engine, data_dir=str(tmp_path))
+        with patch.dict(_os.environ, {"LCP_SECRET_KEY": "test-master"}, clear=False):
+            cs_module._credential_store.set_cookie("opencode", "auth=store-cookie")
+            cs_module._credential_store.set_workspace_id("opencode", "wrk_store")
+
+            mock_data = {"available_credits": 5.0, "balance": 5.0}
+            with patch("src.api.cost_plugins.opencode_api.fetch_billing_dict",
+                       return_value=mock_data) as m:
+                result = plugin.fetch_balance()
+        assert result == mock_data
+        assert m.call_args[0][0] == "auth=store-cookie"
+        assert m.call_args[1].get("workspace_id") == "wrk_store"
 
 
 # ═══════════════════════════════════════════════════════════════════════

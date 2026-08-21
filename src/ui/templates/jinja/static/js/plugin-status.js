@@ -47,7 +47,13 @@ function loadPluginStatus() {
       var detail = '';
       if (prov === 'opencode') {
         var sub = subscriptions[prov];
-        if (sub && sub.monthly_pct != null) {
+        var ocbal = bal && bal.balance != null ? bal.balance : null;
+        if (ocbal != null) {
+          detail = 'credits: $' + ocbal.toFixed(2);
+          if (sub && sub.monthly_pct != null) {
+            detail += ' · monthly: ' + sub.monthly_pct.toFixed(0) + '%';
+          }
+        } else if (sub && sub.monthly_pct != null) {
           detail = 'monthly: ' + sub.monthly_pct.toFixed(0) + '%';
         }
       } else if (prov === 'commandcode') {

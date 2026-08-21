@@ -48,6 +48,16 @@ class SubscriptionSnapshot:
     workspace_id: Optional[str] = None
 
 
+@dataclass
+class BillingSnapshot:
+    """Parsed credits / balance from the OpenCode billing page."""
+    available_credits: Optional[float] = None   # USD available now
+    currency: str = "USD"
+    plan: Optional[str] = None                  # e.g. "pro" / "go"
+    workspace_id: Optional[str] = None
+    fetched_at: Optional[str] = None
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _base_headers(cookie: str) -> dict[str, str]:
@@ -167,7 +177,195 @@ def _debug_ssr_failure(text: str) -> None:
     )
 
 
+# ── Billing SSR parsing ────────────────────────────────────────────────────
+
+# Field names seen/most-likely on the billing page's $R blocks. The exact
+# shape can vary; we scan broadly and normalise below.
+_BILLING_BLOCK_START_RE = re.compile(
+    r'lite\.(?:billing|credits|workspace|billing\.get)\.get\["wrk_[^"]+"\]',
+    re.DOTALL,
+)
+
+# Match `$R[N]={ ... }` blocks (SolidJS SSR). Multi-line, non-greedy.
+_R_BLOCK_RE = re.compile(r'\$R\[\d+\]=\{(.*?)\}\s*;', re.DOTALL)
+
+# Credit/balance-ish keys → captured numeric value (any order).
+_CREDIT_VALUE_RE = re.compile(
+    r'(?:availableCredits|available_credits|creditsAvailable|creditBalance'
+    r'|balance|available|totalCredits|total_credits|remainingCredits'
+    r'|remaining|monthlyCredits|monthly_credits|credits)\s*:\s*'
+    r'([+-]?\d+(?:\.\d+)?)'
+)
+
+# Plan name (string or quoted).
+_PLAN_RE = re.compile(
+    r'(?:plan|planId|plan_name|tier)\s*:\s*"?([A-Za-z0-9_ .-]+)"?'
+)
+
+
+def _parse_ssr_billing(text: str) -> Optional[dict]:
+    """Parse the SolidJS SSR $R blocks for billing/credit data.
+
+    Returns ``{"available_credits": float, "currency": "USD", "plan": str}``
+    or ``None`` when nothing credit-like is found. Scans all ``$R[N]`` blocks
+    (preferring those near a ``lite.billing.get`` block) and collects any
+    credit/balance/available keys, taking the last non-zero value seen.
+    """
+    if not text:
+        return None
+
+    # Scope the search to the billing block when present, else whole page.
+    block_start = _BILLING_BLOCK_START_RE.search(text)
+    if block_start:
+        end_pos = min(len(text), block_start.end() + 20000)
+        block = text[block_start.start():end_pos]
+    else:
+        block = text
+
+    available: Optional[float] = None
+    plan: Optional[str] = None
+
+    # Fallback: scan a window around any credit-like keyword for a number.
+    for m in _R_BLOCK_RE.finditer(block):
+        body = m.group(1)
+        for cm in _CREDIT_VALUE_RE.finditer(body):
+            val = float(cm.group(1))
+            # Skip obvious zero-fields that aren't "available" — take the last
+            # non-zero "available"/"balance" match; totals we ignore.
+            key = cm.group(0).split(":")[0].strip()
+            if key in ("totalCredits", "total_credits", "monthlyCredits",
+                       "monthly_credits", "credits", "remainingCredits",
+                       "remaining"):
+                # Prefer specific "available" keys; only fall back to these
+                # if nothing else was found.
+                if available is None:
+                    available = val
+                continue
+            available = val  # availableCredits / balance / available / creditBalance
+        if plan is None:
+            pm = _PLAN_RE.search(body)
+            if pm:
+                plan = pm.group(1).strip()
+
+    if available is None:
+        # One more heuristic: a bare "balance: X" or "credits: X" at top-level
+        # (not inside $R blocks) — some SSR shapes inline them.
+        m = re.search(
+            r'(?:availableCredits|creditsAvailable|creditBalance|balance)'
+            r'\s*:\s*([+-]?\d+(?:\.\d+)?)',
+            block,
+        )
+        if m:
+            available = float(m.group(1))
+
+    if available is None:
+        _debug_billing_failure(block)
+        return None
+
+    # Currency is always USD on opencode.ai.
+    return {
+        "available_credits": round(available, 2),
+        "currency": "USD",
+        "plan": plan,
+    }
+
+
+def _debug_billing_failure(text: str) -> None:
+    """Log a snippet of the billing SSR text for diagnosis."""
+    for kw in ("availableCredits", "creditBalance", "balance", "credits",
+               "plan", "billing"):
+        idx = text.find(kw)
+        if idx >= 0:
+            start = max(0, idx - 120)
+            end = min(len(text), idx + 320)
+            snippet = text[start:end].replace("\n", "\\n").replace("\r", "")
+            logger.warning(
+                "opencode_billing_ssr_context keyword=%s snippet=%s",
+                kw, snippet[:500],
+            )
+            return
+    head = text[:1500].replace("\n", "\\n")
+    tail = text[-1500:].replace("\n", "\\n")
+    logger.warning(
+        "opencode_billing_ssr_no_credits_found head=%s tail=%s",
+        head, tail,
+    )
+
+
 # ── Public API ─────────────────────────────────────────────────────────────
+
+def fetch_billing(cookie: Optional[str], workspace_id: Optional[str] = None) -> Optional[BillingSnapshot]:
+    """Fetch OpenCode available credits from the /workspace/{id}/billing page.
+
+    ``workspace_id``, if provided, skips the discover step (preferred when
+    the ID is already known, e.g. from the dashboard or env var).
+
+    Returns a ``BillingSnapshot`` or ``None`` when the cookie is missing,
+    unreachable, or no credit data is found.
+    """
+    if not cookie or not cookie.strip():
+        logger.debug("opencode_cookie_missing")
+        return None
+
+    cookie = cookie.strip()
+    headers = _base_headers(cookie)
+
+    # ── Step 1: discover workspace ID ──────────────────────────────────
+    if not workspace_id:
+        try:
+            raw = _http_get(_OPENCODE_BASE, headers)
+            ids = _extract_workspace_ids(raw)
+            if ids:
+                workspace_id = ids[0]
+        except (URLError, OSError) as exc:
+            logger.warning("opencode_dashboard_fetch_failed: %s", str(exc))
+            return None
+
+    if not workspace_id:
+        logger.warning("opencode_no_workspace_found")
+        return None
+
+    # ── Step 2: fetch /billing page and parse SSR credit data ──────────
+    try:
+        headers["Referer"] = f"{_OPENCODE_BASE}/workspace/{workspace_id}"
+        url = f"{_OPENCODE_BASE}/workspace/{workspace_id}/billing"
+        raw = _http_get(url, headers)
+    except (URLError, OSError) as exc:
+        logger.warning("opencode_billing_page_fetch_failed: %s", str(exc))
+        return None
+
+    result = _parse_ssr_billing(raw)
+    if result is None:
+        head = raw[:2000].replace("\n", "\\n")
+        tail = raw[-2000:].replace("\n", "\\n")
+        logger.warning(
+            "opencode_billing_parse_failed len=%d head=%s tail=%s",
+            len(raw), head, tail,
+        )
+        return None
+
+    return BillingSnapshot(
+        available_credits=result.get("available_credits"),
+        currency=result.get("currency", "USD"),
+        plan=result.get("plan"),
+        workspace_id=workspace_id,
+        fetched_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def fetch_billing_dict(cookie: Optional[str], workspace_id: Optional[str] = None) -> Optional[dict]:
+    """Same as ``fetch_billing`` but returns a plain dict (or None)."""
+    snap = fetch_billing(cookie, workspace_id=workspace_id)
+    if snap is None:
+        return None
+    return {
+        "available_credits": snap.available_credits,
+        "balance": snap.available_credits,  # generic contract: {balance, currency}
+        "currency": snap.currency,
+        "plan": snap.plan,
+        "workspace_id": snap.workspace_id,
+        "fetched_at": snap.fetched_at,
+    }
 
 def fetch_subscription(cookie: Optional[str], workspace_id: Optional[str] = None) -> Optional[SubscriptionSnapshot]:
     """Fetch OpenCode subscription usage from the /go page SSR data.
