@@ -166,35 +166,48 @@
       cost-bias boost, with a circuit-breaker health and credit-balance
       tiebreaker. Decisions below are from the background router.
     </p>
-    <div style="display:flex;align-items:flex-end;gap:0.75rem;flex-wrap:wrap">
-      <div>
-        <label class="form-label" style="display:block;margin-bottom:0.375rem">Enabled</label>
-        <label class="toggle" id="routingToggleWrap" title="Enable dynamic capability-based routing">
-          <input type="checkbox" id="routingEnabled" onchange="toggleRouting(this)">
-          <span class="toggle-track" aria-hidden="true"></span>
-          <span class="toggle-label" id="routingEnabledLabel">route by capability</span>
-        </label>
+    <div class="routing-controls">
+      <div class="routing-group">
+        <div class="form-label">Enabled</div>
+        <div class="routing-status-line">
+          <label class="toggle" id="routingToggleWrap" title="Enable dynamic capability-based routing">
+            <input type="checkbox" id="routingEnabled" onchange="toggleRouting(this)">
+            <span class="toggle-track" aria-hidden="true"></span>
+            <span class="toggle-label routing-toggle-label" id="routingEnabledLabel">route by capability</span>
+          </label>
+          <span class="badge badge-success" id="routingStatusBadge">…</span>
+        </div>
+        <div class="form-help">
+          When enabled, each request is classified by task type and routed to the
+          best-fit (provider, model) using benchmark scores + a cost-bias boost.
+        </div>
       </div>
-      <div>
-        <label class="form-label" for="routingStatusBadge" style="display:block;margin-bottom:0.25rem">Status</label>
-        <span class="badge badge-success" id="routingStatusBadge">…</span>
+
+      <div class="routing-group">
+        <div class="form-label">Policy</div>
+        <div class="routing-policy-line">
+          <div>
+            <label class="form-label" for="routingPolicy" style="display:block;margin-bottom:0.25rem">Mode</label>
+            <select id="routingPolicy" style="padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+              <option value="eager">eager — always best fit</option>
+              <option value="cost_first">cost_first — favor cheaper models</option>
+              <option value="explore">explore — weighted spread</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label" for="routingMinScore" style="display:block;margin-bottom:0.25rem">Min score (0–1)</label>
+            <input class="form-input" type="number" id="routingMinScore" min="0" max="1" step="0.05" style="width:90px;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="saveRouting()">Save</button>
+        </div>
+        <div class="form-help">
+          Mode controls how the best-fit is chosen; min score is a 0–1 floor below
+          which a reorder is never recommended.
+        </div>
       </div>
-      <div>
-        <label class="form-label" for="routingPolicy" style="display:block;margin-bottom:0.25rem">Policy</label>
-        <select id="routingPolicy" style="padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
-          <option value="eager">eager — always best fit</option>
-          <option value="cost_first">cost_first — favor cheaper models</option>
-          <option value="explore">explore — weighted spread</option>
-        </select>
-      </div>
-      <div>
-        <label class="form-label" for="routingMinScore" style="display:block;margin-bottom:0.25rem">Min score (0–1)</label>
-        <input class="form-input" type="number" id="routingMinScore" min="0" max="1" step="0.05" style="width:90px;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
-      </div>
-      <button class="btn btn-primary btn-sm" onclick="saveRouting()">Save</button>
     </div>
     <div class="form-error" id="routingError"></div>
-    <div class="form-help" id="routingStatus"></div>
+    <div class="form-help routing-status-msg" id="routingStatus"></div>
   </div>
 
   <div style="background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem;margin-bottom:1rem">
