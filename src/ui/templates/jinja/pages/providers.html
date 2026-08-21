@@ -263,7 +263,20 @@ function switchProvTab(tab, btn){
   document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active')});
   document.getElementById('tab-'+tab).classList.add('active');
   btn.classList.add('active');
+  // Persist the active tab so a refresh (or a shared link) returns to it.
+  if (window.location.hash !== '#' + tab) {
+    try { window.location.hash = tab; } catch (e) { /* noop — hash may be blocked */ }
+  }
 }
+
+// Deep-link support: /providers#routing reopens that tab after a refresh.
+function applyHashTab(){
+  var tab = (window.location.hash || '').replace(/^#/, '');
+  if (['health', 'config', 'cache', 'routing'].indexOf(tab) === -1) return;
+  var btn = document.querySelector('.tab-btn[data-tab="' + tab + '"]');
+  if (btn) switchProvTab(tab, btn);
+}
+window.addEventListener('hashchange', applyHashTab);
 
 function loadPresets(){api('GET','/api/providers/presets').then(function(d){var s=document.getElementById('provPreset');Object.keys(d.presets||{}).forEach(function(k){s.innerHTML+='<option value="'+k+'">'+k+'</option>'})})}
 
@@ -1019,4 +1032,5 @@ async function saveRouting() {
 loadRouting();
 loadProvModels();
 setInterval(loadRouting, 15000);
+applyHashTab();
 {% endraw %}</script>{% endblock %}
