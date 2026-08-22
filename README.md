@@ -452,23 +452,24 @@ Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 1444 unit tests covering routing (incl. benchmark-driven capability routing, runtime enable toggle, `unit_tests` taxonomy), budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
+| `pytest` | Test runner — 1473 unit tests covering routing (incl. benchmark-driven capability routing, runtime enable toggle, `unit_tests` taxonomy), budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**94% overall** — 6,693 of 7,138 statements covered (1444 tests, 0 integration tests).
+**94% overall** — 6,851 of 7,326 statements covered (1473 tests, 0 integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 
 | Module | Coverage |
 |---|---|
+| `src/__init__.py` | 100% |
 | `src/api/__init__.py` | 100% |
 | `src/api/alert_manager.py` | 99% |
 | `src/api/benchmark.py` | 95% |
 | `src/api/benchmark_import.py` | 97% |
-| `src/api/circuit_breaker.py` | 100% |
+| `src/api/circuit_breaker.py` | 98% |
 | `src/api/config.py` | 98% |
 | `src/api/cost_cache.py` | 92% |
 | `src/api/cost_estimator.py` | 100% |
@@ -477,9 +478,9 @@ Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 | `src/api/cost_plugins/commandcode_api.py` | 94% |
 | `src/api/cost_plugins/deepseek.py` | 94% |
 | `src/api/cost_plugins/llamacpp.py` | 96% |
-| `src/api/cost_plugins/opencode.py` | 94% |
-| `src/api/cost_plugins/opencode_api.py` | 100% |
-| `src/api/credential_store.py` | 97% |
+| `src/api/cost_plugins/opencode.py` | 90% |
+| `src/api/cost_plugins/opencode_api.py` | 91% |
+| `src/api/credential_store.py` | 98% |
 | `src/api/crypto.py` | 100% |
 | `src/api/exceptions.py` | 100% |
 | `src/api/key_manager.py` | 98% |
