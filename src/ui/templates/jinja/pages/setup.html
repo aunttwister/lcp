@@ -117,8 +117,8 @@ function installState(step) {
 
 function statusBadge(step) {
   const state = installState(step);
+  if (state === 'done') return '';  // no "installed" label — just the Remove button
   const map = {
-    done: ['success', 'installed'],
     running: ['fallback', 'installing…'],
     failed: ['error', 'failed'],
     required: ['error', 'required'],
@@ -141,9 +141,7 @@ function stepCard(step) {
     ? '<button class="btn btn-outline btn-sm" data-log="' + step.kind + '-' + step.name + '">Logs</button>' : '';
   const state = installState(step);
   const action = state === 'done'
-    ? '<span class="muted" style="font-size:0.7rem">✓ installed</span>' +
-      ' <button class="btn btn-outline btn-sm" data-install="' + step.kind + ':' + esc(step.name) + '">Reinstall</button>' +
-      ' <button class="btn btn-outline btn-sm btn-danger" data-remove="' + step.kind + ':' + esc(step.name) + '">Remove</button>'
+    ? ' <button class="btn btn-outline btn-sm btn-danger" data-remove="' + step.kind + ':' + esc(step.name) + '">Remove</button>'
     : (state === 'running'
       ? '<span class="muted" style="font-size:0.7rem">installing…</span>'
       : '<button class="btn btn-outline btn-sm" data-install="' + step.kind + ':' + esc(step.name) + '">Install</button>');
