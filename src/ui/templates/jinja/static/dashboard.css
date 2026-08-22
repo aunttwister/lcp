@@ -712,6 +712,7 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   max-width: 100%;
 }
 .sb-usage-detail {
+  display: block;
   font-size: 0.625rem; color: hsl(var(--muted-foreground));
   font-family: 'SF Mono', 'Fira Code', monospace;
   opacity: 0.85; line-height: 1.4;

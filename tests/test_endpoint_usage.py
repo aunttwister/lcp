@@ -129,6 +129,7 @@ def _seed(engine):
                 timestamp=now, profile="l2", model="deepseek-v4-pro", provider="opencode",
                 prompt_tokens=100, completion_tokens=50, cache_hit_tokens=0,
                 cache_miss_tokens=100, cost=0.01, latency_ms=10, success=0, error_type="timeout",
+                error_detail="Provider opencode timed out after 10s",
             ),
         ])
         s.commit()
@@ -284,6 +285,8 @@ class TestLogsApi:
         body = _json_body(h)
         assert body["total"] == 1
         assert body["rows"][0]["success"] is False
+        # Error reason must be surfaced to the Logs page.
+        assert body["rows"][0]["error_detail"] == "Provider opencode timed out after 10s"
 
     def test_filter_by_status_success(self, temp_db):
         _seed(temp_db)

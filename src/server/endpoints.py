@@ -2673,6 +2673,7 @@ class DashboardEndpoints:
                         "latency_ms": r.latency_ms,
                         "success": bool(r.success),
                         "error_type": r.error_type,
+                        "error_detail": r.error_detail,
                     })
 
             self._send_json({

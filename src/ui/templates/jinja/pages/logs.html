@@ -177,7 +177,7 @@ function fetchLogs() {
             ? '<span class="badge-ok">ok</span>'
             : '<span class="badge-err"' + detailAttr + '>' + (r.error_type || 'err') + '</span>';
           var errCell = r.error_detail
-            ? '<td class="error-tooltip"><span class="err-cell">' + (r.error_type || '') + '</span><span class="tooltip-text">' + esc(r.error_detail).slice(0, 500) + '</span></td>'
+            ? '<td class="error-tooltip"><span class="err-cell">' + esc(r.error_detail).slice(0, 140) + '</span><span class="tooltip-text">' + esc(r.error_detail).slice(0, 500) + '</span></td>'
             : '<td>' + (r.error_type || '') + '</td>';
           html += '<tr>' +
             '<td class="mono">' + r.id + '</td>' +
