@@ -3,8 +3,12 @@
   <nav class="sidebar-nav">
     <div class="nav-label">Monitor</div>
     <a href="/dashboard"{% if active_page == 'dashboard' %} class="active"{% endif %}>Dashboard</a>
-    <a href="/usage"{% if active_page == 'usage' %} class="active"{% endif %}>Usage</a>
-    <div class="sb-usage-submenu" id="usageSubmenu"></div>
+    <div class="sb-usage-nav" id="usageNav">
+      <a href="/usage"{% if active_page == 'usage' %} class="active"{% endif %}>Usage
+        <span class="sb-usage-chev" id="usageChevron" onclick="event.preventDefault();event.stopPropagation();toggleUsageSubmenu()" title="Toggle provider details">▾</span>
+      </a>
+      <div class="sb-usage-submenu" id="usageSubmenu"></div>
+    </div>
     <a href="/logs"{% if active_page == 'logs' %} class="active"{% endif %}>Logs</a>
     <a href="/alerts"{% if active_page == 'alerts' %} class="active"{% endif %}>Alerts <span id="sidebarAlertBadge" class="sb-alert-badge" style="display:none">0</span></a>
 

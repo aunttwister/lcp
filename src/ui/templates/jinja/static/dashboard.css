@@ -691,10 +691,21 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 
 /* ── Usage submenu (provider links nested under the Usage nav) ── */
+.sb-usage-nav > a {
+  display: flex; align-items: center;
+}
+.sb-usage-chev {
+  margin-left: auto; font-size: 0.625rem; cursor: pointer;
+  color: hsl(var(--muted-foreground)); padding: 0.125rem 0.25rem;
+  border-radius: 4px; transition: transform 0.18s ease;
+}
+.sb-usage-chev:hover { background: hsl(var(--secondary)); }
+.sb-usage-chev.collapsed { transform: rotate(-90deg); }
 .sb-usage-submenu {
   padding: 0.125rem 0.75rem 0.25rem 1.5rem;
   display: flex; flex-direction: column;
 }
+.sb-usage-submenu.collapsed { display: none; }
 .sb-usage-submenu a {
   display: flex; flex-direction: column;
   padding: 0.3rem 0.75rem; border-radius: var(--radius);
