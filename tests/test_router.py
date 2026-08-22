@@ -472,6 +472,72 @@ def test_apply_rules_both_wildcards_matches_nothing(registry_db, monkeypatch):
     assert candidates[0]["provider"] == "opencode"
     assert not fired
 
+def test_rule_target_normalizes_provider_side_model_id(registry_db, monkeypatch):
+    """A rule written with the logical model name matches a chain step whose
+    model is a provider-side ID (commandcode: deepseek/deepseek-v4-pro)."""
+    router = _rule_router(registry_db, monkeypatch, [])
+    rule = {"provider": "*", "model": "deepseek-v4-pro"}
+    step = {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"}
+    assert router._rule_target(rule, step) is True
+
+def test_apply_rules_prefer_first_match_wins(registry_db, monkeypatch):
+    """The first matching prefer (in rule order) wins; later prefers don't
+    override it."""
+    router = _rule_router(registry_db, monkeypatch, [
+        {"task": "*", "action": "prefer", "provider": "*", "model": "deepseek-v4-pro"},
+        {"task": "*", "action": "prefer", "provider": "*", "model": "deepseek-v4-flash"},
+    ])
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    candidates, fired = router._apply_rules(chain, "code_generation", "l2")
+    assert candidates[0]["model"] == "deepseek-v4-pro"
+    assert [f["action"] for f in fired] == ["prefer"]
+
+def test_select_step_prefer_is_mandatory(registry_db, monkeypatch):
+    """A fired prefer pins the step: even if scoring favors another step, the
+    router returns the preferred one first (no reorder away). Also verifies the
+    model-ID normalization (pro under commandcode's provider-side ID)."""
+    rules = [{"task": "planning", "profile": "*", "action": "prefer",
+              "provider": "*", "model": "deepseek-v4-pro"}]
+    router = _rule_router(registry_db, monkeypatch, rules)
+    monkeypatch.setattr(router, "_effective_policy", lambda config: ("eager", 0.0))
+    # Flash would outscore pro on planning — prefer must still win.
+    monkeypatch.setattr(router, "score_step",
+                        lambda step, task, profile=None, config=None, bias=None:
+                        0.9 if step["model"] == "deepseek-v4-flash" else 0.7)
+    chain = [{"provider": "deepseek", "model": "deepseek-v4-flash"},
+             {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"}]
+    out = router.select_step([{"role": "user", "content": "design the architecture"}],
+                             chain=chain, profile="coder")
+    assert out is not None
+    assert out[0]["provider"] == "commandcode"
+    assert out[0]["model"] == "deepseek/deepseek-v4-pro"
+    dec = router.recent_decisions()[-1]
+    assert dec["action"] == "prefer"
+    assert dec["rules"] == ["prefer"]
+    assert dec["task"] == "planning"
+
+def test_select_step_prefer_gate_skip_still_scores(registry_db, monkeypatch):
+    """When a prefer is skipped by its min_score gate (no prefer fires), the
+    router falls through to normal scoring."""
+    rules = [{"task": "planning", "profile": "*", "action": "prefer",
+              "provider": "*", "model": "deepseek-v4-pro", "min_score": 0.99}]
+    router = _rule_router(registry_db, monkeypatch, rules)
+    monkeypatch.setattr(router, "_effective_policy", lambda config: ("eager", 0.0))
+    monkeypatch.setattr(router, "score_step",
+                        lambda step, task, profile=None, config=None, bias=None:
+                        0.9 if step["model"] == "deepseek-v4-flash" else 0.7)
+    chain = [{"provider": "deepseek", "model": "deepseek-v4-flash"},
+             {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"}]
+    out = router.select_step([{"role": "user", "content": "design the architecture"}],
+                             chain=chain, profile="coder")
+    # No prefer fired → eager keeps the default (flash is already first/highest).
+    # The router returns None to keep the chain order.
+    assert out is None
+    dec = router.recent_decisions()[-1]
+    assert dec["rules"] == ["prefer_skipped_low_score"]
+    assert dec["action"] == "keep_default"
+
 def test_select_step_policy_rule_override(registry_db, monkeypatch):
     rules = [{"profile": "cron", "action": "policy", "policy": "cost_first"}]
     router = _rule_router(registry_db, monkeypatch, rules)

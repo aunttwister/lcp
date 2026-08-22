@@ -627,20 +627,28 @@ class CapabilityRouter:
             return task in rt
         return rt == task
 
-    @staticmethod
-    def _rule_target(rule: dict, step: dict) -> bool:
+    def _rule_target(self, rule: dict, step: dict) -> bool:
         """True if the step matches a prefer/block rule's provider/model.
 
         ``"*"`` / ``""`` act as wildcards, so a rule can target ONLY a model
         (any provider) or ONLY a provider (any model). At least one concrete
         provider/model must be present.
+
+        Model IDs are normalized through the registry (``logical_model_name``)
+        so a rule written with the logical name (e.g. ``deepseek-v4-pro``)
+        matches a chain step whose model is a provider-side ID (e.g.
+        commandcode's ``deepseek/deepseek-v4-pro``). Provider names are
+        compared literally (they are plain config names).
         """
         provider = rule.get("provider")
         model = rule.get("model")
         if provider and provider not in ("*", "") and provider != step["provider"]:
             return False
-        if model and model not in ("*", "") and model != step["model"]:
-            return False
+        if model and model not in ("*", ""):
+            rule_model = logical_model_name(model, self.db_path)
+            step_model = logical_model_name(step["model"], self.db_path)
+            if rule_model != step_model:
+                return False
         has_provider = bool(provider and provider not in ("*", ""))
         has_model = bool(model and model not in ("*", ""))
         return has_provider or has_model
@@ -680,7 +688,8 @@ class CapabilityRouter:
                     "task": rule.get("task", "*"),
                 })
 
-        # Pass 2 — prefers (first-match wins: move the first matching step up).
+        # Pass 2 — prefers (first-match wins: pin the first matching step to
+        # the front, then STOP — a later prefer must not override it).
         for rule in rules:
             if rule.get("action") != "prefer" or not self._rule_matches(rule, task, profile):
                 continue
@@ -707,6 +716,7 @@ class CapabilityRouter:
                 "provider": step["provider"], "model": step["model"],
                 "profile": rule.get("profile", "*"), "task": rule.get("task", "*"),
             })
+            break
 
         return candidates, fired
 
@@ -747,6 +757,23 @@ class CapabilityRouter:
             return None
         chain = candidates
         fired_desc = [f["action"] for f in fired_rules]
+
+        # A fired `prefer` rule is MANDATORY: the preferred step is pinned
+        # first and the router must NOT reorder away from it. Eager/cost_first/
+        # explore scoring and the min_score floor are bypassed for this request.
+        # Chain fallback still applies at call time (try_chain skips the pinned
+        # step if its provider is dead or vision-incompatible).
+        if "prefer" in fired_desc:
+            pinned = chain[0]
+            self._record_decision({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "profile": profile or "", "task": task, "policy": policy,
+                "action": "prefer", "model": pinned["model"],
+                "provider": pinned["provider"],
+                "score": round(self.score_step(pinned, task, profile, config), 3),
+                "rules": fired_desc,
+            })
+            return chain
 
         # cost_first: boost the cost component of the score.
         bias = None

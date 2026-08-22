@@ -147,14 +147,24 @@ decision log so the Routing tab can show *why* a step was chosen.
   `gateway.yaml` seeds defaults when no setting exists.
 - `CapabilityRouter._rules(config)` (settings wins, config fallback),
   `_rule_matches(rule, task, profile)` (profile/task `"*"` or list),
-  `_rule_target(rule, step)` (provider and/or model match), and
+  `_rule_target(rule, step)` (provider and/or model match — model IDs are
+  normalized through the registry via `logical_model_name`, so a rule written
+  with a logical name like `deepseek-v4-pro` also matches a chain step whose
+  model is a provider-side ID like `deepseek/deepseek-v4-pro`), and
   `_apply_rules(chain, task, profile, config)` → `(candidates, fired)`:
   - **`block`** removes matching steps (provider-wide blocks supported).
-  - **`prefer`** moves the first matching step to the front, with an optional
-    `min_score` gate (skipped → `prefer_skipped_low_score`). First-match wins.
+  - **`prefer`** is **mandatory**: the first matching prefer (in rule order)
+    pins its step to the front and `select_step` returns it WITHOUT further
+    scoring — eager/cost_first/explore and the `min_score` floor cannot
+    reorder away from it. First-match wins (later prefers for the same scope
+    are ignored). An optional `min_score` gate may skip the prefer
+    (`prefer_skipped_low_score`), in which case normal scoring applies. Chain
+    fallback still works at call time if the pinned provider is dead or
+    vision-incompatible.
   - **`policy`** overrides the policy for the matching scope (before scoring).
 - `select_step` applies rules after `classify_task`/policy resolution and before
-  scoring; fired rules are recorded on every decision (`rules` key).
+  scoring; a fired `prefer` short-circuits scoring and records a decision with
+  `action: "prefer"`. Fired rules are recorded on every decision (`rules` key).
 - API: `GET /api/routing/status` returns `rules`; `POST /api/routing/rules`
   validates (action ∈ prefer|block|policy, prefer/block need provider and/or
   model, policy rule needs a valid policy, min_score numeric) and persists.
