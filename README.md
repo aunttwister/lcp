@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1444%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-1473%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -46,6 +46,16 @@ services.
 It was built for a production multi-agent homelab setup managing 6 Hermes profiles with 15+
 custom skills, where knowing exactly what is being spent, by whom, and with what tools is
 critical. The same instance also serves as the LLM backend for daily VS Code Copilot usage.
+
+> ✨ **Headline feature: benchmark-driven routing.** Grade your models with LiveBench (or
+> your own benchmark), and LCP classifies every request by task type and routes it to the
+> best-fit (provider, model) — balancing capability, cost, circuit-breaker health, and your
+> own policy/rules — all tunable from the UI, no restarts. See [Benchmarking](#benchmarking-livebench).
+
+<!--
+  Add a real demo here: 2–3 screenshots or a GIF (dashboard, Providers → Routing tab, Usage).
+  e.g. ![Dashboard](docs/screenshots/dashboard.png)
+-->
 
 ```
 Clients (agents, VS Code, scripts, curl)
@@ -386,18 +396,27 @@ past runs.
 
 ## Why LCP over alternatives?
 
-| | LCP | LiteLLM | llmgateway |
-|---|---|---|---|
-| **Tool permission enforcement** | Yes, per profile | No | No |
-| **Deployment** | Single container, SQLite | Container + PostgreSQL + Redis | Container |
-| **Dashboard** | Server-rendered HTML, no build | React SPA | Next.js SPA |
-| **License** | AGPL-3.0, all features included | MIT core, enterprise tier | Source-available |
-| **Memory footprint** | ~100 MB baseline | 500 MB+ service stack | Node.js baseline |
-| **Agent-native** | Built for Hermes agents | Generic API proxy | Generic API proxy |
-| **API key management** | Virtual keys, spend limits | Virtual keys | Limited |
+| | LCP | LiteLLM | OpenRouter | one-api |
+|---|---|---|---|---|
+| **Benchmark-driven routing** | ✅ per-request, by task type | ⚠️ model weights only | ⚠️ provider-only | ❌ |
+| **Circuit breaker + health** | ✅ per (provider, profile) | ⚠️ basic retries | ⚠️ partial | ❌ |
+| **Agent tool permission enforcement** | ✅ per profile | ❌ | ❌ | ❌ |
+| **Per-agent budgets & virtual keys** | ✅ | ✅ keys only | ❌ | ✅ |
+| **Deployment** | One container, SQLite | Container + PG + Redis | SaaS | Container + DB |
+| **Credentials** | Encrypted at rest (UI-managed) | Env vars | SaaS-managed | Env vars |
+| **Dashboard / UI** | Server-rendered, no build | React SPA | SaaS | Web UI |
+| **License** | AGPL-3.0, everything included | MIT core + enterprise | SaaS | MIT |
 
-LCP is the only open-source LLM gateway with agent tool permission enforcement. No other
-gateway strips tools based on who is calling. If you run AI agents in production, this matters.
+What makes LCP different isn't just proxying — it's **decisions**:
+
+- **Every request is classified and routed to the best (provider, model) for that task**, using
+  LiveBench/benchmark capability scores plus cost bias, circuit-breaker health, and your own
+  rules — all editable live in the UI.
+- **Agent-native control**: per-profile tool permissions, budgets, and keys, so you can run
+  many agents (Hermes, Claude Code, Copilot, cron) behind one gateway and know exactly who
+  spent what, with what tools.
+- **Zero external services**: one container, SQLite, hot-reloadable YAML. No Postgres, no
+  Redis, no cloud.
 
 ## Architecture
 
