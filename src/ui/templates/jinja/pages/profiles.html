@@ -11,7 +11,7 @@
 <p class="subtitle">Manage routing profiles, fallback chains, and tool restrictions</p>
 
 <div style="display:flex;gap:0.5rem;margin-bottom:1rem">
-  <button class="btn-sm btn-primary" onclick="addProfile()">+ Add Profile</button>
+  <button class="btn-sm btn-primary" onclick="openAddProfile()">+ Add Profile</button>
 </div>
 
 <div class="table-wrap">
@@ -33,8 +33,8 @@
   <td style="font-size:0.75rem">{{ steps | join(' → ') or '—' }}</td>
   <td style="font-size:0.6875rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ forbidden | join(', ') }}">{{ forbidden | join(', ') or 'none' }}</td>
   <td class="mono" style="font-size:0.6875rem">/{{ pname }}/chat/completions</td>
-  <td><button class="btn-sm" onclick="editProfile('{{ pname }}')">Edit</button>
-      <button class="btn-sm btn-danger" onclick="deleteProfile('{{ pname }}')">Del</button></td>
+  <td class="profile-actions"><button class="btn-sm" onclick="editProfile('{{ pname }}')">Edit</button>
+      <button class="btn-sm btn-danger" onclick="deleteProfile('{{ pname }}')">Delete</button></td>
 </tr>
 {% endfor %}
 </tbody>
@@ -49,6 +49,10 @@
     <button class="modal-close dialog-close" onclick="closeProfileEdit()">✕</button>
   </div>
   <div class="modal-body dialog-body">
+    <div style="margin-bottom:0.75rem" id="pemNameRow">
+      <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Profile Name</label>
+      <input id="pemName" placeholder="e.g. admin (lowercase)" style="width:100%;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+    </div>
     <div style="margin-bottom:0.75rem">
       <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Access Control</label>
       <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.8125rem">
@@ -83,7 +87,7 @@
   </div>
   <div class="modal-footer dialog-footer">
     <span id="pemSaveStatus" style="font-size:0.6875rem;color:hsl(var(--muted-foreground));margin-right:auto"></span>
-    <button class="btn-sm btn-primary" onclick="saveProfileEdit()">Save</button>
+    <button class="btn-sm btn-primary" id="pemSaveBtn" onclick="saveProfileEdit()">Save</button>
     <button class="btn-sm" onclick="closeProfileEdit()">Cancel</button>
   </div>
 </div>
@@ -93,6 +97,34 @@
 {% block scripts %}
 <script>
 {% raw %}
+var _addProfileMode = false;
+
+function openAddProfile() {
+  _addProfileMode = true;
+  _editProfileName = '';
+  _editProfileTools = [];
+  _editProfileChain = [];
+  api('GET', '/api/providers').then(function(d) {
+    _allProviders = d.providers || {};
+    _allChains = d.profile_chains || {};
+    document.getElementById('pemProfileTitle').textContent = 'Add Profile';
+    document.getElementById('pemNameRow').style.display = '';
+    document.getElementById('pemName').value = '';
+    document.getElementById('pemAuthRequired').checked = true;
+    document.getElementById('pemAuthRequired').nextElementSibling.textContent = 'API key required';
+    document.getElementById('pemBudgetAmount').value = '';
+    document.getElementById('pemBudgetAction').value = 'log';
+    document.getElementById('pemBudgetThresholds').value = '';
+    document.getElementById('pemBudgetSpend').value = '';
+    document.getElementById('pemSaveStatus').textContent = '';
+    document.getElementById('pemSaveBtn').textContent = 'Create Profile';
+    renderPemTools();
+    renderPemChain();
+    openDialog('profileEditModal');
+    document.getElementById('pemName').focus();
+  });
+}
+
 function addProfile() {
   var name = prompt('Profile name (lowercase, e.g. "admin"):');
   if (!name) return;
@@ -117,6 +149,7 @@ var _allProviders = {};
 var _allChains = {};
 
 function editProfile(name) {
+  _addProfileMode = false;
   _editProfileName = name;
   api('GET', '/api/providers').then(function(d) {
     _allProviders = d.providers || {};
@@ -126,6 +159,9 @@ function editProfile(name) {
       var prof = (pd.profiles || {})[name] || {};
       _editProfileTools = (prof.forbidden || []).slice();
       document.getElementById('pemProfileTitle').textContent = 'Edit Profile: ' + name.toUpperCase();
+      document.getElementById('pemNameRow').style.display = 'none';
+      document.getElementById('pemName').value = '';
+      document.getElementById('pemSaveBtn').textContent = 'Save';
       var authReq = prof.auth_required !== false;
       document.getElementById('pemAuthRequired').checked = authReq;
       document.getElementById('pemAuthRequired').nextElementSibling.textContent = authReq ? 'API key required' : 'No key required (public)';
@@ -234,6 +270,29 @@ function saveProfileEdit() {
     });
     return {provider: s.provider, model: s.model, base_url: bu};
   });
+
+  if (_addProfileMode) {
+    var name = document.getElementById('pemName').value.trim().toLowerCase();
+    if (!name) { statusEl.textContent = 'Enter a profile name'; statusEl.style.color = 'hsl(var(--red-fg))'; return; }
+    return api('POST', '/api/profiles', { name: name }).then(function(create) {
+      if (!create.ok) { statusEl.textContent = create.error || 'Create failed'; statusEl.style.color = 'hsl(var(--red-fg))'; return; }
+      _editProfileName = name;
+      return api('PUT', '/api/chains/' + name, {chain: chain}).then(function() {
+        return api('PUT', '/api/profiles/' + name, {
+          forbidden_tools: _editProfileTools,
+          auth_required: document.getElementById('pemAuthRequired').checked
+        });
+      });
+    }).then(function() {
+      statusEl.textContent = 'Profile created';
+      statusEl.style.color = 'hsl(var(--green-fg))';
+      setTimeout(function() { location.reload(); }, 800);
+    }).catch(function(e) {
+      statusEl.textContent = 'Create failed: ' + (e.message || e);
+      statusEl.style.color = 'hsl(var(--red-fg))';
+    });
+  }
+
   api('PUT', '/api/chains/' + _editProfileName, {chain: chain}).then(function(chainResult) {
     return api('PUT', '/api/profiles/' + _editProfileName, {
       forbidden_tools: _editProfileTools,

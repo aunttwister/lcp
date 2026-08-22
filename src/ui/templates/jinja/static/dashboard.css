@@ -247,7 +247,14 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 /* ── Provider Management ── */
 .provider-mgmt { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-.provider-mgmt .prov-list {  }
+
+/* Row action buttons (e.g. Profiles Edit/Delete) — spaced + wrap cleanly */
+.profile-actions {
+  white-space: nowrap;
+}
+.profile-actions .btn-sm + .btn-sm {
+  margin-left: 0.5rem;
+}
 .prov-item {
   display: flex; align-items: center; justify-content: space-between;
   padding: 0.625rem 0.75rem; margin-bottom: 0.375rem;
