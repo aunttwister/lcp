@@ -74,6 +74,33 @@ def test_classify_agentic():
     msgs = [{"role": "system", "content": "You are an AI agent with tools: read_file, write_file"}]
     assert classify_task(msgs) == "agentic_multi_step"
 
+def test_classify_agentic_system_prompt_does_not_mask_planning():
+    """An agentic system prompt must not mask a concrete planning user msg."""
+    msgs = [
+        {"role": "system", "content": "You are an AI agent with tools: read_file, write_file, terminal"},
+        {"role": "user", "content": "design the architecture for a microservice"},
+    ]
+    assert classify_task(msgs) == "planning"
+
+def test_classify_agentic_system_prompt_does_not_mask_debugging():
+    msgs = [
+        {"role": "system", "content": "You are a coding agent. tools: terminal, patch"},
+        {"role": "user", "content": "debug why this returns a TypeError"},
+    ]
+    assert classify_task(msgs) == "debugging"
+
+def test_classify_agentic_system_prompt_does_not_mask_unit_tests():
+    msgs = [
+        {"role": "system", "content": "You are a coding agent with tools: write_file"},
+        {"role": "user", "content": "write unit tests for the payment module"},
+    ]
+    assert classify_task(msgs) == "unit_tests"
+
+def test_classify_agentic_system_prompt_only_still_agentic():
+    """With no concrete user task, the agentic system prompt still wins."""
+    msgs = [{"role": "system", "content": "You are an AI agent with tools: read_file, write_file"}]
+    assert classify_task(msgs) == "agentic_multi_step"
+
 def test_classify_planning():
     msgs = [{"role": "user", "content": "design the architecture for a microservice"}]
     assert classify_task(msgs) == "planning"
@@ -139,6 +166,21 @@ def test_init_router_passes_cost_bias(registry_db):
         assert r.cost_bias == 0.4
     finally:
         # restore the default so other tests aren't affected
+        init_router(enabled=False)
+
+def test_sync_router_enabled_from_settings(registry_db, monkeypatch):
+    """Boot seeds enabled=False from the yaml baseline; the persisted UI toggle
+    must re-sync the global router to enabled=True."""
+    init_router(registry_db, enabled=False)
+    try:
+        class FakeSettings:
+            def get_routing_enabled(self, default=None):
+                return True
+        monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: FakeSettings())
+        from src.api.router import sync_router_enabled_from_settings
+        assert sync_router_enabled_from_settings() is True
+        assert get_dynamic_router().enabled is True
+    finally:
         init_router(enabled=False)
 
 def test_get_model_score_resolves_debugging_via_matrix(registry_db):
@@ -537,6 +579,49 @@ def test_select_step_prefer_gate_skip_still_scores(registry_db, monkeypatch):
     dec = router.recent_decisions()[-1]
     assert dec["rules"] == ["prefer_skipped_low_score"]
     assert dec["action"] == "keep_default"
+
+def test_select_step_agentic_system_prompt_still_fires_planning_prefer(registry_db, monkeypatch):
+    """Regression: an agentic system prompt must not mask a planning request —
+    the planning prefer rule must fire and pin pro even though the system
+    prompt is agentic and flash scores higher on planning."""
+    rules = [{"task": "planning", "profile": "*", "action": "prefer",
+              "provider": "*", "model": "deepseek-v4-pro"}]
+    router = _rule_router(registry_db, monkeypatch, rules)
+    monkeypatch.setattr(router, "_effective_policy", lambda config: ("eager", 0.0))
+    # Flash out-scores pro on planning — prefer must still win.
+    monkeypatch.setattr(router, "score_step",
+                        lambda step, task, profile=None, config=None, bias=None:
+                        0.9 if step["model"] == "deepseek-v4-flash" else 0.7)
+    chain = [{"provider": "deepseek", "model": "deepseek-v4-flash"},
+             {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"}]
+    msgs = [
+        {"role": "system", "content": "You are an AI agent with tools: read_file, write_file, terminal"},
+        {"role": "user", "content": "design the architecture for a microservice"},
+    ]
+    out = router.select_step(msgs, chain=chain, profile="coder")
+    assert out is not None
+    assert out[0]["model"] == "deepseek/deepseek-v4-pro"
+    dec = router.recent_decisions()[-1]
+    assert dec["task"] == "planning"
+    assert dec["action"] == "prefer"
+    assert dec["rules"] == ["prefer"]
+
+def test_select_step_audit_note_when_rule_matches_scope_but_not_fired(registry_db, monkeypatch):
+    """When a rule matches the task scope but no action fires (e.g. the only
+    matching rule is a policy override), the decision carries an audit note."""
+    rules = [{"profile": "cron", "action": "policy", "policy": "cost_first"}]
+    router = _rule_router(registry_db, monkeypatch, rules)
+    monkeypatch.setattr(router, "_effective_policy", lambda config: ("eager", 0.0))
+    monkeypatch.setattr(router, "score_step",
+                        lambda step, task, profile=None, config=None, bias=None:
+                        0.9 if step["model"] == "deepseek-v4-pro" else 0.6)
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    # cron profile → policy rule flips policy but doesn't "fire" a prefer/block.
+    out = router.select_step([{"role": "user", "content": "hi"}], chain=chain, profile="cron")
+    dec = router.recent_decisions()[-1]
+    assert dec["note"] is not None
+    assert "matched scope" in dec["note"]
 
 def test_select_step_policy_rule_override(registry_db, monkeypatch):
     rules = [{"profile": "cron", "action": "policy", "policy": "cost_first"}]

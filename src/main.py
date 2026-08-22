@@ -90,6 +90,15 @@ def main():
     t0 = _startup_step("cost_cache_init", t0)
     logger.info("cost_cache_initialized", ttl_minutes=settings.get_ttl_minutes())
 
+    # The UI toggle (settings.routing_enabled) overrides the gateway.yaml
+    # baseline — re-sync the router's enabled state so boot reflects it.
+    try:
+        from .api.router import sync_router_enabled_from_settings
+        effective = sync_router_enabled_from_settings()
+        logger.info("dynamic_router_synced", enabled=effective)
+    except Exception:  # noqa: BLE001 — never block boot
+        logger.warning("dynamic_router_sync_failed", error=True)
+
     # Initialize alert manager with DB engine for persistence
     init_alert_manager(engine)
     t0 = _startup_step("alert_manager_init", t0)

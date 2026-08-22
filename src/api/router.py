@@ -123,6 +123,15 @@ CASUAL_SIGNALS = [
     "what's up", "good morning", "good night",
 ]
 
+# Task types that carry concrete user intent (vs. ``agentic_multi_step``, which
+# is the generic "I am an agent" preamble most agents send). Classification
+# checks these against the system prompt / user messages FIRST so the agentic
+# catch-all can't mask e.g. a planning request.
+_SPECIFIC_TASKS = (
+    "planning", "debugging", "unit_tests", "code_generation",
+    "reasoning_chain", "research_deep",
+)
+
 
 def classify_task(
     messages: list[dict],
@@ -132,7 +141,22 @@ def classify_task(
     """Classify a request into a task type.
 
     Examines system prompt, tool usage, message content, and metadata.
-    First match wins — order matters.
+
+    Priority (first match wins):
+      1. System prompt — but only for SPECIFIC task signals (planning,
+         debugging, unit_tests, code_generation, reasoning_chain,
+         research_deep). An agentic system prompt does NOT immediately win:
+         it's the generic "I am an agent" preamble most agents send, and it
+         must not mask the user's actual intent.
+      2. All messages (user + assistant) — specific task signals.
+      3. Agentic system prompt (the catch-all) — only now.
+      4. Tool-count / token-count / max_tokens heuristics, then casual, then
+         the code_generation default.
+
+    This ordering matters: a Hermes agent sends an agentic system prompt
+    ("you are an AI agent", "tools:", …) on EVERY request, so if that won
+    first, a user message like "design the architecture" would never reach
+    the ``planning`` rule. User intent now wins over the agent preamble.
     """
     # Gather all text to classify
     combined = ""
@@ -145,24 +169,30 @@ def classify_task(
                 if isinstance(block, dict) and "text" in block:
                     combined += block["text"].lower() + " "
 
-    # System prompt signals (weighted first — system prompt defines the agent)
+    # System prompt signals — but only the SPECIFIC tasks (not agentic).
     system_text = ""
     if messages and messages[0].get("role") == "system":
         content = messages[0].get("content", "")
         if isinstance(content, str):
             system_text = content.lower()
 
-    # Check system prompt first
-    for task, keywords in TASK_SIGNALS.items():
-        for kw in keywords:
+    # 1. System prompt: specific tasks only.
+    for task in _SPECIFIC_TASKS:
+        for kw in TASK_SIGNALS[task]:
             if kw in system_text:
                 return task
 
-    # Then check all messages
-    for task, keywords in TASK_SIGNALS.items():
-        for kw in keywords:
+    # 2. All messages: specific tasks first (this is where user intent lives).
+    for task in _SPECIFIC_TASKS:
+        for kw in TASK_SIGNALS[task]:
             if kw in combined:
                 return task
+
+    # 3. Agentic system prompt — the generic agent preamble, checked AFTER the
+    #    user's explicit task so it can't mask planning/debugging/unit_tests etc.
+    for kw in TASK_SIGNALS["agentic_multi_step"]:
+        if kw in system_text:
+            return "agentic_multi_step"
 
     # Tool count signal — many tools = agentic
     tool_count = len(tools) if tools else 0
@@ -758,6 +788,24 @@ class CapabilityRouter:
         chain = candidates
         fired_desc = [f["action"] for f in fired_rules]
 
+        # Audit: why didn't a rule fire? Surfaces silent rule misses in the
+        # decision log (e.g. "rules exist for planning but task=agentic…").
+        note = None
+        rules = self._rules(config)
+        if rules:
+            scope_matched = [r for r in rules
+                             if self._rule_matches(r, task, profile or "")]
+            if scope_matched and not fired_desc:
+                note = (
+                    f"{len(scope_matched)} rule(s) matched scope for task "
+                    f"{task!r} but none fired"
+                )
+            elif scope_matched:
+                note = (
+                    f"{len(scope_matched)} rule(s) matched scope; fired: "
+                    f"{', '.join(fired_desc) or 'none'}"
+                )
+
         # A fired `prefer` rule is MANDATORY: the preferred step is pinned
         # first and the router must NOT reorder away from it. Eager/cost_first/
         # explore scoring and the min_score floor are bypassed for this request.
@@ -771,7 +819,7 @@ class CapabilityRouter:
                 "action": "prefer", "model": pinned["model"],
                 "provider": pinned["provider"],
                 "score": round(self.score_step(pinned, task, profile, config), 3),
-                "rules": fired_desc,
+                "rules": fired_desc, "note": note,
             })
             return chain
 
@@ -793,7 +841,7 @@ class CapabilityRouter:
                 "profile": profile or "", "task": task, "policy": policy,
                 "action": "below_min_score", "model": best["model"],
                 "provider": best["provider"], "score": round(best_score, 3),
-                "rules": fired_desc,
+                "rules": fired_desc, "note": note,
             })
             return None
 
@@ -812,7 +860,7 @@ class CapabilityRouter:
                         "profile": profile or "", "task": task, "policy": policy,
                         "action": "explore", "model": pick["model"],
                         "provider": pick["provider"], "score": round(picked_score, 3),
-                        "rules": fired_desc,
+                        "rules": fired_desc, "note": note,
                     })
                     return [pick, *rest]
                 self._record_decision({
@@ -820,7 +868,7 @@ class CapabilityRouter:
                     "profile": profile or "", "task": task, "policy": policy,
                     "action": "keep_default", "model": chain[0]["model"],
                     "provider": chain[0]["provider"], "score": round(best_score, 3),
-                    "rules": fired_desc,
+                    "rules": fired_desc, "note": note,
                 })
                 return None
 
@@ -830,7 +878,7 @@ class CapabilityRouter:
                 "profile": profile or "", "task": task, "policy": policy,
                 "action": "keep_default", "model": chain[0]["model"],
                 "provider": chain[0]["provider"], "score": round(default_score, 3),
-                "rules": fired_desc,
+                "rules": fired_desc, "note": note,
             })
             return None
 
@@ -849,7 +897,7 @@ class CapabilityRouter:
             "action": "reorder", "model": best["model"],
             "provider": best["provider"], "score": round(best_score, 3),
             "from_model": chain[0]["model"], "from_provider": chain[0]["provider"],
-            "rules": fired_desc,
+            "rules": fired_desc, "note": note,
         })
         return [best, *rest]
 
@@ -871,6 +919,27 @@ def init_router(db_path: str = "data/costs.db", enabled: bool = False,
                                        cost_bias=cost_bias)
     if enabled:
         _dynamic_router.load_matrix()  # warm the cache
+
+
+def sync_router_enabled_from_settings() -> bool:
+    """Re-apply the persisted ``routing_enabled`` toggle to the global router.
+
+    Boot seeds ``enabled`` from ``gateway.yaml`` (which may be the ``false``
+    baseline). Once the settings store is available (after ``init_settings``),
+    this re-syncs so the effective state — and the boot log — reflects the UI
+    toggle. Returns the effective enabled state.
+    """
+    global _dynamic_router
+    try:
+        from .cost_cache import get_settings
+        settings = get_settings()
+        if settings is not None:
+            override = settings.get_routing_enabled(default=None)
+            if override is not None:
+                _dynamic_router.enabled = override
+    except Exception:  # noqa: BLE001 — never fail boot
+        pass
+    return _dynamic_router.enabled
 
 
 def invalidate_router_matrix() -> None:
