@@ -5,7 +5,7 @@
     <a href="/dashboard"{% if active_page == 'dashboard' %} class="active"{% endif %}>Dashboard</a>
     <div class="sb-usage-nav" id="usageNav">
       <a href="/usage"{% if active_page == 'usage' %} class="active"{% endif %}>Usage
-        <span class="sb-usage-chev" id="usageChevron" onclick="event.preventDefault();event.stopPropagation();toggleUsageSubmenu()" title="Toggle provider details">▾</span>
+        <span class="sb-usage-chev" id="usageChevron" onclick="event.preventDefault();event.stopPropagation();toggleUsageSubmenu()" title="Toggle provider details"><i aria-hidden="true"></i></span>
       </a>
       <div class="sb-usage-submenu" id="usageSubmenu"></div>
     </div>
