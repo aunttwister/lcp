@@ -18,6 +18,31 @@ function closeSidebar() {
 
 // ── Usage submenu collapse ──────────────────────────────────────────────
 // Persists collapsed state per user; auto-expands when on the /usage page.
+// Expanding/collapsing animates by measuring the content height and
+// animating max-height (0 ⇄ natural-height px).
+
+function animateUsageSubmenu(menu, collapsed) {
+  if (!menu) return;
+  if (collapsed) {
+    // Animate from the current measured height down to 0.
+    var h = menu.scrollHeight;
+    menu.style.maxHeight = h + 'px';
+    void menu.offsetHeight; // force reflow so the start value registers
+    menu.style.maxHeight = '0px';
+  } else {
+    // Animate from 0 up to the natural height, then unlock.
+    menu.style.maxHeight = 'none';
+    var h = menu.scrollHeight;
+    menu.style.maxHeight = '0px';
+    void menu.offsetHeight;
+    menu.style.maxHeight = h + 'px';
+    menu.addEventListener('transitionend', function handler() {
+      menu.style.maxHeight = 'none';
+      menu.removeEventListener('transitionend', handler);
+    });
+  }
+}
+
 function toggleUsageSubmenu() {
   var menu = document.getElementById('usageSubmenu');
   var chev = document.getElementById('usageChevron');
@@ -25,6 +50,7 @@ function toggleUsageSubmenu() {
   var collapsed = menu.classList.toggle('collapsed');
   if (chev) chev.classList.toggle('collapsed', collapsed);
   localStorage.setItem('lcp-usage-submenu', collapsed ? 'collapsed' : 'open');
+  animateUsageSubmenu(menu, collapsed);
 }
 
 function initUsageSubmenu() {
@@ -37,6 +63,8 @@ function initUsageSubmenu() {
   var collapsed = onUsage ? false : saved === 'collapsed';
   menu.classList.toggle('collapsed', collapsed);
   chev.classList.toggle('collapsed', collapsed);
+  // No animation on first paint: jump straight to the right height.
+  menu.style.maxHeight = collapsed ? '0px' : 'none';
 }
 
 (function () {

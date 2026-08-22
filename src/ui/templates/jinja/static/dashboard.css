@@ -727,8 +727,16 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .sb-usage-submenu {
   padding: 0.125rem 0.75rem 0.25rem 1.5rem;
   display: flex; flex-direction: column;
+  overflow: hidden;
+  max-height: none;
+  transition: max-height 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+              padding 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.sb-usage-submenu.collapsed { display: none; }
+.sb-usage-submenu.collapsed {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
 .sb-usage-submenu a {
   display: flex; flex-direction: column;
   padding: 0.3rem 0.75rem; border-radius: var(--radius);
