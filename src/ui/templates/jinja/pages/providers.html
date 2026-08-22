@@ -982,8 +982,19 @@ function ruleProviderOptions(cur) {
 }
 
 function ruleModelOptions(provider, cur) {
+  // When a specific provider is selected, list only its models. When provider
+  // is '*' (or empty), list ALL models across providers (deduped) so a rule can
+  // target a model regardless of which provider serves it.
   let models = [];
-  if (provider && provider !== '*' && PROV_MODELS[provider]) models = PROV_MODELS[provider].slice();
+  if (provider && provider !== '*' && PROV_MODELS[provider]) {
+    models = PROV_MODELS[provider].slice();
+  } else {
+    const seen = {};
+    Object.keys(PROV_MODELS).forEach(function(p) {
+      (PROV_MODELS[p] || []).forEach(function(m) { if (!seen[m]) { seen[m] = 1; models.push(m); } });
+    });
+    models.sort();
+  }
   const opts = [{value:'*', label:'*'}, ...models.map(m => ({value:m, label:m}))];
   if (cur && cur !== '*' && !models.includes(cur)) opts.push({value: cur, label: cur});
   return opts;

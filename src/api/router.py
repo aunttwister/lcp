@@ -629,15 +629,21 @@ class CapabilityRouter:
 
     @staticmethod
     def _rule_target(rule: dict, step: dict) -> bool:
-        """True if the step matches a prefer/block rule's provider/model."""
+        """True if the step matches a prefer/block rule's provider/model.
+
+        ``"*"`` / ``""`` act as wildcards, so a rule can target ONLY a model
+        (any provider) or ONLY a provider (any model). At least one concrete
+        provider/model must be present.
+        """
         provider = rule.get("provider")
         model = rule.get("model")
-        if provider and provider != step["provider"]:
+        if provider and provider not in ("*", "") and provider != step["provider"]:
             return False
-        if model and model != step["model"]:
+        if model and model not in ("*", "") and model != step["model"]:
             return False
-        # At least one of provider/model must be present.
-        return bool(provider or model)
+        has_provider = bool(provider and provider not in ("*", ""))
+        has_model = bool(model and model not in ("*", ""))
+        return has_provider or has_model
 
     def _apply_rules(self, chain: list, task: str, profile: str,
                      config: Optional[object] = None) -> tuple[list, list]:

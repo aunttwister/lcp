@@ -438,6 +438,40 @@ def test_apply_rules_prefer_min_score_gate(registry_db, monkeypatch):
     assert candidates[0]["provider"] == "opencode"
     assert fired and fired[0]["action"] == "prefer_skipped_low_score"
 
+def test_apply_rules_model_only_prefer(registry_db, monkeypatch):
+    """A rule with only a model (provider '*' wildcard) matches any provider."""
+    router = _rule_router(registry_db, monkeypatch,
+                          [{"task": "*", "action": "prefer",
+                            "provider": "*", "model": "deepseek-v4-pro"}])
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    candidates, fired = router._apply_rules(chain, "code_generation", "l2")
+    assert candidates[0]["model"] == "deepseek-v4-pro"
+    assert candidates[0]["provider"] == "deepseek"
+    assert fired and fired[0]["action"] == "prefer"
+
+def test_apply_rules_model_only_block(registry_db, monkeypatch):
+    """A block rule with only a model removes it from every provider."""
+    router = _rule_router(registry_db, monkeypatch,
+                          [{"task": "*", "action": "block",
+                            "provider": "*", "model": "deepseek-v4-flash"}])
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    candidates, fired = router._apply_rules(chain, "code_generation", "l2")
+    assert [s["model"] for s in candidates] == ["deepseek-v4-pro"]
+    assert fired and fired[0]["action"] == "block"
+
+def test_apply_rules_both_wildcards_matches_nothing(registry_db, monkeypatch):
+    """provider='*' AND model='*' has no concrete target → no-op."""
+    router = _rule_router(registry_db, monkeypatch,
+                          [{"task": "*", "action": "prefer",
+                            "provider": "*", "model": "*"}])
+    chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
+             {"provider": "deepseek", "model": "deepseek-v4-pro"}]
+    candidates, fired = router._apply_rules(chain, "code_generation", "l2")
+    assert candidates[0]["provider"] == "opencode"
+    assert not fired
+
 def test_select_step_policy_rule_override(registry_db, monkeypatch):
     rules = [{"profile": "cron", "action": "policy", "policy": "cost_first"}]
     router = _rule_router(registry_db, monkeypatch, rules)

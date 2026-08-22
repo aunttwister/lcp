@@ -141,7 +141,8 @@ function stepCard(step) {
     ? '<button class="btn btn-outline btn-sm" data-log="' + step.kind + '-' + step.name + '">Logs</button>' : '';
   const state = installState(step);
   const action = state === 'done'
-    ? '<span class="muted" style="font-size:0.7rem">✓ done</span>' +
+    ? '<span class="muted" style="font-size:0.7rem">✓ installed</span>' +
+      ' <button class="btn btn-outline btn-sm" data-install="' + step.kind + ':' + esc(step.name) + '">Reinstall</button>' +
       ' <button class="btn btn-outline btn-sm btn-danger" data-remove="' + step.kind + ':' + esc(step.name) + '">Remove</button>'
     : (state === 'running'
       ? '<span class="muted" style="font-size:0.7rem">installing…</span>'
