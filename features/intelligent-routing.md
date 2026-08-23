@@ -153,15 +153,24 @@ decision log so the Routing tab can show *why* a step was chosen.
   model is a provider-side ID like `deepseek/deepseek-v4-pro`), and
   `_apply_rules(chain, task, profile, config)` → `(candidates, fired)`:
   - **`block`** removes matching steps (provider-wide blocks supported).
-  - **`prefer`** is **mandatory**: the first matching prefer (in rule order)
-    pins its step to the front and `select_step` returns it WITHOUT further
-    scoring — eager/cost_first/explore and the `min_score` floor cannot
-    reorder away from it. First-match wins (later prefers for the same scope
-    are ignored). An optional `min_score` gate may skip the prefer
-    (`prefer_skipped_low_score`), in which case normal scoring applies. Chain
-    fallback still works at call time if the pinned provider is dead or
-    vision-incompatible.
+  - **`prefer`** is **mandatory** and groups: ALL steps matching the preferred
+    model (on any provider) are moved to the front, preserving their relative
+    order — so a degraded provider serving the preferred model falls to the
+    NEXT provider of the SAME model, not to a cheaper model. `select_step`
+    returns this order WITHOUT further scoring — eager/cost_first/explore and
+    the `min_score` floor cannot reorder away from it. First-match wins (later
+    prefers for the same scope are ignored). An optional `min_score` gate may
+    skip the prefer (`prefer_skipped_low_score`), in which case normal scoring
+    applies.
   - **`policy`** overrides the policy for the matching scope (before scoring).
+- **Division of labour with the circuit breaker**: when dynamic routing is
+  enabled, the ROUTER owns model selection and ordering, and the circuit
+  breaker only GATES PROVIDERS. `select_step` first drops steps whose provider
+  is unavailable (`cb.is_available` — dead / hard-tripped), so the ordering
+  never proposes a provider the breaker would skip, and a degraded provider
+  never sits between two healthy providers of the preferred model. `try_chain`
+  still calls the breaker as a safety net, but the static chain order no longer
+  drives model selection when routing is on.
 - `select_step` applies rules after `classify_task`/policy resolution and before
   scoring; a fired `prefer` short-circuits scoring and records a decision with
   `action: "prefer"`. Fired rules are recorded on every decision (`rules` key).

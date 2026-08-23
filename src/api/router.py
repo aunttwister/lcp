@@ -563,6 +563,28 @@ class CapabilityRouter:
         except Exception:  # noqa: BLE001 — tiebreaker must never break routing
             return 0.0
 
+    def _provider_available(self, step: dict, profile: Optional[str] = None,
+                            config: Optional[object] = None) -> bool:
+        """True when the step's provider is available to the circuit breaker.
+
+        This is the breaker's provider-level GATE (dead/hard-tripped providers
+        are excluded). When dynamic routing is enabled, the router decides
+        model selection + ordering and the breaker only gates providers — so
+        the router never proposes a provider the breaker would skip. Returns
+        True when the breaker is unavailable (e.g. tests) to never break
+        routing.
+        """
+        try:
+            from .circuit_breaker import get_circuit_breaker
+            provider = step["provider"]
+            base_url = step.get("base_url") or ""
+            if config is not None and not base_url:
+                base_url = (config.providers or {}).get(provider, {}).get("api_base", "")
+            cb = get_circuit_breaker()
+            return cb.is_available(provider, base_url, profile or "")
+        except Exception:  # noqa: BLE001 — gate must never break routing
+            return True
+
     def _credit_bonus(self, provider: str) -> float:
         """Penalty when a provider's cached usage suggests low credits.
 
@@ -718,33 +740,43 @@ class CapabilityRouter:
                     "task": rule.get("task", "*"),
                 })
 
-        # Pass 2 — prefers (first-match wins: pin the first matching step to
-        # the front, then STOP — a later prefer must not override it).
+        # Pass 2 — prefers (first-match wins, ALL matching steps grouped to the
+        # front). A prefer rule means "this task must use the preferred model on
+        # EVERY provider before any other model", so we move EVERY step matching
+        # the rule (preserving their relative order) to the front — not just the
+        # first one. That way, if the first provider serving the model is
+        # degraded, the chain falls to the NEXT provider serving the same model,
+        # not to a different (cheaper) model. Later prefers are ignored.
         for rule in rules:
             if rule.get("action") != "prefer" or not self._rule_matches(rule, task, profile):
                 continue
             if not rule.get("provider") and not rule.get("model"):
                 continue
-            idx = next((i for i, s in enumerate(candidates)
-                        if self._rule_target(rule, s)), None)
-            if idx is None:
+            matches = [i for i, s in enumerate(candidates)
+                       if self._rule_target(rule, s)]
+            if not matches:
                 continue
-            step = candidates[idx]
             gate = rule.get("min_score")
             if gate is not None:
-                cap = self.get_model_score(step["model"], task)
+                cap = self.get_model_score(candidates[matches[0]]["model"], task)
                 if cap < float(gate):
                     fired.append({
                         "action": "prefer_skipped_low_score",
-                        "provider": step["provider"], "model": step["model"],
+                        "provider": candidates[matches[0]]["provider"],
+                        "model": candidates[matches[0]]["model"],
                         "score": round(cap, 3), "min_score": float(gate),
                     })
                     continue
-            candidates.insert(0, candidates.pop(idx))
+            matched = [candidates[i] for i in matches]
+            match_set = set(matches)
+            rest = [s for i, s in enumerate(candidates) if i not in match_set]
+            candidates = matched + rest
             fired.append({
                 "action": "prefer",
-                "provider": step["provider"], "model": step["model"],
+                "provider": rule.get("provider") or "*",
+                "model": rule.get("model") or "*",
                 "profile": rule.get("profile", "*"), "task": rule.get("task", "*"),
+                "steps": len(matched),
             })
             break
 
@@ -772,6 +804,17 @@ class CapabilityRouter:
             return None
         policy, min_score = self._effective_policy(config)
         task = classify_task(messages, tools, max_tokens)
+
+        # The circuit breaker only GATES PROVIDERS; the router owns model
+        # selection and ordering. Drop steps whose provider is currently
+        # unavailable (dead / hard-tripped) so the ordering never proposes a
+        # provider the breaker would skip, and so a degraded provider serving
+        # the preferred model falls to the NEXT provider of the same model
+        # instead of a cheaper model. (When routing is off, try_chain uses the
+        # static chain + breaker as before.)
+        chain = [s for s in chain if self._provider_available(s, profile, config)]
+        if not chain:
+            return None
 
         # Apply UI-defined rules: blocks filter candidates; prefers pin a step;
         # policy rules override the policy for this scope.

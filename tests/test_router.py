@@ -535,6 +535,26 @@ def test_apply_rules_prefer_first_match_wins(registry_db, monkeypatch):
     assert candidates[0]["model"] == "deepseek-v4-pro"
     assert [f["action"] for f in fired] == ["prefer"]
 
+def test_apply_rules_prefer_groups_all_matching_model_steps(registry_db, monkeypatch):
+    """A prefer rule groups ALL steps serving the preferred model to the front
+    (preserving their relative order), so a degraded provider falls to the next
+    provider of the SAME model, not to a cheaper model."""
+    router = _rule_router(registry_db, monkeypatch,
+                          [{"task": "*", "action": "prefer",
+                            "provider": "*", "model": "deepseek-v4-pro"}])
+    chain = [
+        {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"},
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        {"provider": "opencode", "model": "deepseek-v4-pro"},
+        {"provider": "opencode", "model": "ox-alpha-free"},
+    ]
+    candidates, fired = router._apply_rules(chain, "planning", "coder")
+    models = [c["model"] for c in candidates]
+    assert models == ["deepseek/deepseek-v4-pro", "deepseek-v4-pro",
+                      "deepseek-v4-flash", "ox-alpha-free"]
+    assert fired[0]["action"] == "prefer"
+    assert fired[0].get("steps") == 2
+
 def test_select_step_prefer_is_mandatory(registry_db, monkeypatch):
     """A fired prefer pins the step: even if scoring favors another step, the
     router returns the preferred one first (no reorder away). Also verifies the
@@ -605,6 +625,31 @@ def test_select_step_agentic_system_prompt_still_fires_planning_prefer(registry_
     assert dec["task"] == "planning"
     assert dec["action"] == "prefer"
     assert dec["rules"] == ["prefer"]
+
+def test_select_step_filters_unavailable_provider(registry_db, monkeypatch):
+    """The circuit breaker only gates PROVIDERS: when a provider is unavailable,
+    the router drops its steps entirely, so the ordering never proposes it — and
+    a prefer rule groups the preferred model across the remaining providers."""
+    rules = [{"task": "planning", "profile": "*", "action": "prefer",
+              "provider": "*", "model": "deepseek-v4-pro"}]
+    router = _rule_router(registry_db, monkeypatch, rules)
+    monkeypatch.setattr(router, "_effective_policy", lambda config: ("eager", 0.0))
+    # commandcode unavailable → its pro step is dropped; opencode pro survives.
+    monkeypatch.setattr(router, "_provider_available",
+                        lambda step, profile=None, config=None:
+                        step["provider"] != "commandcode")
+    chain = [
+        {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"},
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        {"provider": "opencode", "model": "deepseek-v4-pro"},
+    ]
+    msgs = [{"role": "user", "content": "design the architecture"}]
+    out = router.select_step(msgs, chain=chain, profile="coder")
+    assert out is not None
+    # commandcode dropped; opencode pro grouped before flash.
+    assert [s["provider"] for s in out] == ["opencode", "deepseek"]
+    assert [s["model"] for s in out] == ["deepseek-v4-pro", "deepseek-v4-flash"]
+    assert router.recent_decisions()[-1]["action"] == "prefer"
 
 def test_select_step_audit_note_when_rule_matches_scope_but_not_fired(registry_db, monkeypatch):
     """When a rule matches the task scope but no action fires (e.g. the only
