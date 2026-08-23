@@ -112,9 +112,9 @@ TASK_SIGNALS: dict[str, list[str]] = {
         "equation", "theorem",
     ],
     "planning": [
-        "design", "architecture", "how should i structure",
-        "plan", "roadmap", "strategy", "approach",
-        "best practice", "recommend", "suggest",
+        "design", "architecture", "architect", "system design",
+        "how should i structure", "roadmap", "data model", "schema",
+        "tech stack", "plan the", "make a plan", "create a plan",
     ],
 }
 
@@ -128,8 +128,8 @@ CASUAL_SIGNALS = [
 # checks these against the system prompt / user messages FIRST so the agentic
 # catch-all can't mask e.g. a planning request.
 _SPECIFIC_TASKS = (
-    "planning", "debugging", "unit_tests", "code_generation",
-    "reasoning_chain", "research_deep",
+    "unit_tests", "debugging", "code_generation",
+    "planning", "reasoning_chain", "research_deep",
 )
 
 
@@ -147,15 +147,17 @@ def classify_task(
          system prompt) for SPECIFIC task signals: planning, debugging,
          unit_tests, code_generation, reasoning_chain, research_deep.
       2. Agentic system prompt ("you are an AI agent", "tools:", …).
-      3. Tool-count / token-count / max_tokens heuristics, then casual, then
-         the code_generation default.
+      3. Tool-count / token-count heuristics, then casual, then the
+         code_generation default.
 
     The system prompt is deliberately NOT scanned for specific task keywords:
     it's a fixed preamble that contains incidental words ("plan", "strategy",
     "recommend", "suggest", "best practice", …) on EVERY request, so scanning
     it would classify everything as ``planning``. Agentic detection still uses
     the system prompt because "tools:" / "you are an AI agent" are genuinely
-    meaningful markers there.
+    meaningful markers there. Likewise, a long ``max_tokens`` no longer forces
+    ``planning`` (an agent implementing code often requests a large output
+    budget, which is not a planning signal).
     """
     # Gather conversation text (user/assistant/tool) — NOT the system prompt.
     combined = ""
@@ -196,10 +198,6 @@ def classify_task(
     token_count = count_tokens(messages, tools)
     if token_count > 8000:
         return "research_deep"
-
-    # Expected output signal — long max_tokens suggests reasoning/planning
-    if max_tokens > 4096:
-        return "planning"
 
     # Check casual signals
     for kw in CASUAL_SIGNALS:

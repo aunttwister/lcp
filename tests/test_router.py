@@ -127,6 +127,21 @@ def test_classify_planning():
     msgs = [{"role": "user", "content": "design the architecture for a microservice"}]
     assert classify_task(msgs) == "planning"
 
+def test_classify_recommend_not_planning():
+    """Bare 'recommend'/'suggest' must NOT force planning (too generic)."""
+    msgs = [{"role": "user", "content": "recommend a good book to read"}]
+    assert classify_task(msgs) != "planning"
+
+def test_classify_implement_not_planning_even_with_long_max_tokens():
+    """A code request with a large output budget must NOT be classified planning."""
+    msgs = [{"role": "user", "content": "implement a sorting algorithm in python"}]
+    assert classify_task(msgs, max_tokens=16384) == "code_generation"
+
+def test_classify_long_max_tokens_no_longer_forces_planning():
+    """Long max_tokens alone is not a planning signal."""
+    msgs = [{"role": "user", "content": "write me a report about whales"}]
+    assert classify_task(msgs, max_tokens=16384) != "planning"
+
 def test_classify_casual():
     msgs = [{"role": "user", "content": "hello, how are you?"}]
     assert classify_task(msgs) == "casual_chat"
