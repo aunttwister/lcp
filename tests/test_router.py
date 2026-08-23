@@ -101,6 +101,28 @@ def test_classify_agentic_system_prompt_only_still_agentic():
     msgs = [{"role": "system", "content": "You are an AI agent with tools: read_file, write_file"}]
     assert classify_task(msgs) == "agentic_multi_step"
 
+def test_classify_system_prompt_planning_keywords_do_not_force_planning():
+    """Regression: a system prompt full of incidental planning keywords (plan,
+    strategy, recommend, suggest, best practice) must NOT classify a code
+    request as planning. Classification must use conversation content, not the
+    fixed agent preamble."""
+    msgs = [
+        {"role": "system", "content": (
+            "You are a coding assistant. Plan your approach, recommend best "
+            "practices, suggest a strategy, and design clean architecture.")},
+        {"role": "user", "content": "implement a sorting algorithm in python"},
+    ]
+    assert classify_task(msgs) == "code_generation"
+
+def test_classify_planning_keywords_in_user_message_win():
+    """Planning keywords in the USER message (actual intent) still classify as
+    planning even when the system prompt is generic."""
+    msgs = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "design the architecture for a microservice"},
+    ]
+    assert classify_task(msgs) == "planning"
+
 def test_classify_planning():
     msgs = [{"role": "user", "content": "design the architecture for a microservice"}]
     assert classify_task(msgs) == "planning"

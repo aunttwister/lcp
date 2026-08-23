@@ -140,27 +140,28 @@ def classify_task(
 ) -> str:
     """Classify a request into a task type.
 
-    Examines system prompt, tool usage, message content, and metadata.
+    Examines conversation content, tool usage, and metadata.
 
     Priority (first match wins):
-      1. System prompt — but only for SPECIFIC task signals (planning,
-         debugging, unit_tests, code_generation, reasoning_chain,
-         research_deep). An agentic system prompt does NOT immediately win:
-         it's the generic "I am an agent" preamble most agents send, and it
-         must not mask the user's actual intent.
-      2. All messages (user + assistant) — specific task signals.
-      3. Agentic system prompt (the catch-all) — only now.
-      4. Tool-count / token-count / max_tokens heuristics, then casual, then
+      1. Conversation content (user / assistant / tool messages — NOT the
+         system prompt) for SPECIFIC task signals: planning, debugging,
+         unit_tests, code_generation, reasoning_chain, research_deep.
+      2. Agentic system prompt ("you are an AI agent", "tools:", …).
+      3. Tool-count / token-count / max_tokens heuristics, then casual, then
          the code_generation default.
 
-    This ordering matters: a Hermes agent sends an agentic system prompt
-    ("you are an AI agent", "tools:", …) on EVERY request, so if that won
-    first, a user message like "design the architecture" would never reach
-    the ``planning`` rule. User intent now wins over the agent preamble.
+    The system prompt is deliberately NOT scanned for specific task keywords:
+    it's a fixed preamble that contains incidental words ("plan", "strategy",
+    "recommend", "suggest", "best practice", …) on EVERY request, so scanning
+    it would classify everything as ``planning``. Agentic detection still uses
+    the system prompt because "tools:" / "you are an AI agent" are genuinely
+    meaningful markers there.
     """
-    # Gather all text to classify
+    # Gather conversation text (user/assistant/tool) — NOT the system prompt.
     combined = ""
     for msg in messages or []:
+        if msg.get("role") == "system":
+            continue
         content = msg.get("content", "")
         if isinstance(content, str):
             combined += content.lower() + " "
@@ -169,27 +170,19 @@ def classify_task(
                 if isinstance(block, dict) and "text" in block:
                     combined += block["text"].lower() + " "
 
-    # System prompt signals — but only the SPECIFIC tasks (not agentic).
     system_text = ""
     if messages and messages[0].get("role") == "system":
         content = messages[0].get("content", "")
         if isinstance(content, str):
             system_text = content.lower()
 
-    # 1. System prompt: specific tasks only.
-    for task in _SPECIFIC_TASKS:
-        for kw in TASK_SIGNALS[task]:
-            if kw in system_text:
-                return task
-
-    # 2. All messages: specific tasks first (this is where user intent lives).
+    # 1. Conversation content: specific task signals (actual user intent).
     for task in _SPECIFIC_TASKS:
         for kw in TASK_SIGNALS[task]:
             if kw in combined:
                 return task
 
-    # 3. Agentic system prompt — the generic agent preamble, checked AFTER the
-    #    user's explicit task so it can't mask planning/debugging/unit_tests etc.
+    # 2. Agentic system prompt — the generic agent preamble.
     for kw in TASK_SIGNALS["agentic_multi_step"]:
         if kw in system_text:
             return "agentic_multi_step"
