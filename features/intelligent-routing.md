@@ -153,15 +153,16 @@ decision log so the Routing tab can show *why* a step was chosen.
   model is a provider-side ID like `deepseek/deepseek-v4-pro`), and
   `_apply_rules(chain, task, profile, config)` → `(candidates, fired)`:
   - **`block`** removes matching steps (provider-wide blocks supported).
-  - **`prefer`** is **mandatory** and groups: ALL steps matching the preferred
-    model (on any provider) are moved to the front, preserving their relative
-    order — so a degraded provider serving the preferred model falls to the
-    NEXT provider of the SAME model, not to a cheaper model. `select_step`
-    returns this order WITHOUT further scoring — eager/cost_first/explore and
-    the `min_score` floor cannot reorder away from it. First-match wins (later
-    prefers for the same scope are ignored). An optional `min_score` gate may
-    skip the prefer (`prefer_skipped_low_score`), in which case normal scoring
-    applies.
+  - **`prefer`** is **mandatory** and **expands across providers**: the router
+    emits one step for EVERY unique provider (in chain order, deduped) that
+    serves the preferred model, using `provider_model_name` to get the
+    provider-side model ID. A degraded provider serving the preferred model
+    falls to the NEXT provider of the SAME model — not to a cheaper one.
+    `select_step` returns this order WITHOUT further scoring — eager/cost_first/
+    explore and the `min_score` floor cannot reorder away from it. First-match
+    wins (later prefers for the same scope are ignored). An optional `min_score`
+    gate may skip the prefer (`prefer_skipped_low_score`), in which case normal
+    scoring applies.
   - **`policy`** overrides the policy for the matching scope (before scoring).
 - **Division of labour with the circuit breaker**: when dynamic routing is
   enabled, the ROUTER owns model selection and ordering, and the circuit

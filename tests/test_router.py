@@ -446,6 +446,22 @@ def _rule_router(registry_db, monkeypatch, rules, config=None):
     monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: FakeSettings())
     return router
 
+
+def _prov_config(providers):
+    """A minimal config stub with provider model lists (for prefer expansion)."""
+    class _Cfg:
+        pass
+    cfg = _Cfg()
+    cfg.providers = providers
+    return cfg
+
+
+REAL_PROVIDERS = {
+    "commandcode": {"models": ["deepseek-v4-pro", "deepseek-v4-flash"]},
+    "deepseek": {"models": ["deepseek-v4-pro", "deepseek-v4-flash"]},
+    "opencode": {"models": ["deepseek-v4-pro", "deepseek-v4-flash", "ox-alpha-free"]},
+}
+
 def test_apply_rules_block_removes_provider(registry_db, monkeypatch):
     router = _rule_router(registry_db, monkeypatch,
                           [{"task": "*", "action": "block", "provider": "opencode"}])
@@ -481,15 +497,17 @@ def test_apply_rules_prefer_min_score_gate(registry_db, monkeypatch):
     assert fired and fired[0]["action"] == "prefer_skipped_low_score"
 
 def test_apply_rules_model_only_prefer(registry_db, monkeypatch):
-    """A rule with only a model (provider '*' wildcard) matches any provider."""
+    """A rule with only a model (provider '*' wildcard) expands to every
+    provider that serves the model, in chain order."""
     router = _rule_router(registry_db, monkeypatch,
                           [{"task": "*", "action": "prefer",
                             "provider": "*", "model": "deepseek-v4-pro"}])
     chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
              {"provider": "deepseek", "model": "deepseek-v4-pro"}]
-    candidates, fired = router._apply_rules(chain, "code_generation", "l2")
+    candidates, fired = router._apply_rules(chain, "code_generation", "l2",
+                                            _prov_config(REAL_PROVIDERS))
     assert candidates[0]["model"] == "deepseek-v4-pro"
-    assert candidates[0]["provider"] == "deepseek"
+    assert candidates[0]["provider"] == "opencode"  # chain order: opencode first
     assert fired and fired[0]["action"] == "prefer"
 
 def test_apply_rules_model_only_block(registry_db, monkeypatch):
@@ -535,10 +553,10 @@ def test_apply_rules_prefer_first_match_wins(registry_db, monkeypatch):
     assert candidates[0]["model"] == "deepseek-v4-pro"
     assert [f["action"] for f in fired] == ["prefer"]
 
-def test_apply_rules_prefer_groups_all_matching_model_steps(registry_db, monkeypatch):
-    """A prefer rule groups ALL steps serving the preferred model to the front
-    (preserving their relative order), so a degraded provider falls to the next
-    provider of the SAME model, not to a cheaper model."""
+def test_apply_rules_prefer_expands_across_providers(registry_db, monkeypatch):
+    """A prefer rule expands the preferred model to EVERY provider that serves
+    it, in chain order, before the chain's other models. So a degraded provider
+    falls to the NEXT provider of the SAME model — not to a cheaper one."""
     router = _rule_router(registry_db, monkeypatch,
                           [{"task": "*", "action": "prefer",
                             "provider": "*", "model": "deepseek-v4-pro"}])
@@ -548,17 +566,22 @@ def test_apply_rules_prefer_groups_all_matching_model_steps(registry_db, monkeyp
         {"provider": "opencode", "model": "deepseek-v4-pro"},
         {"provider": "opencode", "model": "ox-alpha-free"},
     ]
-    candidates, fired = router._apply_rules(chain, "planning", "coder")
+    candidates, fired = router._apply_rules(chain, "planning", "coder",
+                                            _prov_config(REAL_PROVIDERS))
     models = [c["model"] for c in candidates]
+    # commandcode-pro, deepseek-pro, opencode-pro, then fallbacks.
     assert models == ["deepseek/deepseek-v4-pro", "deepseek-v4-pro",
-                      "deepseek-v4-flash", "ox-alpha-free"]
+                      "deepseek-v4-pro", "deepseek-v4-flash", "ox-alpha-free"]
+    assert [c["provider"] for c in candidates] == [
+        "commandcode", "deepseek", "opencode", "deepseek", "opencode",
+    ]
     assert fired[0]["action"] == "prefer"
-    assert fired[0].get("steps") == 2
+    assert fired[0].get("steps") == 3
 
 def test_select_step_prefer_is_mandatory(registry_db, monkeypatch):
-    """A fired prefer pins the step: even if scoring favors another step, the
-    router returns the preferred one first (no reorder away). Also verifies the
-    model-ID normalization (pro under commandcode's provider-side ID)."""
+    """A fired prefer expands the preferred model across providers: even if
+    scoring favors flash, the router returns the preferred model first, tried on
+    every provider that serves it, before any other model."""
     rules = [{"task": "planning", "profile": "*", "action": "prefer",
               "provider": "*", "model": "deepseek-v4-pro"}]
     router = _rule_router(registry_db, monkeypatch, rules)
@@ -569,11 +592,16 @@ def test_select_step_prefer_is_mandatory(registry_db, monkeypatch):
                         0.9 if step["model"] == "deepseek-v4-flash" else 0.7)
     chain = [{"provider": "deepseek", "model": "deepseek-v4-flash"},
              {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"}]
+    cfg = _prov_config(REAL_PROVIDERS)
     out = router.select_step([{"role": "user", "content": "design the architecture"}],
-                             chain=chain, profile="coder")
+                             chain=chain, profile="coder", config=cfg)
     assert out is not None
-    assert out[0]["provider"] == "commandcode"
-    assert out[0]["model"] == "deepseek/deepseek-v4-pro"
+    # pro first on deepseek (chain order), then pro on commandcode, then flash.
+    assert out[0]["provider"] == "deepseek"
+    assert out[0]["model"] == "deepseek-v4-pro"
+    assert out[1]["provider"] == "commandcode"
+    assert out[1]["model"] == "deepseek/deepseek-v4-pro"
+    assert out[2]["model"] == "deepseek-v4-flash"
     dec = router.recent_decisions()[-1]
     assert dec["action"] == "prefer"
     assert dec["rules"] == ["prefer"]
@@ -618,9 +646,11 @@ def test_select_step_agentic_system_prompt_still_fires_planning_prefer(registry_
         {"role": "system", "content": "You are an AI agent with tools: read_file, write_file, terminal"},
         {"role": "user", "content": "design the architecture for a microservice"},
     ]
-    out = router.select_step(msgs, chain=chain, profile="coder")
+    out = router.select_step(msgs, chain=chain, profile="coder",
+                             config=_prov_config(REAL_PROVIDERS))
     assert out is not None
-    assert out[0]["model"] == "deepseek/deepseek-v4-pro"
+    # Preferred model expanded: deepseek-pro first (chain order), not flash.
+    assert out[0]["model"] == "deepseek-v4-pro"
     dec = router.recent_decisions()[-1]
     assert dec["task"] == "planning"
     assert dec["action"] == "prefer"
@@ -629,12 +659,13 @@ def test_select_step_agentic_system_prompt_still_fires_planning_prefer(registry_
 def test_select_step_filters_unavailable_provider(registry_db, monkeypatch):
     """The circuit breaker only gates PROVIDERS: when a provider is unavailable,
     the router drops its steps entirely, so the ordering never proposes it — and
-    a prefer rule groups the preferred model across the remaining providers."""
+    a prefer rule still expands the preferred model across the remaining
+    providers."""
     rules = [{"task": "planning", "profile": "*", "action": "prefer",
               "provider": "*", "model": "deepseek-v4-pro"}]
     router = _rule_router(registry_db, monkeypatch, rules)
     monkeypatch.setattr(router, "_effective_policy", lambda config: ("eager", 0.0))
-    # commandcode unavailable → its pro step is dropped; opencode pro survives.
+    # commandcode unavailable → its pro step is dropped; deepseek + opencode pro survive.
     monkeypatch.setattr(router, "_provider_available",
                         lambda step, profile=None, config=None:
                         step["provider"] != "commandcode")
@@ -644,11 +675,12 @@ def test_select_step_filters_unavailable_provider(registry_db, monkeypatch):
         {"provider": "opencode", "model": "deepseek-v4-pro"},
     ]
     msgs = [{"role": "user", "content": "design the architecture"}]
-    out = router.select_step(msgs, chain=chain, profile="coder")
+    out = router.select_step(msgs, chain=chain, profile="coder",
+                             config=_prov_config(REAL_PROVIDERS))
     assert out is not None
-    # commandcode dropped; opencode pro grouped before flash.
-    assert [s["provider"] for s in out] == ["opencode", "deepseek"]
-    assert [s["model"] for s in out] == ["deepseek-v4-pro", "deepseek-v4-flash"]
+    # commandcode dropped; pro expanded to deepseek + opencode, then flash.
+    assert [s["provider"] for s in out] == ["deepseek", "opencode", "deepseek"]
+    assert [s["model"] for s in out] == ["deepseek-v4-pro", "deepseek-v4-pro", "deepseek-v4-flash"]
     assert router.recent_decisions()[-1]["action"] == "prefer"
 
 def test_select_step_audit_note_when_rule_matches_scope_but_not_fired(registry_db, monkeypatch):

@@ -585,6 +585,26 @@ class CapabilityRouter:
         except Exception:  # noqa: BLE001 — gate must never break routing
             return True
 
+    def _provider_serves_model(self, provider: str, logical_model: str,
+                               config: Optional[object] = None) -> bool:
+        """True when *provider* exposes *logical_model* (per gateway.yaml models).
+
+        Providers with no explicit model list are treated as serving the model
+        (optimistic), so a prefer never silently drops a provider just because
+        its model list is unconfigured. Never raises.
+        """
+        try:
+            pcfg = (config.providers or {}).get(provider, {}) or {}
+            models = pcfg.get("models") or []
+            if not models:
+                return True
+            for m in models:
+                if logical_model_name(m, self.db_path) == logical_model:
+                    return True
+        except Exception:  # noqa: BLE001 — never break routing
+            return True
+        return False
+
     def _credit_bonus(self, provider: str) -> float:
         """Penalty when a provider's cached usage suggests low credits.
 
@@ -740,42 +760,85 @@ class CapabilityRouter:
                     "task": rule.get("task", "*"),
                 })
 
-        # Pass 2 — prefers (first-match wins, ALL matching steps grouped to the
-        # front). A prefer rule means "this task must use the preferred model on
-        # EVERY provider before any other model", so we move EVERY step matching
-        # the rule (preserving their relative order) to the front — not just the
-        # first one. That way, if the first provider serving the model is
-        # degraded, the chain falls to the NEXT provider serving the same model,
-        # not to a different (cheaper) model. Later prefers are ignored.
+        # Pass 2 — prefers (first-match wins). A prefer rule means "this task
+        # must use the preferred model on EVERY provider that serves it, in the
+        # chain's provider order, before any other model". We EXPAND the rule to
+        # one step per unique provider (deduped, first-seen order) that serves
+        # the preferred model — so a degraded provider falls to the NEXT provider
+        # of the SAME model, not to a cheaper one. Provider-only prefers (no
+        # model) keep the group-to-front behavior. Later prefers are ignored.
         for rule in rules:
             if rule.get("action") != "prefer" or not self._rule_matches(rule, task, profile):
                 continue
             if not rule.get("provider") and not rule.get("model"):
                 continue
+            rp = rule.get("provider") or "*"
+            rm = rule.get("model") or "*"
+            gate = rule.get("min_score")
+
+            pref_logical = None if rm in ("*", "") else logical_model_name(rm, self.db_path)
+
+            if pref_logical is not None:
+                # min_score gate on the preferred model's capability.
+                if gate is not None:
+                    cap = self.get_model_score(pref_logical, task)
+                    if cap < float(gate):
+                        fired.append({
+                            "action": "prefer_skipped_low_score",
+                            "provider": rp, "model": rm,
+                            "score": round(cap, 3), "min_score": float(gate),
+                        })
+                        continue
+
+                # One preferred step per unique provider (chain order) that
+                # serves the preferred model.
+                preferred: list[dict] = []
+                pref_keys: set[tuple] = set()
+                seen: set[str] = set()
+                for s in candidates:
+                    p = s["provider"]
+                    if p in seen:
+                        continue
+                    seen.add(p)
+                    if rp not in ("*", "") and p != rp:
+                        continue
+                    if not self._provider_serves_model(p, pref_logical, config):
+                        continue
+                    model_id = provider_model_name(pref_logical, p, self.db_path)
+                    step = {"provider": p, "model": model_id}
+                    if s.get("base_url"):
+                        step["base_url"] = s["base_url"]
+                    preferred.append(step)
+                    pref_keys.add((p, model_id))
+
+                if not preferred:
+                    continue
+                rest = [s for s in candidates
+                        if (s["provider"], s["model"]) not in pref_keys]
+                candidates = preferred + rest
+                fired.append({
+                    "action": "prefer",
+                    "provider": rp, "model": rm,
+                    "profile": rule.get("profile", "*"),
+                    "task": rule.get("task", "*"),
+                    "steps": len(preferred),
+                })
+                break
+
+            # Provider-only prefer: group the provider's steps to the front.
             matches = [i for i, s in enumerate(candidates)
                        if self._rule_target(rule, s)]
             if not matches:
                 continue
-            gate = rule.get("min_score")
-            if gate is not None:
-                cap = self.get_model_score(candidates[matches[0]]["model"], task)
-                if cap < float(gate):
-                    fired.append({
-                        "action": "prefer_skipped_low_score",
-                        "provider": candidates[matches[0]]["provider"],
-                        "model": candidates[matches[0]]["model"],
-                        "score": round(cap, 3), "min_score": float(gate),
-                    })
-                    continue
             matched = [candidates[i] for i in matches]
             match_set = set(matches)
             rest = [s for i, s in enumerate(candidates) if i not in match_set]
             candidates = matched + rest
             fired.append({
                 "action": "prefer",
-                "provider": rule.get("provider") or "*",
-                "model": rule.get("model") or "*",
-                "profile": rule.get("profile", "*"), "task": rule.get("task", "*"),
+                "provider": rp, "model": rm,
+                "profile": rule.get("profile", "*"),
+                "task": rule.get("task", "*"),
                 "steps": len(matched),
             })
             break
