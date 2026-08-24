@@ -103,7 +103,7 @@
 - **New derived task**: `unit_tests` derives from `code_generation` (a coding
   subskill, like `debugging`): `DERIVED_TASKS` now has both
   `"debugging": "code_generation"` and `"unit_tests": "code_generation"`. This
-  flows through `derived_task_scores`, both write paths
+  flows through both write paths
   (`materialize_capability_rows`, `_upsert_scores`), and the `load_capability_matrix`
   read-time safety net — so `unit_tests` resolves to real scores immediately.
 - **Classifier**: `unit_tests` added to `TASK_SIGNALS` (before `code_generation`
@@ -214,9 +214,10 @@ dynamic_routing:
 
 ## Overview
 
-LCP currently routes requests statically: a profile has a hardcoded provider chain,
-and the `DynamicRouter` (`src/api/router.py`) only does binary flash-vs-pro selection
-based on raw token/tool counts. This document proposes a three-tier vision:
+LCP routes requests through the `CapabilityRouter` (task classification + capability
+scoring). An earlier prototype — the `DynamicRouter` — only did binary flash-vs-pro
+selection based on raw token/tool counts and has been removed. This document lays out
+the three-tier vision:
 
 | Tier | What | When |
 |------|------|------|
@@ -230,14 +231,10 @@ based on raw token/tool counts. This document proposes a three-tier vision:
 
 ### Current State (what we have)
 
-`src/api/router.py` — `DynamicRouter` with 3 hardcoded thresholds:
-- `tokens > 2000` → pro
-- `tools > 3` → pro
-- `max_tokens > 2048` → pro
-
-Hardcoded to exactly two models (`deepseek-v4-pro` / `deepseek-v4-flash`).
-Disabled by default (`self.enabled = False`). Only consulted in `src/ui/dashboard.py`
-— **not wired into the request pipeline**.
+The original `DynamicRouter` (3 hardcoded thresholds, binary flash/pro) has been
+**removed**. `CapabilityRouter` classifies every request by task type and scores
+models from the capability matrix, balancing capability, cost, health, and
+policy/rules — wired into the request pipeline via `select_step()`.
 
 ### What Open Source Projects Do
 
@@ -433,7 +430,7 @@ def score_model(task: str, model: str, matrix, pricing, cost_bias: float) -> flo
 
 ### Integration Points
 
-1. **`src/api/router.py`** — New `CapabilityRouter` class replacing `DynamicRouter`
+1. **`src/api/router.py`** — `CapabilityRouter` class (the legacy `DynamicRouter` was removed in the cleanup)
 2. **`src/api/config.py`** — Parse `dynamic_routing` section from `gateway.yaml`
 3. **`src/api/request_pipeline.py`** — Wire router into `try_chain()`: override model
    in first chain entry when router recommends a different one

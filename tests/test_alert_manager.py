@@ -1,12 +1,10 @@
 """Tests for alert_manager.py — alert rules, webhook dispatch, lifecycle."""
 
-import json
 import time
-import threading
 from unittest.mock import patch, MagicMock
 
 import pytest
-from src.api.alert_manager import AlertManager, get_alert_manager
+from src.api.alert_manager import AlertManager
 
 
 @pytest.fixture
@@ -59,7 +57,7 @@ class TestFire:
 
 class TestResolve:
     def test_resolves_active_alert(self, am):
-        alert = am.fire(rule="budget_breach", severity="warning", title="X", message="...", dedup_key="resolve:1")
+        am.fire(rule="budget_breach", severity="warning", title="X", message="...", dedup_key="resolve:1")
         assert am.resolve("resolve:1") is True
         assert am.get_active_alerts() == []
 
@@ -179,61 +177,12 @@ class TestWebhookDispatch:
             assert result["ok"] is True
 
 
-class TestConvenienceMethods:
-    def test_fire_budget_breach(self, am):
-        am.fire_budget_breach("Test Budget", 80, 85.5, 1)
-        alerts = am.list_alerts()
-        assert len(alerts) == 1
-        assert "Test Budget" in alerts[0]["title"]
-        assert "85.5%" in alerts[0]["title"]
-
-    def test_fire_provider_status(self, am):
-        am.fire_provider_status("deepseek", "l2", "healthy", "dead")
-        alerts = am.list_alerts()
-        assert len(alerts) == 1
-        assert "deepseek" in alerts[0]["title"]
-        assert "dead" in alerts[0]["title"]
-        assert alerts[0]["severity"] == "critical"
-
-
-class TestErrorSpikeDetection:
-    def test_tracks_errors(self, am):
-        am.update_config({"rules": {"error_spike": {"enabled": True, "min_severity": "warning", "threshold": 3, "window_minutes": 5}}})
-        am.track_error()
-        am.track_error()
-        am.track_error()
-        alerts = am.list_alerts()
-        assert len(alerts) == 1
-        assert "Error spike" in alerts[0]["title"]
-
-    def test_no_spike_below_threshold(self, am):
-        am.update_config({"rules": {"error_spike": {"enabled": True, "min_severity": "warning", "threshold": 10, "window_minutes": 5}}})
-        am.track_error()
-        am.track_error()
-        alerts = am.list_alerts()
-        assert len(alerts) == 0
-
-
 class TestHistoryTruncation:
     def test_fire_truncates_history(self, am):
         """History stays bounded at 500 entries."""
         for i in range(510):
             am.fire(rule="budget_breach", severity="warning", title=f"A{i}", message="...")
         assert len(am._alert_history) <= 500
-
-
-class TestProviderStatus:
-    def test_fire_provider_degraded(self, am):
-        am.fire_provider_status("deepseek", "l2", "healthy", "degraded")
-        alerts = am.list_alerts()
-        assert alerts[0]["rule"] == "provider_degraded"
-        assert alerts[0]["severity"] == "warning"
-
-    def test_fire_provider_recovery(self, am):
-        am.fire_provider_status("deepseek", "l2", "dead", "healthy")
-        alerts = am.list_alerts()
-        assert alerts[0]["rule"] == "circuit_breaker_recovery"
-        assert alerts[0]["severity"] == "info"
 
 
 class TestWebhookDispatchSync:

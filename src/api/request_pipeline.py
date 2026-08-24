@@ -5,18 +5,15 @@ Handles the full request flow:
 """
 
 import json
-import os
 import random
 import time
-import traceback
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from typing import Callable, TypeVar
 
 from .circuit_breaker import get_circuit_breaker
-from .cost_estimator import estimate_from_request
-from .cost_plugins import get_registry, init_plugins
+from .cost_plugins import get_registry
 from .exceptions import (
     AllProvidersFailedError,
     ConfigError,
@@ -26,13 +23,10 @@ from .exceptions import (
     ProviderInternalError,
     ProviderRateLimitError,
     ProviderTimeoutError,
-    ToolBlockedError,
 )
 from .logging_config import get_logger
 from .models import get_session, Request as RequestModel
-from .prompt_cache import get_prompt_cache
 from .router import get_dynamic_router
-from .token_verifier import get_token_verifier
 
 logger = get_logger("lcp.pipeline")
 
@@ -353,27 +347,6 @@ def sanitize_messages(messages: list[dict]) -> list[dict]:
 
 
 # ── Cost Calculation ─────────────────────────────────────────────────────────
-
-def compute_cache_savings(provider_name: str, model: str, cache_hit_tokens: int,
-                          config) -> float:
-    """Estimate dollars saved via provider prefix caching.
-
-    For 'cost' savings type: cache_hit_tokens × (miss_price − hit_price).
-    For other types (latency/none): returns 0.0.
-    """
-    if cache_hit_tokens <= 0:
-        return 0.0
-    cc = config.get_provider_cache_config(provider_name)
-    if cc.get("savings") != "cost":
-        return 0.0
-    try:
-        pricing = config.get_pricing(provider_name, model)
-        return (cache_hit_tokens / 1_000_000) * (
-            pricing["cache_miss"] - pricing["cache_hit"]
-        )
-    except Exception:
-        return 0.0
-
 
 def read_cache_hit_tokens(provider_name: str, response_body: dict | None,
                           config) -> int:

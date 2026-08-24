@@ -15,15 +15,13 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
+from urllib.error import URLError
 
 logger = logging.getLogger("lcp.cost.opencode_api")
 

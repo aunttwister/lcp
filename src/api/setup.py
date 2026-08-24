@@ -252,7 +252,6 @@ def install_provider(engine, config, name: str, body: dict) -> dict:
     if not isinstance(models, list):
         raise SetupError("'models' must be a list")
 
-    provider_data = {"api_base": api_base, "models": models}
     if not api_base:
         raise SetupError(f"missing api_base for {name} (no preset available)")
 

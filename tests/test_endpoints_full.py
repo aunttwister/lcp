@@ -16,8 +16,12 @@ import pytest
 
 from src.server import LCPHandler
 from src.api.models import (
-    get_engine, Base, Request as RequestModel, Budget, ApiKey,
-    FailoverEvent, get_session,
+    get_engine,
+    Base,
+    Request as RequestModel,
+    Budget,
+    FailoverEvent,
+    get_session,
 )
 
 

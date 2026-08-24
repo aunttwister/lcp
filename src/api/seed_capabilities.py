@@ -1,11 +1,11 @@
 """Model capability storage and the model registry.
 
 Capability scores come from LiveBench — either hand-typed leaderboard
-snapshots (``LIVEBENCH_DATA``), subtask-derived top-level scores
-(``resolved_livebench_data``), or benchmark runs the user executes
-direct-to-provider via ``src.api.benchmark``. The model registry maps each
-logical model name to its stable benchmark key and provider-side model IDs;
-the provider keys double as the model's provider list in the UI.
+snapshots (``LIVEBENCH_DATA``) plus subtask-derived top-level scores, or
+benchmark runs the user executes directly via ``src.api.benchmark``. The
+model registry maps each logical model name to its stable benchmark key and
+provider-side model IDs; the provider keys double as the model's provider
+list in the UI.
 """
 
 from __future__ import annotations
@@ -33,19 +33,6 @@ DERIVED_TASKS: dict[str, str] = {
     "debugging": "code_generation",
     "unit_tests": "code_generation",
 }
-
-
-def derived_task_scores(task_scores: dict[str, float]) -> dict[str, float]:
-    """Return extra task_type scores derived from existing ones.
-
-    e.g. ``{"debugging": 0.85}`` from ``{"code_generation": 0.85}``. Only
-    derived tasks whose source score is present are returned.
-    """
-    out: dict[str, float] = {}
-    for derived, source in DERIVED_TASKS.items():
-        if source in task_scores:
-            out[derived] = task_scores[source]
-    return out
 
 
 # ── Bulk-seeded LiveBench snapshots (opt-in) ─────────────────────────────────
@@ -190,27 +177,6 @@ def derive_category_scores(tasks: dict[str, dict[str, float]]) -> dict[str, floa
     if out:
         out["overall"] = round(sum(out.values()) / len(out), 1)
     return out
-
-
-def resolved_livebench_data() -> dict[str, dict[str, dict[str, float]]]:
-    """Merge hand-typed ``LIVEBENCH_DATA`` with subtask-derived top-level scores.
-
-    Returns ``{model: {release_label: {category: raw_0_100}}}``. Models present
-    in ``LIVEBENCH_TASKS`` but absent from ``LIVEBENCH_DATA`` (e.g. gpt-5.6-terra,
-    gpt-5.6-luna, minimax-m3) have their top-level category scores DERIVED from
-    their subtask rows so no model falls through the gap between the two tables.
-    """
-    from .livebench_tasks import LIVEBENCH_TASKS
-
-    data: dict[str, dict[str, dict[str, float]]] = {
-        model: {rel: dict(categories) for rel, categories in releases.items()}
-        for model, releases in LIVEBENCH_DATA.items()
-    }
-    for model, tasks in LIVEBENCH_TASKS.items():
-        if model in data:
-            continue
-        data[model] = {LIVEBENCH_RELEASE: derive_category_scores(tasks)}
-    return data
 
 
 def seed_livebench(db_path: str, release: Optional[str] = None) -> int:

@@ -2,9 +2,8 @@
 singleton, benchmark_import materialization edge cases, and setup install
 progress/failure paths."""
 
-import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -32,14 +31,14 @@ class TestCryptoExtra:
 class TestReasoningStoreSingleton:
     def test_singleton_reset(self):
         from src.api import reasoning_store
-        reasoning_store.reset_reasoning_store()
+        reasoning_store._reasoning_store = None
         a = reasoning_store.get_reasoning_store()
         b = reasoning_store.get_reasoning_store()
         assert a is b
-        reasoning_store.reset_reasoning_store()
+        reasoning_store._reasoning_store = None
         c = reasoning_store.get_reasoning_store()
         assert c is not a
-        reasoning_store.reset_reasoning_store()
+        reasoning_store._reasoning_store = None
 
 
 # ── benchmark_import: materialization edge cases ─────────────────────────────
@@ -154,7 +153,6 @@ class TestSetupFailurePaths:
             setup_mod._bench_last = orig_last
 
     def test_run_install_core_not_importable(self, tmp_path, monkeypatch):
-        import subprocess
         from src.api import setup as setup_mod
         from src.api.models import get_engine, Base
 

@@ -4,8 +4,9 @@ Covers the pure message/tool/cost helpers that were previously untested:
   - normalize_messages_for_cache / normalize_tools_for_cache
   - has_image_content
   - sanitize_messages (dangling/orphaned tool calls)
-  - compute_cache_savings / read_cache_hit_tokens
+  - read_cache_hit_tokens
   - calculate_cost (plugin + config-pricing paths)
+  - ensure_thinking_reasoning_content
   - forward_request streaming + HTTPError branches
 """
 
@@ -41,7 +42,7 @@ def temp_db():
 
 from src.api.request_pipeline import (
     calculate_cost,
-    compute_cache_savings,
+    ensure_thinking_reasoning_content,
     forward_request,
     has_image_content,
     normalize_messages_for_cache,
@@ -172,6 +173,78 @@ class TestNormalizeMessagesForCache:
         out = normalize_messages_for_cache([{"role": "tool", "content": "x"}])
         assert out[0]["tool_call_id"] == ""
 
+    def test_preserves_reasoning_content(self):
+        """Assistant message with reasoning_content keeps the field."""
+        messages = [
+            {"role": "user", "content": "Write a function"},
+            {"role": "assistant", "content": "Here it is:", "reasoning_content": "Let me think about this..."},
+        ]
+        result = normalize_messages_for_cache(messages)
+        assert len(result) == 2
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "Write a function"
+        assert result[1]["role"] == "assistant"
+        assert result[1]["content"] == "Here it is:"
+        assert result[1]["reasoning_content"] == "Let me think about this..."
+
+    def test_preserves_reasoning_with_tool_calls(self):
+        """Assistant with both tool_calls AND reasoning_content preserves both."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Let me write that file.",
+                "reasoning_content": "The user wants a file written...",
+                "tool_calls": [
+                    {"id": "call_1", "function": {"name": "write_file", "arguments": "{}"}}
+                ],
+            },
+        ]
+        result = normalize_messages_for_cache(messages)
+        assert len(result) == 1
+        assert result[0]["role"] == "assistant"
+        assert result[0]["tool_calls"] == messages[0]["tool_calls"]
+        assert result[0]["reasoning_content"] == "The user wants a file written..."
+
+    def test_strips_reasoning_from_non_assistant(self):
+        """System/user messages don't get reasoning_content preserved."""
+        messages = [
+            {"role": "system", "content": "You are helpful", "reasoning_content": "nope"},
+            {"role": "user", "content": "Hello", "reasoning_content": "nope"},
+        ]
+        result = normalize_messages_for_cache(messages)
+        assert len(result) == 2
+        assert "reasoning_content" not in result[0]
+        assert "reasoning_content" not in result[1]
+
+    def test_full_conversation_roundtrip(self):
+        """Mixed conversation: user → assistant(with reasoning) → assistant(tool_calls + reasoning) → tool."""
+        messages = [
+            {"role": "user", "content": "Write a function"},
+            {"role": "assistant", "content": "Sure", "reasoning_content": "I need to write a Python function..."},
+            {
+                "role": "assistant",
+                "content": "Here is the function:",
+                "reasoning_content": "The function will be simple...",
+                "tool_calls": [{"id": "call_1", "function": {"name": "write_file", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Wrote file successfully."},
+        ]
+        result = normalize_messages_for_cache(messages)
+        assert len(result) == 4
+        # User
+        assert result[0]["role"] == "user"
+        assert "reasoning_content" not in result[0]
+        # Assistant with reasoning, no tool_calls
+        assert result[1]["role"] == "assistant"
+        assert result[1]["reasoning_content"] == "I need to write a Python function..."
+        # Assistant with tool_calls + reasoning
+        assert result[2]["role"] == "assistant"
+        assert result[2]["reasoning_content"] == "The function will be simple..."
+        assert result[2]["tool_calls"] == messages[2]["tool_calls"]
+        # Tool
+        assert result[3]["role"] == "tool"
+        assert result[3]["tool_call_id"] == "call_1"
+
 
 # ── normalize_tools_for_cache ────────────────────────────────────────────
 
@@ -207,6 +280,25 @@ class TestHasImageContent:
 
     def test_string_content_never_flagged(self):
         assert has_image_content([{"role": "user", "content": "no list"}]) is False
+
+    def test_image_only(self):
+        assert has_image_content([
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+            ]},
+        ])
+
+    def test_empty_messages(self):
+        assert not has_image_content([])
+
+    def test_multiple_messages_with_image(self):
+        assert has_image_content([
+            {"role": "user", "content": "Hello"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "And this?"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpg;base64,xyz"}},
+            ]},
+        ])
 
 
 # ── sanitize_messages ────────────────────────────────────────────────────
@@ -274,28 +366,6 @@ class TestSanitizeMessages:
         out = sanitize_messages(msgs)
         assert len(out) == 2
         assert out[0]["tool_calls"][0]["id"] == "ok1"
-
-
-# ── compute_cache_savings ────────────────────────────────────────────────
-
-class TestComputeCacheSavings:
-    def test_zero_tokens_returns_zero(self, mock_config):
-        assert compute_cache_savings("deepseek", "m", 0, mock_config) == 0.0
-
-    def test_non_cost_savings_type_returns_zero(self, mock_config):
-        mock_config.get_provider_cache_config.return_value = {"savings": "latency"}
-        assert compute_cache_savings("deepseek", "m", 1000, mock_config) == 0.0
-
-    def test_cost_savings_computed(self, mock_config):
-        mock_config.get_provider_cache_config.return_value = {"savings": "cost"}
-        mock_config.get_pricing.return_value = {"cache_hit": 0.01, "cache_miss": 0.5}
-        # 1_000_000 tokens * (0.5 - 0.01) = 0.49
-        assert compute_cache_savings("deepseek", "m", 1_000_000, mock_config) == pytest.approx(0.49)
-
-    def test_pricing_error_returns_zero(self, mock_config):
-        mock_config.get_provider_cache_config.return_value = {"savings": "cost"}
-        mock_config.get_pricing.side_effect = KeyError("no pricing")
-        assert compute_cache_savings("deepseek", "m", 1000, mock_config) == 0.0
 
 
 # ── read_cache_hit_tokens ────────────────────────────────────────────────
@@ -542,6 +612,35 @@ class TestStripForbiddenTools:
         new_body, blocked = strip_forbidden_tools(body, [])
         assert blocked == []
         assert new_body is body
+
+    def test_blocks_multiple(self):
+        body = {"tools": [
+            {"function": {"name": "bash"}},
+            {"function": {"name": "terminal"}},
+            {"function": {"name": "read_file"}},
+        ]}
+        result, blocked = strip_forbidden_tools(body, ["bash", "read_file"])
+        assert len(result["tools"]) == 1
+        assert result["tools"][0]["function"]["name"] == "terminal"
+        assert sorted(blocked) == ["bash", "read_file"]
+
+    def test_no_tools_in_body(self):
+        body = {"messages": [{"role": "user", "content": "hi"}]}
+        result, blocked = strip_forbidden_tools(body, ["bash"])
+        assert result == body
+        assert blocked == []
+
+    def test_no_blocked(self):
+        body = {"tools": [{"function": {"name": "safe_tool"}}]}
+        result, blocked = strip_forbidden_tools(body, ["dangerous"])
+        assert result == body
+        assert blocked == []
+
+    def test_type_field_variant(self):
+        body = {"tools": [{"type": "function", "function": {"name": "block_me"}}]}
+        result, blocked = strip_forbidden_tools(body, ["block_me"])
+        assert result["tools"] == []
+        assert blocked == ["block_me"]
 
 
 # ── record_cost plugin hooks ─────────────────────────────────────────────
@@ -841,3 +940,80 @@ class TestTryChainDynamicRouter:
         assert provider == "first"  # original first step used
         assert model == "m1"
         assert profile_cfg["chain"][0]["model"] == "m1"
+
+
+# ── ensure_thinking_reasoning_content ───────────────────────────────────
+
+class TestEnsureThinkingReasoningContent:
+    def _thinking_config(self):
+        cfg = MagicMock()
+        cfg.get_model_limits.return_value = {"supports_thinking": True}
+        return cfg
+
+    def _non_thinking_config(self):
+        cfg = MagicMock()
+        cfg.get_model_limits.return_value = {"supports_thinking": False}
+        return cfg
+
+    def test_injects_empty_reasoning_for_tool_call_assistant(self):
+        """Per DeepSeek docs, ONLY tool-calling assistant turns require
+        reasoning_content. A missing field on a tool-call turn gets an empty
+        value injected for thinking-capable models."""
+        messages = [
+            {"role": "user", "content": "Write a function"},
+            {
+                "role": "assistant",
+                "content": "Let me write that.",
+                "tool_calls": [{"id": "call_1", "function": {"name": "write_file", "arguments": "{}"}}],
+            },
+        ]
+        result = ensure_thinking_reasoning_content(messages, "deepseek-v4-flash",
+                                                   self._thinking_config())
+        # tool-call assistant turn gets empty reasoning_content injected
+        assert result[1]["reasoning_content"] == ""
+        assert result[1]["tool_calls"] == messages[1]["tool_calls"]
+
+    def test_does_not_inject_on_non_tool_call_assistant(self):
+        """Per docs, assistant turns WITHOUT a tool call don't need
+        reasoning_content (the API ignores it) — no injection needed."""
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+        result = ensure_thinking_reasoning_content(messages, "deepseek-v4-flash",
+                                                   self._thinking_config())
+        assert "reasoning_content" not in result[1]
+
+    def test_preserves_existing_reasoning_content(self):
+        """Assistant messages that already carry reasoning_content are untouched."""
+        messages = [
+            {"role": "assistant", "content": "x", "reasoning_content": "thinking..."},
+        ]
+        result = ensure_thinking_reasoning_content(messages, "deepseek-v4-flash",
+                                                   self._thinking_config())
+        assert result[0]["reasoning_content"] == "thinking..."
+
+    def test_noop_for_non_thinking_model(self):
+        """Models without supports_thinking are left completely untouched."""
+        messages = [
+            {"role": "assistant", "content": "hello"},
+        ]
+        result = ensure_thinking_reasoning_content(messages, "gpt-4o",
+                                                   self._non_thinking_config())
+        assert "reasoning_content" not in result[0]
+
+    def test_noop_when_config_lacks_model_limits(self):
+        """If get_model_limits returns None/absent, no injection happens."""
+        cfg = MagicMock()
+        cfg.get_model_limits.return_value = None
+        messages = [{"role": "assistant", "content": "hi"}]
+        result = ensure_thinking_reasoning_content(messages, "some-model", cfg)
+        assert "reasoning_content" not in result[0]
+
+    def test_noop_when_config_has_no_get_model_limits(self):
+        """Config objects without get_model_limits are handled defensively."""
+        cfg = MagicMock()
+        del cfg.get_model_limits
+        messages = [{"role": "assistant", "content": "hi"}]
+        result = ensure_thinking_reasoning_content(messages, "some-model", cfg)
+        assert "reasoning_content" not in result[0]

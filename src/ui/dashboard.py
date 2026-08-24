@@ -9,7 +9,6 @@ from ..api.models import Request as RequestModel, get_session
 from ..api.prompt_cache import get_prompt_cache
 from ..api.token_verifier import get_token_verifier
 from ..api.router import get_dynamic_router
-from ..api.circuit_breaker import get_circuit_breaker
 from ..api.logging_config import get_logger
 
 logger = get_logger("lcp.dashboard")
@@ -19,10 +18,6 @@ from .render import render_page
 
 def render_dashboard(config, engine, headers, profile_filter=None):
     """Generate the full dashboard HTML page and return it as a string."""
-
-    # Get circuit breaker for provider health dots
-    cb = get_circuit_breaker()
-    _get_health = cb.get_health
 
     from sqlalchemy import func, case
 

@@ -3,7 +3,6 @@ discover cookie/workspace enrichment, profile update/delete, provider toggle
 degrade, and the remaining setup remove branches."""
 
 import json
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest

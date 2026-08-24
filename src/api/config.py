@@ -1,11 +1,9 @@
 """YAML configuration loader with validation and hot-reload."""
 
 import os
-import time
 from pathlib import Path
 from typing import Any
 
-import structlog
 import yaml
 
 from .exceptions import ConfigError
@@ -173,9 +171,6 @@ class Config:
         finally:
             if os.path.exists(tmp.name):
                 os.unlink(tmp.name)
-
-    def reload(self) -> None:
-        self._reload()
 
 
 # Global config instance — loaded at startup

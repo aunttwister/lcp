@@ -1,6 +1,4 @@
 """Tests for token_verifier.py"""
-import pytest
-import sys
 from src.api.token_verifier import TokenVerifier, get_token_verifier
 
 def test_normal_response():

@@ -3,9 +3,8 @@ import os
 import tempfile
 
 import pytest
-import sys
 from src.api.router import (
-    DynamicRouter, CapabilityRouter, classify_task, get_dynamic_router,
+    CapabilityRouter, classify_task, get_dynamic_router,
     init_router, logical_model_name, benchmark_model_name,
     normalize_model_id, detect_quantization,
 )
@@ -29,35 +28,6 @@ def registry_db():
             os.unlink(path + ext)
         except FileNotFoundError:
             pass
-
-
-# ── Legacy DynamicRouter tests (flash/pro heuristic) ──────────────────────
-
-def test_disabled_returns_pro():
-    router = DynamicRouter(enabled=False)
-    msgs = [{"role": "user", "content": "hi"}]
-    assert router.get_recommended_model(msgs, max_tokens=100) == "deepseek-v4-pro"
-
-def test_short_prompt_flash():
-    router = DynamicRouter(enabled=True)
-    msgs = [{"role": "user", "content": "hello"}]
-    assert router.get_recommended_model(msgs, max_tokens=100) == "deepseek-v4-flash"
-
-def test_long_prompt_pro():
-    router = DynamicRouter(enabled=True)
-    huge = [{"role": "user", "content": "hello " * 2000}]
-    assert router.get_recommended_model(huge) == "deepseek-v4-pro"
-
-def test_many_tools_pro():
-    router = DynamicRouter(enabled=True)
-    tools = [{"type": "function", "function": {"name": "t" + str(i)}} for i in range(5)]
-    msgs = [{"role": "user", "content": "hi"}]
-    assert router.get_recommended_model(msgs, tools=tools, max_tokens=100) == "deepseek-v4-pro"
-
-def test_long_max_tokens_pro():
-    router = DynamicRouter(enabled=True)
-    msgs = [{"role": "user", "content": "hi"}]
-    assert router.get_recommended_model(msgs, max_tokens=4096) == "deepseek-v4-pro"
 
 
 # ── CapabilityRouter tests ────────────────────────────────────────────────
@@ -172,26 +142,6 @@ def test_classify_code_gen_not_unit_tests():
     msgs = [{"role": "user", "content": "implement a sorting algorithm in python"}]
     assert classify_task(msgs) == "code_generation"
 
-def test_router_disabled_returns_none():
-    router = CapabilityRouter(enabled=False)
-    msgs = [{"role": "user", "content": "write a function"}]
-    assert router.select_model(msgs) is None
-
-def test_router_enabled_selects_best(registry_db):
-    router = CapabilityRouter(enabled=True, db_path=registry_db)
-    msgs = [{"role": "user", "content": "hello there"}]
-    result = router.select_model(msgs, available_models=["deepseek-v4-flash", "deepseek-v4-pro"])
-    # Casual chat → flash should be preferred (cheaper, good enough)
-    assert result is not None
-
-def test_router_ranks_models(registry_db):
-    router = CapabilityRouter(enabled=True, db_path=registry_db)
-    ranked = router.rank_models("code_generation", ["deepseek-v4-flash", "deepseek-v4-pro"])
-    assert len(ranked) == 2
-    # Both are valid — flash is cheaper and nearly as capable for coding,
-    # so it may rank higher with cost bias. Pro is within 5% margin.
-    assert ranked[0][1] > 0.6  # both should have good scores
-
 def test_singleton():
     assert get_dynamic_router() is get_dynamic_router()
 
@@ -237,17 +187,6 @@ def test_get_model_score_falls_back_for_unknown_model(registry_db):
     seed_livebench(registry_db)
     router = CapabilityRouter(enabled=True, db_path=registry_db)
     assert router.get_model_score("some-unknown-model", "debugging") == 0.5
-
-def test_select_model_debugging_prompt_returns_choice(registry_db):
-    """A debugging-flavored prompt classifies + ranks and returns a model."""
-    from src.api.seed_capabilities import seed_livebench
-    seed_livebench(registry_db)
-    router = CapabilityRouter(enabled=True, db_path=registry_db)
-    msgs = [{"role": "user", "content": "why does this fail with a TypeError? please debug"}]
-    result = router.select_model(
-        msgs, available_models=["deepseek-v4-flash", "deepseek-v4-pro"])
-    assert result in ("deepseek-v4-flash", "deepseek-v4-pro")
-
 
 # ── Provider-aware selection (Phase 2) ───────────────────────────────────
 
@@ -732,7 +671,7 @@ def test_select_step_audit_note_when_rule_matches_scope_but_not_fired(registry_d
     chain = [{"provider": "opencode", "model": "deepseek-v4-flash"},
              {"provider": "deepseek", "model": "deepseek-v4-pro"}]
     # cron profile → policy rule flips policy but doesn't "fire" a prefer/block.
-    out = router.select_step([{"role": "user", "content": "hi"}], chain=chain, profile="cron")
+    router.select_step([{"role": "user", "content": "hi"}], chain=chain, profile="cron")
     dec = router.recent_decisions()[-1]
     assert dec["note"] is not None
     assert "matched scope" in dec["note"]
@@ -748,7 +687,7 @@ def test_select_step_policy_rule_override(registry_db, monkeypatch):
              {"provider": "deepseek", "model": "deepseek-v4-pro"}]
     # cron profile → policy rule flips to cost_first (bias > 0) but the outcome
     # is a reorder regardless; assert the decision recorded the policy.
-    out = router.select_step([{"role": "user", "content": "hi"}], chain=chain, profile="cron")
+    router.select_step([{"role": "user", "content": "hi"}], chain=chain, profile="cron")
     assert router.recent_decisions()[-1]["policy"] == "cost_first"
 
 def test_routing_status_includes_rules(registry_db, monkeypatch):
@@ -861,7 +800,7 @@ def test_logical_model_name_normalizes_llamacpp_path(registry_db):
 
 
 def test_load_model_registry_includes_quantization(registry_db):
-    from src.api.seed_capabilities import load_model_registry, seed_model_registry
+    from src.api.seed_capabilities import load_model_registry
     # Insert a quantized entry and re-read.
     from src.api.models import ModelRegistryEntry, get_engine, get_session
     import json
@@ -901,27 +840,6 @@ def test_provider_model_name_unknown_provider_passthrough(registry_db):
 
 # ── CapabilityRouter selection edge paths ────────────────────────────────────
 
-def test_router_keeps_default_when_tied(registry_db):
-    """When the best model is within 5% of the chain default, keep default."""
-    from src.api.router import CapabilityRouter
-    router = CapabilityRouter(enabled=True, db_path=registry_db)
-    # available_models where all scores are equal → no override.
-    result = router.select_model(
-        [{"role": "user", "content": "write a function"}],
-        available_models=["deepseek-v4-pro", "deepseek-v4-pro"],
-    )
-    assert result is None
-
-def test_router_no_available_models_returns_none(registry_db):
-    from src.api.router import CapabilityRouter
-    router = CapabilityRouter(enabled=True, db_path=registry_db)
-    assert router.select_model([{"role": "user", "content": "hi"}], available_models=[]) is None
-
-def test_router_empty_rank_returns_empty(registry_db):
-    from src.api.router import CapabilityRouter
-    router = CapabilityRouter(enabled=True, db_path=registry_db)
-    assert router.rank_models("code_generation", []) == []
-
 def test_router_load_matrix_error_returns_empty(tmp_path):
     from src.api.router import CapabilityRouter
     router = CapabilityRouter(enabled=True, db_path=str(tmp_path / "missing.db"))
@@ -935,12 +853,3 @@ def test_init_router_warm_cache(registry_db):
     assert router_mod.get_dynamic_router().enabled is True
     # Restore for other tests.
     router_mod.init_router(db_path=registry_db, enabled=False)
-
-def test_dynamic_router_flash_heuristic():
-    from src.api.router import DynamicRouter
-    r = DynamicRouter(enabled=True)
-    assert r.should_use_flash([{"role": "user", "content": "hi"}]) is True
-    assert r.should_use_flash([{"role": "user", "content": "x " * 3000}]) is False
-    tools = [{"type": "function", "function": {"name": f"t{i}"}} for i in range(6)]
-    assert r.should_use_flash([{"role": "user", "content": "hi"}], tools=tools) is False
-    assert r.should_use_flash([{"role": "user", "content": "hi"}], max_tokens=4096) is False

@@ -1,6 +1,5 @@
 """Tests for the reasoning-content store and capture helpers."""
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,7 +7,6 @@ import pytest
 from src.api.reasoning_store import (
     ReasoningStore,
     get_reasoning_store,
-    reset_reasoning_store,
 )
 from src.api.request_pipeline import (
     capture_reasoning_from_response,
@@ -19,9 +17,10 @@ from src.api.request_pipeline import (
 
 @pytest.fixture(autouse=True)
 def _reset_store():
-    reset_reasoning_store()
+    import src.api.reasoning_store as _rs
+    _rs._reasoning_store = None
     yield
-    reset_reasoning_store()
+    _rs._reasoning_store = None
 
 
 class TestReasoningStore:

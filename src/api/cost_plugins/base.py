@@ -291,14 +291,6 @@ class PluginRegistry:
             result[name] = plugin.fetch_subscription()
         return result
 
-    def shutdown_all(self) -> None:
-        for plugin in self._plugins.values():
-            try:
-                plugin.on_shutdown()
-            except Exception:
-                pass
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Module-level singleton
 # ═══════════════════════════════════════════════════════════════════════════

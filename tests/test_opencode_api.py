@@ -1,7 +1,6 @@
 """Tests for src/api/cost_plugins/opencode_api.py — SSR parser and HTTP client."""
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.api.cost_plugins.opencode_api import (
     SubscriptionSnapshot,

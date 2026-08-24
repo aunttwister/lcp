@@ -9,7 +9,6 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-import sys
 
 from src.api.config import Config, ConfigError
 
@@ -327,15 +326,6 @@ class TestConfigEdgeCases:
         # File gone — should not raise
         assert cfg.check_reload() is False
 
-    def test_reload_method(self, temp_dir):
-        data = _base_config()
-        path = temp_dir / "config4.yaml"
-        with open(path, "w") as f:
-            yaml.dump(data, f)
-        cfg = Config(str(path))
-        cfg.reload()  # should not raise
-        os.unlink(str(path))
-
     def test_check_reload_triggers_reload(self, temp_dir):
         """File modified externally triggers reload."""
         data = _base_config()
@@ -376,7 +366,6 @@ class TestConfigEdgeCases:
 
     def test_save_failure_cleans_up_tempfile(self, temp_dir):
         """If shutil.move fails, the temp file is still cleaned up."""
-        import shutil
         data = _base_config()
         path = temp_dir / "config_fail.yaml"
         with open(path, "w") as f:

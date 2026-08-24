@@ -103,7 +103,10 @@ class TestExecuteRunMore:
         assert "not implemented" in run["error"]
 
     def test_no_csv_raises(self, tmp_path):
-        from src.api.benchmark import _execute_run, get_run, _log
+        from src.api.benchmark import (
+            _execute_run,
+            get_run,
+        )
         from src.api.models import BenchmarkRun, get_session
 
         engine = _engine(tmp_path)
@@ -187,7 +190,7 @@ class TestCheckoutResolution:
 
     def test_core_deps_available_exception(self, monkeypatch):
         from src.api import benchmark as bm
-        with patch("subprocess.run", side_effect=OSError("no")) as mock_run:
+        with patch("subprocess.run", side_effect=OSError("no")):
             assert bm.core_deps_available() is False
 
 

@@ -1,7 +1,6 @@
 """Tests for seed_capabilities CLI + cleanup, router registry/select paths,
 and benchmark_import edge cases (extending the earlier targeted suites)."""
 
-import json
 import os
 import tempfile
 
@@ -10,10 +9,8 @@ import pytest
 from src.api.seed_capabilities import (
     DERIVED_TASKS,
     LIVEBENCH_RELEASE,
-    derived_task_scores,
     load_capability_matrix,
     seed_livebench,
-    seed_livebench_tasks,
     seed_model_registry,
     _cleanup_legacy_capabilities,
 )
@@ -59,7 +56,6 @@ class TestSeedRegistry:
     def test_cleanup_removes_legacy_rows(self, db_path):
         """Legacy unversioned + superseded rows are removed after cleanup."""
         from src.api.models import ModelCapability, get_engine, get_session
-        from src.api.seed_capabilities import LIVEBENCH_DATA, LB_TO_LCP
 
         engine = get_engine(db_path)
         now = "2026-08-17T00:00:00"
@@ -116,27 +112,14 @@ class TestCapabilityMatrix:
             assert matrix[derived]["deepseek-v4-pro"] == matrix["code_generation"]["deepseek-v4-pro"]
 
 
-# ── derived_task_scores ──────────────────────────────────────────────────────
+# ── derived tasks registry ───────────────────────────────────────────────────
 
-class TestDerivedTaskScores:
-    def test_derives_coding_subskills_from_code_generation(self):
-        out = derived_task_scores({"code_generation": 0.85, "reasoning_chain": 0.9})
-        # debugging + unit_tests are coding subskills, derived from code_generation.
-        assert out == {"debugging": 0.85, "unit_tests": 0.85}
-
-    def test_no_derivation_when_source_missing(self):
-        out = derived_task_scores({"reasoning_chain": 0.9})
-        assert out == {}
-
-    def test_empty_input(self):
-        assert derived_task_scores({}) == {}
-
-    def test_derived_tasks_registry(self):
-        # debugging + unit_tests are derived from code_generation.
-        assert DERIVED_TASKS == {
-            "debugging": "code_generation",
-            "unit_tests": "code_generation",
-        }
+def test_derived_tasks_registry():
+    # debugging + unit_tests are derived from code_generation.
+    assert DERIVED_TASKS == {
+        "debugging": "code_generation",
+        "unit_tests": "code_generation",
+    }
 
 
 # ── benchmark_import edge cases ──────────────────────────────────────────────

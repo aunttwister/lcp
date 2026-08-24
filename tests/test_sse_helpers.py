@@ -1,5 +1,4 @@
 """Tests for src/server/sse_helpers.py — SSE parsing and cost-from-tokens."""
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest

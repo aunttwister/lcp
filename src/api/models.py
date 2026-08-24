@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column,
-    DateTime,
     Float,
     ForeignKey,
     Integer,
@@ -359,14 +358,6 @@ def get_engine(db_path: str):
     def set_wal(dbapi_connection, connection_record):
         dbapi_connection.execute("PRAGMA journal_mode=WAL")
 
-    return engine
-
-
-def init_db(db_path: str, create_all: bool = True):
-    """Initialize database — create engine, optionally create all tables."""
-    engine = get_engine(db_path)
-    if create_all:
-        Base.metadata.create_all(engine)
     return engine
 
 

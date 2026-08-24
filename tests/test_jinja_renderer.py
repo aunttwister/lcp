@@ -13,7 +13,6 @@ Covers:
 
 import json
 import re
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -243,7 +242,7 @@ class TestPageRenderers:
         titles = set()
         for html in results.values():
             m = re.search(r"<title>(.*?)</title>", html)
-            assert m, f"Missing <title> in page"
+            assert m, "Missing <title> in page"
             titles.add(m.group(1))
         assert len(titles) == 4, f"Expected 4 unique titles, got {len(titles)}"
 

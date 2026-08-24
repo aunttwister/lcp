@@ -1,9 +1,8 @@
 """Tests for key_manager.py — API key CRUD, rotation, validation, spend tracking."""
 
 import pytest
-from unittest.mock import patch, MagicMock
 from src.api.models import get_engine, Base, ApiKey
-from src.api.key_manager import KeyManager, init_key_manager
+from src.api.key_manager import init_key_manager
 
 
 @pytest.fixture
@@ -153,71 +152,6 @@ class TestRevokeKey:
 
     def test_revoke_nonexistent(self, km):
         assert km.revoke_key(999) is False
-
-
-class TestRecordSpend:
-    def test_records_spend(self, km):
-        created = km.create_key(name="Spender")
-        breach = km.record_spend(created["id"], 5.0)
-        key = km.get_key(created["id"])
-        assert key["total_spend"] == 5.0
-
-    def test_no_breach_below_50_pct(self, km):
-        created = km.create_key(name="Safe", spend_limit=100)
-        breach = km.record_spend(created["id"], 30.0)
-        assert breach is None
-
-    def test_breach_at_50_pct(self, km):
-        created = km.create_key(name="Half", spend_limit=100)
-        breach = km.record_spend(created["id"], 50.0)
-        assert breach is not None
-        assert breach["threshold"] == 50
-        assert breach["spend_pct"] == 50.0
-
-    def test_breach_at_80_pct(self, km):
-        created = km.create_key(name="Eighty", spend_limit=100)
-        km.record_spend(created["id"], 50.0)  # first: 50%
-        breach = km.record_spend(created["id"], 30.0)  # now at 80%
-        assert breach is not None
-        assert breach["threshold"] == 80
-        assert breach["spend_pct"] == 80.0
-
-    def test_breach_at_90_pct(self, km):
-        created = km.create_key(name="Ninety", spend_limit=100)
-        km.record_spend(created["id"], 80.0)  # 50 + 80
-        breach = km.record_spend(created["id"], 10.0)
-        assert breach is not None
-        assert breach["threshold"] == 90
-
-    def test_breach_at_100_pct(self, km):
-        created = km.create_key(name="Broke", spend_limit=100)
-        km.record_spend(created["id"], 99.0)
-        breach = km.record_spend(created["id"], 1.0)
-        assert breach is not None
-        assert breach["threshold"] == 100
-        assert breach["spend_pct"] == 100.0
-
-    def test_skips_zero_cost(self, km):
-        created = km.create_key(name="Zero")
-        assert km.record_spend(created["id"], 0) is None
-        key = km.get_key(created["id"])
-        assert key["total_spend"] == 0.0
-
-    def test_skips_invalid_key_id(self, km):
-        assert km.record_spend(None, 10) is None
-        assert km.record_spend(999, 10) is None
-
-    def test_accumulates_spend(self, km):
-        created = km.create_key(name="Accum", spend_limit=100)
-        km.record_spend(created["id"], 10)
-        km.record_spend(created["id"], 20)
-        key = km.get_key(created["id"])
-        assert key["total_spend"] == 30.0
-
-    def test_no_breach_without_limit(self, km):
-        created = km.create_key(name="Unlimited")  # spend_limit=0 means unlimited
-        breach = km.record_spend(created["id"], 1000.0)
-        assert breach is None
 
 
 class TestLegacyMigration:

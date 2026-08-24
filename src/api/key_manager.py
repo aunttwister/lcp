@@ -10,7 +10,6 @@ import json
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from .logging_config import get_logger
 from .models import ApiKey, get_session
@@ -239,38 +238,6 @@ class KeyManager:
                 "spend_limit": k.spend_limit,
                 "total_spend": k.total_spend,
             }
-
-    def record_spend(self, key_id: int, cost: float) -> dict | None:
-        """Increment total spend for a key. Returns breach info if limit exceeded."""
-        if not key_id or cost <= 0:
-            return None
-        with get_session(self._engine) as session:
-            k = session.query(ApiKey).filter(ApiKey.id == key_id).first()
-            if not k:
-                return None
-            prev_spend = k.total_spend or 0.0
-            k.total_spend = prev_spend + cost
-            session.commit()
-            logger.debug("key_spend_updated", key_id=key_id, key_prefix=k.key_prefix,
-                         cost=round(cost, 6), total_spend=round(k.total_spend, 6))
-
-            # Check spend limit
-            if k.spend_limit and k.spend_limit > 0:
-                prev_pct = (prev_spend / k.spend_limit) * 100
-                new_pct = (k.total_spend / k.spend_limit) * 100
-                # Check 50%, 80%, 90%, 100% thresholds
-                for threshold in [50, 80, 90, 100]:
-                    if prev_pct < threshold <= new_pct:
-                        return {
-                            "key_id": key_id,
-                            "key_name": k.name,
-                            "threshold": threshold,
-                            "spend_pct": round(new_pct, 1),
-                            "current_spend": k.total_spend,
-                            "limit": k.spend_limit,
-                        }
-        return None
-
 
 # ── Module-level singleton ────────────────────────────────────────────────
 _key_manager: KeyManager | None = None

@@ -5,10 +5,8 @@ import tempfile
 import pytest
 
 from src.api.seed_capabilities import (
-    LIVEBENCH_RELEASE,
     LIVEBENCH_DATA,
     derive_category_scores,
-    resolved_livebench_data,
 )
 
 
@@ -40,22 +38,6 @@ def test_derive_category_scores_matches_hand_typed():
         derived_cats = {k: v for k, v in derived.items() if k != "overall"}
         assert derived_cats == hand_cats, f"{model}: derived {derived_cats} != hand {hand_cats}"
         assert derived["overall"] == hand[latest_release]["overall"]
-
-
-def test_resolved_data_fills_subtask_only_models():
-    """Models missing from LIVEBENCH_DATA get derived top-level scores."""
-    from src.api.livebench_tasks import LIVEBENCH_TASKS
-
-    resolved = resolved_livebench_data()
-    for model, tasks in LIVEBENCH_TASKS.items():
-        assert model in resolved, f"{model} missing from resolved data"
-        if model in LIVEBENCH_DATA:
-            # Hand-typed rows are kept verbatim.
-            assert resolved[model] == LIVEBENCH_DATA[model]
-        else:
-            expected = derive_category_scores(tasks)
-            assert set(resolved[model]) == {LIVEBENCH_RELEASE}
-            assert resolved[model][LIVEBENCH_RELEASE] == expected
 
 
 def test_seed_livebench_seeds_derived_models(db_path):

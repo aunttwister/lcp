@@ -7,7 +7,6 @@ import json
 import os
 import tempfile
 import pytest
-import sys
 
 from unittest.mock import patch, MagicMock
 
@@ -824,7 +823,7 @@ class TestNonStreamingChat:
             session.commit()
         body = {"messages": [{"role": "user", "content": "hi"}], "stream": False}
         h = self._handler(temp_db, body)
-        with patch("src.server.handler.get_prompt_cache") as mock_cache:
+        with patch("src.server.handler.get_prompt_cache"):
             with patch("src.server.handler.try_chain") as mock_try:
                 h.do_POST()
         assert h.send_response.call_args[0][0] == 429

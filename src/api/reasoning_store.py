@@ -138,9 +138,3 @@ def get_reasoning_store() -> ReasoningStore:
     if _reasoning_store is None:
         _reasoning_store = ReasoningStore()
     return _reasoning_store
-
-
-def reset_reasoning_store() -> None:
-    """Reset the singleton (used by tests)."""
-    global _reasoning_store
-    _reasoning_store = None

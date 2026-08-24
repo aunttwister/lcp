@@ -1,7 +1,6 @@
 """Final: validate_categories empty, effective_releases newest, livebench_root
 /opt fallback, core_deps_available with site PYTHONPATH."""
 
-import json
 import os
 from unittest.mock import MagicMock, patch
 

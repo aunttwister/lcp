@@ -8,7 +8,6 @@ errors, and ``queue_benchmark`` validation.
 """
 
 import json
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,7 +15,6 @@ import pytest
 from src.api.benchmark import (
     _redact_cmd,
     _redact_stream_line,
-    build_livebench_commands,
     queue_benchmark,
 )
 

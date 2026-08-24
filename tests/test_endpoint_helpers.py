@@ -5,10 +5,8 @@ _browser_headers, _friendly_provider_error) and the health/metrics/export
 error branches that the route-level tests don't reach.
 """
 
-import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.server.endpoints import (
     _fmt_params,

@@ -25,7 +25,6 @@ def cb():
 @pytest.fixture(autouse=True)
 def _reset_singleton():
     """Reset the circuit breaker singleton between tests."""
-    from src.api.circuit_breaker import _circuit_breaker
     import src.api.circuit_breaker as cb_module
     cb_module._circuit_breaker = None
 
@@ -136,7 +135,6 @@ class TestStats:
 
 class TestGetAllHealth:
     def test_get_circuit_breaker_requires_config(self):
-        from src.api.circuit_breaker import _circuit_breaker
         import src.api.circuit_breaker as cb_module
         cb_module._circuit_breaker = None
         with pytest.raises(RuntimeError, match="not initialized"):

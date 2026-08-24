@@ -1,6 +1,5 @@
 """Tests for profile budget enforcement and profile+key budget interaction."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 from src.api.models import Budget, ApiKey, get_session
 from src.server.handler import LCPHandler

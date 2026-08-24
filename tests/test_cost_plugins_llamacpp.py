@@ -5,11 +5,9 @@ persisted to a JSON file. All costs are $0.
 """
 
 import json
-import os
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 
-import pytest
 from src.api.cost_plugins.llamacpp import LlamaCppCostPlugin
 
 

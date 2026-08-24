@@ -1,13 +1,11 @@
 """Tests for the LiveBench benchmark runner."""
 import json
-import sys
 
 import pytest
 
 from src.api.benchmark import (
     build_livebench_commands,
     parse_livebench_csv,
-    livebench_dir,
     validate_categories,
     benchmark_status,
     _redact_cmd,
@@ -229,7 +227,6 @@ def test_parse_tasks_csv_model_not_found():
 def test_log_written_to_file_and_read_back(tmp_path, monkeypatch):
     import src.api.benchmark as bm
 
-    engine = None
     bm._bind_log_engine(None)
     monkeypatch.setattr(bm, "_log_dir", str(tmp_path))
     # Clear any prior in-memory buffer.

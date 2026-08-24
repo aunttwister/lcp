@@ -1,7 +1,6 @@
 """Tests for the DeepSeek cost tracking plugin."""
 
 import json
-import time
 from unittest.mock import patch, MagicMock
 from urllib.error import URLError
 

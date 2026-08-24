@@ -347,7 +347,6 @@ class TestProviderTest:
                            body=body)
 
     def test_success(self, temp_db):
-        import urllib.request
         body = {"api_base": "https://api.example.com/v1", "api_key": "sk-test", "model": "gpt-3.5-turbo"}
         h = self._body_handler(temp_db, body)
         mock_resp = MagicMock()

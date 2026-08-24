@@ -2,7 +2,6 @@
 import time
 from unittest.mock import patch
 
-import pytest
 from src.api.prompt_cache import PromptCache, get_prompt_cache
 
 

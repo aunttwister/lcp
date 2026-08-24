@@ -2,7 +2,6 @@
 benchmark_import overall branch + CLI file print, load_capability_matrix
 source-priority, and the remaining setup/benchmark small branches."""
 
-import json
 import os
 import tempfile
 from unittest.mock import MagicMock, patch

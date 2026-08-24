@@ -14,8 +14,6 @@ Persistent state file location (if ``persist_path`` is set):
 
 import json
 import os
-import time
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock

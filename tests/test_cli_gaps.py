@@ -1,6 +1,5 @@
 """CLI + branch coverage for seed_capabilities and benchmark_import."""
 
-import json
 import os
 import tempfile
 from unittest.mock import patch
@@ -119,9 +118,10 @@ class TestCleanupBranch:
         """A model with two release snapshots keeps only the newest."""
         from src.api.seed_capabilities import _cleanup_legacy_capabilities, seed_livebench
         from src.api.models import (
-            CapabilityMetric, ModelCapability, get_engine, get_session,
+            ModelCapability,
+            get_engine,
+            get_session,
         )
-        from src.api.seed_capabilities import LB_TO_LCP
 
         # Seed the pipeline so metrics exist, then add a superseded capability row.
         seed_livebench(db_path)

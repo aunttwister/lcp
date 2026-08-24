@@ -5,7 +5,6 @@ LCPHandler inherits from all of them via multiple inheritance.
 """
 
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
@@ -255,7 +254,7 @@ class HealthEndpoints:
         Computed from the persisted ``requests`` table: successes / total.
         Returns 100.0 when there are no requests in the window.
         """
-        from sqlalchemy import func, case
+        from sqlalchemy import func
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
         try:
             with get_session(self.engine) as session:
@@ -883,8 +882,8 @@ class ProviderEndpoints:
             response = {"ok": False, "status": e.code}
             if is_cloudflare:
                 response["error"] = (
-                    f"Cloudflare block (error 1010) — the request was rejected at the "
-                    f"TLS layer because it does not appear to come from a real browser."
+                    "Cloudflare block (error 1010) — the request was rejected at the "
+                    "TLS layer because it does not appear to come from a real browser."
                 )
                 if ray_id:
                     response["cf_ray"] = ray_id
@@ -2057,7 +2056,6 @@ class DashboardEndpoints:
             self.headers.get("X-Forwarded-Proto", "").split(",")[0].strip() == "https"
             or self.headers.get("X-Forwarded-Scheme") == "https"
         ) else "http"
-        host_url = f"{scheme}://{host}"
         html = render_dashboard(self.config, self.engine, {"Host": host, "X-Forwarded-Proto": scheme}, profile_filter)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")

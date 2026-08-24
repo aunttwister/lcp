@@ -9,9 +9,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from typing import Any
 
-from ..api.config import get_config
 from ..api.logging_config import get_logger
-from ..api.circuit_breaker import get_circuit_breaker
 from ..api.request_pipeline import (
     strip_forbidden_tools,
     calculate_cost,

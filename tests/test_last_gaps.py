@@ -161,7 +161,6 @@ class TestChatCompletionBranches:
 class TestBudgetBlock:
     def test_budget_block_returns_429(self, temp_db):
         from tests.test_server import TestHandler
-        from src.server import LCPHandler
         body = json.dumps({"messages": [{"role": "user", "content": "hi"}]})
         h = TestHandler(path="/l2/chat/completions", method="POST", engine=temp_db, body=body)
         # Force a budget block for the profile (no key).

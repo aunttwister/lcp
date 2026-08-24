@@ -1,9 +1,8 @@
 """Intelligent model routing — prompt classification → capability scoring → best-fit model.
 
-Three routing strategies, from simple to smart:
-  1. CapabilityRouter — task classification + benchmark-derived scores (NEW, recommended)
-  2. DynamicRouter (legacy) — token/tool count heuristics
-  3. Disabled — static chain (current default)
+Routing strategies, from simple to smart:
+  1. CapabilityRouter — task classification + benchmark-derived scores (recommended)
+  2. Disabled — static chain (current default)
 
 The CapabilityRouter loads per-model scores from the model_capabilities DB table,
 classifies each incoming prompt into a task type (agentic, unit tests, coding,
@@ -14,7 +13,6 @@ the best fit.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from functools import lru_cache
 from typing import Optional
 
 from .cost_estimator import count_tokens
@@ -457,81 +455,6 @@ class CapabilityRouter:
             )
 
         return task_scores.get(benchmark, DEFAULT_CAPABILITY.get(logical, 0.5))
-
-    def rank_models(
-        self,
-        task: str,
-        available_models: list[str],
-    ) -> list[tuple[str, float]]:
-        """Rank available models by (capability * cost_adjustment).
-
-        Returns list of (model, score) sorted best-first.
-        """
-        if not available_models:
-            return []
-
-        priced_models = []
-        for model in available_models:
-            capability = self.get_model_score(model, task)
-            price = _MODEL_PRICES.get(model, 1.0)
-            max_price = max(v for v in _MODEL_PRICES.values() if v > 0)
-            cost_factor = price / max_price if max_price > 0 else 0.5
-            # Score = capability + cost_bias * (1 - cost_factor)
-            # A cheaper model gets a boost: flash (0.27/0.87=0.31 → boost 0.15*0.69=0.104)
-            score = capability + self.cost_bias * (1.0 - cost_factor)
-            priced_models.append((model, score))
-
-        priced_models.sort(key=lambda x: -x[1])
-        return priced_models
-
-    def select_model(
-        self,
-        messages: list[dict],
-        tools: Optional[list[dict]] = None,
-        max_tokens: int = 1024,
-        available_models: Optional[list[str]] = None,
-    ) -> Optional[str]:
-        """Select the best model for this request.
-
-        Returns the recommended model name, or None to use the chain's default.
-        """
-        if not self.is_enabled():
-            return None
-
-        task = classify_task(messages, tools, max_tokens)
-
-        # Build available model list from chain if not provided
-        if available_models is None:
-            available_models = list(_MODEL_PRICES.keys())
-
-        ranked = self.rank_models(task, available_models)
-        if not ranked:
-            return None
-
-        best_model, best_score = ranked[0]
-        chain_default = available_models[0] if available_models else "unknown"
-
-        # Only override if the selected model is meaningfully better
-        # (avoids flapping between models that are nearly tied)
-        default_score = self.get_model_score(chain_default, task)
-        if best_score > default_score + 0.05:  # 5% threshold
-            logger.info(
-                "router_override",
-                task=task,
-                chain_default=chain_default,
-                recommended=best_model,
-                default_score=round(default_score, 3),
-                recommended_score=round(best_score, 3),
-            )
-            return best_model
-
-        logger.debug(
-            "router_keep_default",
-            task=task,
-            model=chain_default,
-            score=round(default_score, 3),
-        )
-        return None
 
     # ── Provider-aware selection (Phase 2) ────────────────────────────────
 
@@ -1113,33 +1036,3 @@ def routing_status(config: Optional[object] = None) -> dict:
         "profiles": profiles,
         "providers": providers,
     }
-
-
-# ── Legacy: DynamicRouter (kept for reference, not used) ─────────────────────
-
-class DynamicRouter:
-    """[DEPRECATED] Simple flash-vs-pro heuristic. Use CapabilityRouter instead."""
-
-    SHORT_PROMPT_THRESHOLD = 500
-    LONG_PROMPT_THRESHOLD = 2000
-    TOOL_COUNT_THRESHOLD = 3
-    MODEL_MAP = {"flash": "deepseek-v4-flash", "pro": "deepseek-v4-pro"}
-
-    def __init__(self, enabled: bool = False):
-        self.enabled = enabled
-
-    def should_use_flash(self, messages, tools=None, max_tokens=1024):
-        token_count = count_tokens(messages, tools)
-        tool_count = len(tools) if tools else 0
-        if token_count > self.LONG_PROMPT_THRESHOLD:
-            return False
-        if tool_count > self.TOOL_COUNT_THRESHOLD:
-            return False
-        if max_tokens > 2048:
-            return False
-        return True
-
-    def get_recommended_model(self, messages, tools=None, max_tokens=1024):
-        if self.enabled and self.should_use_flash(messages, tools, max_tokens):
-            return self.MODEL_MAP["flash"]
-        return self.MODEL_MAP["pro"]

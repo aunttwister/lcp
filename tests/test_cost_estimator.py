@@ -1,6 +1,5 @@
 """Tests for cost_estimator.py — tiktoken-based exact token counting."""
-import pytest
-from src.api.cost_estimator import count_tokens, estimate_tokens, estimate_from_request, estimate_cost
+from src.api.cost_estimator import count_tokens, estimate_from_request, estimate_cost
 
 def test_count_tokens_simple():
     n = count_tokens([{"role": "user", "content": "hello world"}])
@@ -28,19 +27,6 @@ def test_count_tokens_code():
     """Code is more token-dense than prose — tiktoken catches this."""
     n = count_tokens([{"role": "user", "content": "def foo(x): return x+1"}])
     assert n > 8  # code gets many more tokens than chars/4 would estimate
-
-def test_estimate_tokens_basic():
-    msgs = [{"role": "user", "content": "hello world"}]
-    result = estimate_tokens(msgs)
-    assert "total" in result
-    assert "messages" in result
-    assert result["total"] >= 2
-
-def test_estimate_tokens_with_tools():
-    msgs = [{"role": "user", "content": "hello"}]
-    tools = [{"type": "function", "function": {"name": "search", "parameters": {}}}]
-    result = estimate_tokens(msgs, tools)
-    assert result["tools"] > 0
 
 def test_estimate_from_request():
     result = estimate_from_request("deepseek-v4-pro", [{"role": "user", "content": "hello"}], max_tokens=100)

@@ -8,7 +8,6 @@ import pytest
 from src.api.cost_cache import (
     _reset_singletons,
     get_cost_cache,
-    get_refresher,
     get_settings,
     init_cost_cache,
     init_refresher,

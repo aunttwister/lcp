@@ -2,13 +2,11 @@
 
 import os
 import time
-from pathlib import Path
 
 from .api.config import init_config
 from .api.logging_config import setup_logging, get_logger
 from .api.models import get_engine, Base
 from .api.circuit_breaker import get_circuit_breaker
-from .api.key_manager import get_key_manager
 from .api.alert_manager import init_alert_manager
 from .server import create_server
 
@@ -108,8 +106,6 @@ def main():
     get_circuit_breaker().attach_engine(engine)
     t0 = _startup_step("circuit_breaker_engine", t0)
     logger.info("circuit_breaker_engine_attached")
-
-    data_dir = os.path.dirname(db_path) if os.path.dirname(db_path) else "data"
 
     port = int(os.environ.get("LISTEN_PORT", str(cfg.get("port", 8734))))
     server = create_server(config, engine, port)

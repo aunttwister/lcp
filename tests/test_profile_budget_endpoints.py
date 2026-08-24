@@ -4,7 +4,6 @@ These cover the profile-budget management UI endpoints added alongside the
 unified budget system: reading a profile budget and creating-or-updating it.
 """
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest

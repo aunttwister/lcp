@@ -2,7 +2,6 @@
 plugin cookie/workspace endpoints, provider toggle, chain reorder, and the
 setup wizard endpoints."""
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,7 +11,6 @@ from src.server.endpoints import (
     AlertEndpoints,
     PluginEndpoints,
     ProviderEndpoints,
-    ProfileEndpoints,
     SetupEndpoints,
     HealthEndpoints,
 )

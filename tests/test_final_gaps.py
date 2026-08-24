@@ -4,7 +4,6 @@ reasoning_store prune/clear/singleton, and remaining endpoint blocks
 
 import json
 import os
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -88,7 +87,7 @@ class TestKeyMigration:
         data_dir = tmp_path / "data"
         data_dir.mkdir(exist_ok=True)
         (data_dir / "api_keys.json").write_text(_json.dumps(legacy))
-        km = KeyManager(temp_db, str(data_dir))
+        KeyManager(temp_db, str(data_dir))
         km2 = KeyManager(temp_db, str(data_dir))  # second run: hash already exists
         keys = km2.list_keys()
         assert len(keys) == 1  # no duplicate
@@ -97,37 +96,6 @@ class TestKeyMigration:
         from src.api.key_manager import KeyManager
         km = KeyManager(temp_db, str(tmp_path / "nodata"))
         assert km.list_keys() == []
-
-
-# ── key_manager: spend thresholds ────────────────────────────────────────────
-
-class TestKeySpend:
-    def test_record_spend_returns_breach_at_threshold(self, temp_db):
-        from src.api.key_manager import KeyManager
-        km = KeyManager(temp_db, "data")
-        created = km.create_key(name="Budgeted", spend_limit=100.0)
-        # 90% of 100 = 90 → crosses 50% threshold (first in list) → breach 50.
-        breach = km.record_spend(created["id"], 90.0)
-        assert breach is not None
-        assert breach["threshold"] == 50
-        assert breach["spend_pct"] == 90.0
-
-    def test_record_spend_no_limit_no_breach(self, temp_db):
-        from src.api.key_manager import KeyManager
-        km = KeyManager(temp_db, "data")
-        created = km.create_key(name="NoLimit")
-        assert km.record_spend(created["id"], 50.0) is None
-
-    def test_record_spend_missing_key_none(self, temp_db):
-        from src.api.key_manager import KeyManager
-        km = KeyManager(temp_db, "data")
-        assert km.record_spend(999999, 10.0) is None
-
-    def test_record_spend_nonpositive_none(self, temp_db):
-        from src.api.key_manager import KeyManager
-        km = KeyManager(temp_db, "data")
-        created = km.create_key(name="K")
-        assert km.record_spend(created["id"], 0) is None
 
 
 # ── reasoning_store: prune/clear ─────────────────────────────────────────────
@@ -152,18 +120,17 @@ class TestReasoningStorePrune:
 
     def test_singleton_roundtrip(self):
         from src.api import reasoning_store
-        reasoning_store.reset_reasoning_store()
+        reasoning_store._reasoning_store = None
         s = reasoning_store.get_reasoning_store()
         s.capture("c", "v")
         assert reasoning_store.get_reasoning_store().get_for_tool_call_id("c") == "v"
-        reasoning_store.reset_reasoning_store()
+        reasoning_store._reasoning_store = None
 
 
 # ── Endpoint: manual score edge cases ────────────────────────────────────────
 
 class TestManualScoreEdges:
     def _handler(self, temp_db, body):
-        from src.server import LCPHandler
         from tests.test_server import TestHandler
         return TestHandler(path="/api/models/capability/manual", method="POST",
                            engine=temp_db, body=body)
@@ -190,7 +157,7 @@ class TestManualScoreEdges:
         assert h.send_response.call_args[0][0] == 400
 
     def test_normalizes_0_100_and_updates(self, temp_db):
-        from tests.test_server import TestHandler, _json_body
+        from tests.test_server import TestHandler
         from src.api.models import get_session, ModelCapability
         body = json.dumps({"model": "m", "release": "2026-01-01", "scores": {"code_generation": 85.0}})
         h = TestHandler(path="/api/models/capability/manual", method="POST",
@@ -211,7 +178,8 @@ class TestManualScoreEdges:
 
 class TestRegistryUpsertEdges:
     def test_upsert_detects_quantization(self, temp_db):
-        from tests.test_server import TestHandler, _json_body
+        from tests.test_server import TestHandler
+        from src.api.models import ModelRegistryEntry, get_session
         body = json.dumps({
             "logical_name": "qwen3.6-27b-q4_k_m",
             "benchmark_key": "qwen3.6-27b-q4_k_m",
@@ -220,14 +188,12 @@ class TestRegistryUpsertEdges:
         h = TestHandler(path="/api/models/registry", method="POST", engine=temp_db, body=body)
         h.do_POST()
         assert h.send_response.call_args[0][0] == 200
-        from src.api.models import ModelRegistryEntry, get_session
         with get_session(temp_db) as s:
             entry = s.query(ModelRegistryEntry).filter_by(logical_name="qwen3.6-27b-q4_k_m").first()
             assert entry.quantization == "Q4_K_M"
 
     def test_upsert_updates_existing(self, temp_db):
         from tests.test_server import TestHandler, _json_body
-        from src.api.models import ModelRegistryEntry, get_session
         body = json.dumps({
             "logical_name": "deepseek-v4-pro",
             "benchmark_key": "deepseek-v4-pro",

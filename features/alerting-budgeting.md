@@ -19,7 +19,7 @@ Move from the current in-memory `AlertManager` singleton (volatile, no persisten
 - 5-minute cooldown per dedup key
 - Error spike tracking: rolling window, configurable threshold
 - Config via in-memory dict (also lost on restart)
-- `fire_budget_breach()` and `fire_provider_status()` convenience methods
+- Alerts fired directly via `AlertManager.fire(rule=..., severity=..., ...)`
 - API endpoints exist: `GET /api/alerts`, `GET /api/alerts/active`, `GET /api/alerts/config`, `PUT /api/alerts/config`, `POST /api/alerts/{id}/acknowledge`, `POST /api/alerts/webhook/test`
 
 ### Budgeting (`models.py` + `endpoints.py`)
@@ -60,7 +60,7 @@ Move from the current in-memory `AlertManager` singleton (volatile, no persisten
 | 2.2 | Add `check_budget(profile, key_id, estimated_cost) → bool` to handler pipeline — enforces BEFORE sending to LLM |
 | 2.3 | Return 429 with `{"error": "budget_exceeded", "budget_name": "..."}` when blocked |
 | 2.4 | After each successful request, increment `budgets.current_spend` and `api_keys.total_spend` |
-| 2.5 | After spend update, check thresholds and fire alerts via `fire_budget_breach()` |
+| 2.5 | After spend update, check thresholds and fire alerts via `AlertManager.fire()` |
 | 2.6 | Budget `action` field: `log` (alert only) vs `block` (429) |
 
 ### Phase 3: Alert UI Page

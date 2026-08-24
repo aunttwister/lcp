@@ -1,7 +1,6 @@
 """Tests for the cost plugin base — CostPlugin ABC, PluginRegistry, singleton."""
 
 import pytest
-from unittest.mock import MagicMock, patch
 
 from src.api.cost_plugins.base import (
     CostPlugin,
@@ -219,22 +218,6 @@ class TestPluginRegistry:
         result = reg.fetch_all_subscriptions()
         assert result["dummy"] == {"rolling_pct": 25.0}
         assert result["another"] is None
-
-    def test_shutdown_all(self):
-        reg = PluginRegistry()
-        m = MagicMock(spec=CostPlugin)
-        m.provider_name = "mock"
-        m.on_shutdown = MagicMock()
-        reg.register(m)
-        reg.shutdown_all()
-        m.on_shutdown.assert_called_once()
-
-    def test_shutdown_all_swallows_exceptions(self):
-        reg = PluginRegistry()
-        p = _DummyPlugin()
-        p.on_shutdown = MagicMock(side_effect=RuntimeError("boom"))
-        reg.register(p)
-        reg.shutdown_all()  # should not raise
 
 
 # ═══════════════════════════════════════════════════════════════════════

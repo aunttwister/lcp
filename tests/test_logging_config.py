@@ -1,6 +1,4 @@
 """Tests for logging_config.py"""
-import pytest
-import sys
 from src.api.logging_config import setup_logging, get_logger
 
 def test_setup_info():

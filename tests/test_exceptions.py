@@ -1,6 +1,5 @@
 """Tests for exceptions.py"""
 import pytest
-import sys
 from src.api.exceptions import (
     LCPError, ConfigError, AuthError, ForbiddenError, CreditExhaustedError,
     ProviderError, ProviderTimeoutError, ProviderRateLimitError,

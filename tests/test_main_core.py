@@ -2,7 +2,6 @@
 import os
 import tempfile
 import pytest
-import sys
 from unittest.mock import patch, MagicMock
 
 from src.api.request_pipeline import record_cost
@@ -110,7 +109,7 @@ class TestForwardRequest:
             assert result_body["choices"][0]["message"]["content"] == "hello"
 
     def test_handles_urlerror(self, mock_config):
-        from src.api.request_pipeline import forward_request, ProviderTimeoutError
+        from src.api.request_pipeline import ProviderTimeoutError, forward_request
         provider_cfg = {
             "provider": "badco",
             "api_key_env": "TEST_KEY",
@@ -127,7 +126,7 @@ class TestForwardRequest:
                 forward_request(provider_cfg, body, mock_config)
 
     def test_handles_http_429(self, mock_config):
-        from src.api.request_pipeline import forward_request, ProviderRateLimitError
+        from src.api.request_pipeline import ProviderRateLimitError, forward_request
         provider_cfg = {
             "provider": "ratelimited",
             "api_key_env": "TEST_KEY",
@@ -259,7 +258,7 @@ class TestTryChain:
 
     def test_image_content_allowed_for_vision_model(self, mock_config):
         """Chain proceeds when model supports vision and body has images."""
-        from src.api.request_pipeline import try_chain, forward_request
+        from src.api.request_pipeline import try_chain
         mock_config.model_limits = {
             "vision-model": {"context_window": 100000, "supports_vision": True},
         }

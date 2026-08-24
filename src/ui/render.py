@@ -6,7 +6,6 @@ and shared partials for sidebar/JS without any build step.
 """
 
 import json
-import os
 from datetime import date as _date
 from pathlib import Path
 

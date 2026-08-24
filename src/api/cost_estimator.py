@@ -52,17 +52,6 @@ def count_tokens(messages: list[dict], tools: Optional[list[dict]] = None) -> in
     return token_count
 
 
-def estimate_tokens(messages: list[dict], tools: Optional[list[dict]] = None) -> dict:
-    """Estimate token counts for messages and tools."""
-    msg_tokens = count_tokens(messages, tools)
-    tools_tokens = count_tokens(tools) if tools else 0
-    return {
-        "messages": msg_tokens,
-        "tools": tools_tokens,
-        "total": msg_tokens + tools_tokens,
-    }
-
-
 def estimate_cost(
     model: str,
     input_tokens: int,
