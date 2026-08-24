@@ -27,6 +27,12 @@ dev = [
     "pytest-cov>=5.0",
     "pytest-mock>=3.12",
 ]
+# Optional installable modules (NOT core — keeps the base image lean).
+# Install from the Setup page at runtime; WITH_MEMORY=1 bakes them in.
+memory = [
+    "lancedb>=0.15",
+    "sentence-transformers>=3.0",
+]
 
 [project.scripts]
 lcp = "src.main:main"

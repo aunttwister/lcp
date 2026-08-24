@@ -48,6 +48,7 @@ from .endpoints import (
     DashboardEndpoints,
     SetupEndpoints,
     SettingsEndpoints,
+    MemoryEndpoints,
 )
 
 logger = get_logger("lcp.server")
@@ -113,6 +114,7 @@ class LCPHandler(
     DashboardEndpoints,
     SetupEndpoints,
     SettingsEndpoints,
+    MemoryEndpoints,
     BaseHTTPRequestHandler,
 ):
     """HTTP request handler for LCP gateway."""
@@ -358,6 +360,13 @@ class LCPHandler(
             run_id = self.path.split("/")[4]
             self._serve_benchmark_detail_api(run_id)
         else:
+            # GET /{profile}/memory/count
+            profile = self._memory_profile()
+            if profile:
+                parts = self.path.rstrip("/").split("/")
+                if len(parts) == 4 and parts[3] == "count":
+                    self._serve_memory_api(profile, "count")
+                    return
             self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -422,7 +431,7 @@ class LCPHandler(
             name = self.path.split("/")[5]
             self._serve_setup_install_api(kind, name)
             return
-        elif self.path == "/api/circuit-breaker/reset":
+        elif self.path.startswith("/api/circuit-breaker/reset"):
             self._serve_circuit_breaker_reset()
             return
         elif self.path == "/api/models/registry":
@@ -452,6 +461,14 @@ class LCPHandler(
             provider = self.path.split("/")[4]
             self._serve_plugin_workspace_id_set(provider)
             return
+
+        # POST /{profile}/memory/{retain|recall|forget}
+        profile = self._memory_profile()
+        if profile:
+            parts = self.path.rstrip("/").split("/")
+            if len(parts) == 4 and parts[3] in ("retain", "recall", "forget"):
+                self._serve_memory_api(profile, parts[3])
+                return
 
         # Only handle chat completions
         if "/chat/completions" not in self.path:

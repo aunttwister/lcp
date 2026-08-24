@@ -107,6 +107,16 @@ def main():
     t0 = _startup_step("circuit_breaker_engine", t0)
     logger.info("circuit_breaker_engine_attached")
 
+    # Initialize the memory plugin (LanceDB + embedder). Never blocks boot:
+    # when the module isn't installed or is disabled, endpoints return 501.
+    try:
+        from .api.memory import init_memory
+        memory_active = init_memory(config)
+        t0 = _startup_step("memory_init", t0)
+        logger.info("memory_initialized", active=memory_active)
+    except Exception as exc:  # noqa: BLE001 — never block boot
+        logger.warning("memory_init_failed", error=str(exc))
+
     port = int(os.environ.get("LISTEN_PORT", str(cfg.get("port", 8734))))
     server = create_server(config, engine, port)
     t0 = _startup_step("server_create", t0)
@@ -124,6 +134,11 @@ def main():
     finally:
         from .api.cost_cache import stop_refresher
         stop_refresher()
+        try:
+            from .api.memory import shutdown_memory
+            shutdown_memory()
+        except Exception:  # noqa: BLE001 — best-effort shutdown
+            pass
 
 
 if __name__ == "__main__":

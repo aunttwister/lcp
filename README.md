@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1434%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-1480%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -120,7 +120,7 @@ Clients (agents, VS Code, scripts, curl)
 ### Plugin architecture
 - Provider cost extraction plugins — DeepSeek, OpenCode, Command Code, llama.cpp, OpenAI
 - **Command Code plugin** — subscription usage tracking (rolling 5-hour / weekly / monthly usage windows, monthly credits remaining, plan + status, plus billing-period totals: total tokens, total runs, and monthly usage) via a browser session cookie from the credential store, plus cost history from the gateway `requests` table
-- Memory plugin with embedded [LanceDB](https://github.com/lancedb/lancedb) backend — columnar vector storage, ANN indexing, no separate service
+- Memory module — installable from the Setup page: per-profile semantic memory with an embedded [LanceDB](https://github.com/lancedb/lancedb) backend (columnar vector storage, ANN indexing, no separate service)
 - See [features/memory.md](features/memory.md) for the unified memory specification
 
 ## Quick Start
@@ -452,13 +452,13 @@ Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 1434 unit tests covering routing (incl. benchmark-driven capability routing, runtime enable toggle, `unit_tests` taxonomy), budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, and the plugin system |
+| `pytest` | Test runner — 1480 unit tests covering routing (incl. benchmark-driven capability routing, runtime enable toggle, `unit_tests` taxonomy), budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, the memory plugin, and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**93% overall** — 6,762 of 7,251 statements covered (1434 tests, 0 integration tests).
+**92% overall** — 7,161 of 7,791 statements covered (1480 tests, 0 integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 
@@ -556,7 +556,7 @@ See [PLAN.md](PLAN.md) for the full API reference.
   ([spec](features/logging-enhancements.md))
 - Provider health dashboard — richer uptime/health surfacing
   ([spec](features/provider-health.md))
-- Memory plugin — embedded LanceDB, unified `/v1/memories` endpoint
+- Memory module hardening — index management, hybrid FTS, time-decay, consolidation, tag auto-suggest, and a unified `/v1/memories` endpoint
   ([spec](features/memory.md))
 - Dashboard enhancements — backlog from the original dashboard plan
   ([spec](features/enhancements.md))

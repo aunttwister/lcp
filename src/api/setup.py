@@ -85,6 +85,21 @@ def livebench_pythonpath() -> str:
     return os.pathsep.join((livebench_site(), livebench_root()))
 
 
+def memory_site() -> str:
+    """Return the persistent site-packages dir for memory module deps.
+
+    ``<LCP_MODULES_DIR>/memory`` — pip installs ``--target`` here so lancedb +
+    sentence-transformers survive container recreation, and ``remove_memory``
+    can delete it without touching LiveBench's shared ``site`` dir.
+    """
+    return os.path.join(modules_dir(), "memory")
+
+
+def memory_models_dir() -> str:
+    """Return the directory used to cache the embedding model weights."""
+    return os.path.join(modules_dir(), "models", "memory")
+
+
 # ── Manifest ────────────────────────────────────────────────────────────────
 
 def provider_steps(config) -> list[dict]:
@@ -145,11 +160,36 @@ def benchmark_step() -> dict:
     }
 
 
+def memory_step() -> dict:
+    """Build the memory module manifest entry."""
+    from .memory import memory_status
+
+    status = memory_status()
+    installing = _mem_install
+    if installing is None and _mem_last is not None and _mem_last.get("status") == "failed":
+        installing = _mem_last
+    return {
+        "kind": "module",
+        "name": "memory",
+        "title": "Memory (LanceDB)",
+        "description": (
+            "Per-profile semantic memory bank — store facts, recall by "
+            "embedding similarity. Install lancedb + sentence-transformers "
+            "at runtime."
+        ),
+        "required": False,
+        "installed": bool(status.get("available")),
+        "status": status,
+        "install_path": memory_site(),
+        "installing": installing,
+    }
+
+
 def manifest(config) -> dict:
-    """Return the full setup manifest (provider steps + benchmark module)."""
+    """Return the full setup manifest (provider steps + benchmark + memory modules)."""
     return {
         "steps": provider_steps(config),
-        "modules": [benchmark_step()],
+        "modules": [benchmark_step(), memory_step()],
     }
 
 
@@ -353,6 +393,203 @@ def remove_livebench(engine) -> dict:
     set_state(engine, "module:livebench", "removed")
     logger.info("setup_livebench_removed", removed=removed)
     return {"removed": True, "module": "livebench", "paths": removed}
+
+
+# ── Memory module install (background + progress) ───────────────────────────
+
+_mem_lock = threading.Lock()
+_mem_install: Optional[dict] = None  # in-flight {status, progress, detail, log, ...}
+_mem_last: Optional[dict] = None     # terminal result (done/failed) for the UI
+
+# Memory deps are installed into their own --target dir (memory_site) so
+# remove_memory can delete them without touching LiveBench's shared site.
+MEMORY_PACKAGES = ["lancedb>=0.15", "sentence-transformers>=3.0"]
+MEMORY_MODEL = "BAAI/bge-small-en-v1.5"
+
+
+def _mem_update(msg: Optional[str], progress: Optional[float] = None,
+                status: Optional[str] = None) -> None:
+    """Mutate the shared memory-install state (no-op when nothing in flight)."""
+    global _mem_install
+    if _mem_install is None:
+        return
+    if status is not None:
+        _mem_install["status"] = status
+    if progress is not None:
+        _mem_install["progress"] = round(min(max(progress, 0.0), 100.0), 1)
+    if msg is not None:
+        clean = (msg.rstrip("\n") if isinstance(msg, str) else str(msg)).strip("\r")
+        if clean:
+            _mem_install["detail"] = clean[-200:]
+            log = _mem_install.setdefault("log", [])
+            log.append(clean)
+            if len(log) > _LOG_MAX_LINES:
+                del log[: len(log) - _LOG_MAX_LINES]
+    _mem_install["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def _mem_finish(status: str, detail: str) -> None:
+    """Mark the memory install terminal and move state into ``_mem_last``."""
+    global _mem_install, _mem_last
+    _mem_update(detail, status=status)
+    if status == "done":
+        _mem_update(None, progress=100.0)
+    if _mem_install is not None:
+        _mem_install["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _mem_last = dict(_mem_install)
+    _mem_install = None
+
+
+def mem_progress() -> Optional[dict]:
+    """Return the in-flight memory install state (or None when idle)."""
+    return _mem_install
+
+
+def mem_last() -> Optional[dict]:
+    """Return the most recent terminal memory install result (or None)."""
+    return _mem_last
+
+
+def start_memory_install(engine) -> dict:
+    """Start (or join) the memory module install and return its state."""
+    global _mem_install, _mem_last
+
+    with _mem_lock:
+        if _mem_install is not None and _mem_install.get("status") in ("queued", "running"):
+            return _mem_install
+        _mem_last = None
+        _mem_install = {
+            "status": "queued",
+            "progress": 0.0,
+            "detail": "Waiting to start…",
+            "log": [],
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        state = dict(_mem_install)
+        thread = threading.Thread(target=_run_memory_install, args=(engine,), daemon=True)
+        thread.start()
+        return state
+
+
+def _run_memory_install(engine) -> None:
+    """Background install: pip lancedb + sentence-transformers into memory_site,
+    probe importability, and pre-download the embedding model weights."""
+    try:
+        site = memory_site()
+        models_dir = memory_models_dir()
+        _mem_update(f"Target directory: {site}")
+        os.makedirs(site, exist_ok=True)
+        os.makedirs(models_dir, exist_ok=True)
+
+        _stream_mem(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+             "--target", site] + MEMORY_PACKAGES,
+            cwd=None, start=2.0, end=70.0,
+            status_msg="Installing memory deps (lancedb + sentence-transformers)…",
+        )
+
+        # Verify the deps actually became importable with the target dir on
+        # PYTHONPATH (fresh subprocess probe, like LiveBench core_deps_available).
+        from .memory import memory_available
+        if not memory_available(site):
+            raise SetupError(
+                "Memory deps install did not take effect. The deps are at "
+                f"{site} — check the install log."
+            )
+
+        # Pre-download the embedding model into the persistent cache dir so the
+        # first retain/recall doesn't hit the Hub at runtime.
+        try:
+            _stream_mem(
+                [sys.executable, "-c",
+                 "import os,sys;"
+                 "os.environ.setdefault('LCP_MODULES_DIR', "
+                 f"{modules_dir()!r});"
+                 "from src.api.memory.embeddings import EmbeddingModel;"
+                 f"m=EmbeddingModel({MEMORY_MODEL!r}, cache_dir={models_dir!r});"
+                 "m.embed(['warmup'])",
+                 ],
+                cwd=None, start=70.0, end=100.0,
+                status_msg="Pre-downloading embedding model…",
+            )
+        except subprocess.CalledProcessError as exc:
+            _mem_update(f"Model pre-download skipped ({exc}) — will download on first use.")
+            _mem_update(None, progress=100.0)
+
+        set_state(engine, "module:memory", "done")
+        _mem_finish("done", "Memory module installed.")
+    except subprocess.CalledProcessError as exc:
+        _mem_finish("failed", _tail_mem_detail(f"Install failed: {exc}"))
+    except FileNotFoundError as exc:
+        _mem_finish("failed", f"Missing tool: {exc}")
+    except Exception as exc:  # noqa: BLE001 — background thread must not die
+        _mem_finish("failed", _tail_mem_detail(f"Install failed: {exc}"))
+
+
+def _stream_mem(cmd: list[str], cwd: Optional[str], start: float, end: float,
+                status_msg: str) -> None:
+    """Like ``_stream`` but updates the memory-install log."""
+    _mem_update(status_msg, progress=start, status="running")
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, errors="replace",
+    )
+    seen = 0
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        seen += 1
+        _mem_update(line)
+        if seen % 3 == 0:
+            frac = min(0.9, seen / 90.0)
+            _mem_update(None, progress=start + (end - start) * frac)
+    rc = proc.wait()
+    _mem_update(None, progress=end)
+    if rc != 0:
+        raise subprocess.CalledProcessError(rc, cmd)
+
+
+def _tail_mem_detail(fallback: str, lines: int = 6) -> str:
+    """Return *fallback* plus real error lines from the memory install log."""
+    global _mem_install
+    if _mem_install is None:
+        return fallback
+    log = _mem_install.get("log") or []
+    if not log:
+        return fallback
+    error_markers = (
+        "traceback", "error", "fatal", "failed", "exception", "conflict",
+        "cannot", "could not", "no matching", "not importable", "missing",
+    )
+    error_lines = [
+        ln for ln in log
+        if any(m in ln.lower() for m in error_markers)
+        and "pip.pypa.io" not in ln.lower()
+    ]
+    picked = error_lines[-lines:] if error_lines else log[-lines:]
+    tail = "\n".join(picked).strip()
+    if not tail:
+        tail = "\n".join(log[-lines:]).strip()
+    if not tail:
+        return fallback
+    return f"{fallback}\n{tail[-800:]}"
+
+
+def remove_memory(engine) -> dict:
+    """Remove the memory module (deps dir + model cache) and clear setup state.
+
+    Does NOT delete stored memories in the LanceDB data dir (that lives under
+    the app data dir, not LCP_MODULES_DIR).
+    """
+    removed: list[str] = []
+    for path in (memory_site(), memory_models_dir()):
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path)
+
+    set_state(engine, "module:memory", "removed")
+    logger.info("setup_memory_removed", removed=removed)
+    return {"removed": True, "module": "memory", "paths": removed}
 
 
 # ── LiveBench runtime install (background + progress) ───────────────────────

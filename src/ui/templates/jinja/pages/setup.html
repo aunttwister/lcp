@@ -6,7 +6,7 @@
 <h1>Setup</h1>
 <p class="subtitle">
   Install LCP plugins on first startup. Required provider plugins gate the
-  dashboard; the LiveBench module is optional and can be skipped.
+  dashboard; optional modules (LiveBench, Memory) can be skipped.
 </p>
 
 <div class="setup-wrap">
@@ -29,7 +29,7 @@
     <div class="empty">Loading…</div>
   </div>
 
-  <!-- Live install log (visible while LiveBench installs) -->
+  <!-- Live install log (visible while a module installs) -->
   <div class="model-section" id="setupLogPanel" style="display:none;margin-top:1rem">
     <h4 style="display:flex;justify-content:space-between;align-items:center">
       Install log
@@ -176,16 +176,22 @@ function renderSteps() {
 
 async function removeStep(target) {
   const [kind, name] = target.split(':');
-  const title = kind === 'provider' ? name : 'LiveBench';
+  const title = kind === 'provider' ? name : moduleName(name);
   if (!confirm('Remove "' + title + '" plugin? This clears its config and credentials.')) return;
   const res = await api('DELETE', '/api/setup/' + kind + '/' + name);
   if (res.error) { alert('Error: ' + res.error); return; }
   await loadSetup();
 }
 
-function livebench() {
+function moduleName(name) {
   const modules = SETUP.manifest ? (SETUP.manifest.modules || []) : [];
-  return modules.find(m => m.name === 'livebench');
+  const m = modules.find(x => x.name === name);
+  return m ? (m.title || m.name) : name;
+}
+
+function moduleByName(name) {
+  const modules = SETUP.manifest ? (SETUP.manifest.modules || []) : [];
+  return modules.find(m => m.name === name);
 }
 
 async function loadSetup() {
@@ -200,9 +206,11 @@ async function loadSetup() {
 function renderLog() {
   const panel = document.getElementById('setupLogPanel');
   if (!panel) return;
-  const lb = livebench();
-  const installing = lb && lb.installing;
-  const log = (installing && installing.log) || [];
+  const mods = SETUP.manifest ? (SETUP.manifest.modules || []) : [];
+  const log = [];
+  mods.forEach(m => {
+    if (m.installing && m.installing.log) log.push.apply(log, m.installing.log);
+  });
   if (!log.length) { panel.style.display = 'none'; return; }
   panel.style.display = 'block';
   const pre = document.getElementById('setupLogLines');
@@ -221,19 +229,23 @@ function openLog(target) {
 async function pollProgress() {
   const data = await api('GET', '/api/setup/progress');
   if (data.error) return;
-  const lb = livebench();
-  if (!lb) return;
-  const prog = data.progress || {};
-  if (prog.status === 'idle') {
-    lb.installing = null;
-  } else {
-    lb.installing = prog;
-    lb.progress = prog.progress;
-    lb.detail = prog.detail;
-  }
-  if (data.installed) { lb.installed = true; }
+  const mods = SETUP.manifest ? (SETUP.manifest.modules || []) : [];
+  let terminal = false;
+  mods.forEach(m => {
+    const prog = (data.modules && data.modules[m.name]) ? data.modules[m.name] : data.progress;
+    if (!prog) return;
+    if (prog.status === 'idle') {
+      m.installing = null;
+    } else {
+      m.installing = prog;
+      m.progress = prog.progress;
+      m.detail = prog.detail;
+      if (prog.installed) m.installed = true;
+      if (prog.status === 'done' || prog.status === 'failed') terminal = true;
+    }
+  });
   renderSteps();
-  if (prog.status === 'done' || prog.status === 'failed') {
+  if (terminal) {
     stopPolling();
     loadSetup(); // refresh manifest for final state
   }
@@ -271,8 +283,9 @@ function openInstall(target) {
     cookieRow.style.display = name === 'opencode' ? '' : 'none';
     wsRow.style.display = name === 'opencode' ? '' : 'none';
   } else {
-    title.textContent = 'Install LiveBench';
-    note.textContent = 'Clones LiveBench and installs it at runtime (can take a few minutes).';
+    const mod = moduleByName(name) || {};
+    title.textContent = 'Install ' + (mod.title || name);
+    note.textContent = mod.description || 'Installs this module at runtime (can take a few minutes).';
     keyRow.style.display = 'none';
     cookieRow.style.display = 'none';
     wsRow.style.display = 'none';
@@ -300,7 +313,7 @@ async function confirmInstall() {
       closeDialog('setupInstallDialog');
       await loadSetup();
     } else {
-      const res = await api('POST', '/api/setup/install/module/livebench', {});
+      const res = await api('POST', '/api/setup/install/module/' + name, {});
       if (res.error) { alert('Error: ' + res.error); }
       closeDialog('setupInstallDialog');
       startPolling();

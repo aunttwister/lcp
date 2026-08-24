@@ -43,6 +43,20 @@ RUN if [ "$WITH_BENCH" = "1" ]; then \
         && pip install --no-cache-dir -r code_runner/requirements_eval.txt ; \
     fi
 
+# ── Memory (OPTIONAL — memory "plugin") ─────────────────────────────────────
+# The memory module (LanceDB + sentence-transformers + embedding model cache) is
+# opt-in. Set the build arg WITH_MEMORY=1 to bake its deps into the image under
+# $LCP_MODULES_DIR/memory; the default (WITH_MEMORY=0) keeps the gateway lean and
+# the memory endpoints report "unavailable" until installed from the Setup page.
+#
+#   docker compose build --build-arg WITH_MEMORY=1 lcp
+ARG WITH_MEMORY=0
+RUN if [ "$WITH_MEMORY" = "1" ]; then \
+        mkdir -p "${LCP_MODULES_DIR}" \
+        && pip install --no-cache-dir --target "${LCP_MODULES_DIR}/memory" \
+            lancedb sentence-transformers ; \
+    fi
+
 # ── Application code ──
 COPY src/ ./src/
 COPY config/ ./config/

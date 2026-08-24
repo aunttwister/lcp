@@ -125,6 +125,16 @@ class Config:
     def model_limits(self) -> dict:
         return self._data.get("model_limits", {})
 
+    @property
+    def plugins(self) -> dict:
+        """Plugin config blocks, e.g. ``plugins.memory``.
+
+        Absent/partial config falls back to the memory plugin's defaults
+        (enabled with the default embedding model). No validation here — the
+        memory module tolerates a missing block.
+        """
+        return self._data.get("plugins", {})
+
     def get_model_limits(self, model_id: str) -> dict | None:
         """Return context_window, max_output_tokens, description for a model, or None."""
         return self.model_limits.get(model_id)

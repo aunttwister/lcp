@@ -2713,6 +2713,147 @@ class DashboardEndpoints:
         self.wfile.write(html.encode("utf-8"))
 
 
+# ── Memory Plugin Endpoints ─────────────────────────────────────────────────
+
+class MemoryEndpoints:
+    """Per-profile semantic memory API: retain / recall / forget / count.
+
+    Routes: ``/{profile}/memory/{action}``. Uses the same auth model as chat
+    completions (profile ``auth_required``). Returns 501 with a Setup hint
+    when the memory module is not installed/active.
+    """
+
+    config: Any
+    engine: Any
+    headers: Any
+    _send_json: Any
+    _read_body: Any
+
+    _MEMORY_ACTIONS = ("retain", "recall", "forget", "count")
+
+    def _memory_profile(self) -> str | None:
+        """Return the profile from a ``/{profile}/memory/...`` path, or None."""
+        path = self.path.rstrip("/")
+        parts = path.split("/")
+        if len(parts) >= 4 and parts[1] in self.config.profiles and parts[2] == "memory":
+            return parts[1]
+        return None
+
+    def _memory_auth(self, profile: str) -> bool:
+        """Validate the profile key like chat completions. Returns True when ok."""
+        profile_cfg = self.config.get_profile(profile) or {}
+        if not profile_cfg.get("auth_required", True):
+            return True
+        auth_header = self.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            self._send_json({"error": {"code": "LCP-4010",
+                                       "message": "API key required for this profile."}}, 401)
+            return False
+        raw_key = auth_header[7:]
+        try:
+            from ..api.key_manager import get_key_manager
+            km = get_key_manager()
+            if km is None:
+                self._send_json({"error": {"code": "LCP-5001", "message": "internal error"}}, 500)
+                return False
+            key_info = km.validate_key(raw_key)
+            if key_info is None:
+                self._send_json({"error": {"code": "LCP-4011",
+                                           "message": "invalid or revoked API key"}}, 401)
+                return False
+            allowed = key_info.get("allowed_profiles")
+            if allowed:
+                allowed_list = [p.strip() for p in allowed.split(",") if p.strip()]
+                if profile not in allowed_list:
+                    self._send_json({"error": {"code": "LCP-4030",
+                                               "message": f"key does not have access to profile '{profile}'"}}, 403)
+                    return False
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.error("memory_auth_failed", error=str(exc), profile=profile)
+            self._send_json({"error": {"code": "LCP-5001", "message": "internal error"}}, 500)
+            return False
+
+    def _memory_backend_or_501(self):
+        """Return the active backend or send a 501 + None."""
+        try:
+            from ..api.memory import get_memory
+            backend = get_memory()
+        except Exception:
+            backend = None
+        if backend is None:
+            self._send_json({
+                "error": {
+                    "code": "LCP-5010",
+                    "message": "Memory plugin is not installed or disabled — "
+                               "install the Memory (LanceDB) module from the Setup page.",
+                }
+            }, 501)
+            return None
+        return backend
+
+    def _serve_memory_api(self, profile: str, action: str):
+        """Dispatch one memory action for a profile."""
+        if action not in self._MEMORY_ACTIONS:
+            self._send_json({"error": f"unknown memory action: {action}"}, 404)
+            return
+        if not self._memory_auth(profile):
+            return
+        backend = self._memory_backend_or_501()
+        if backend is None:
+            return
+
+        try:
+            if action == "count":
+                self._send_json({"count": backend.count(profile)})
+                return
+
+            try:
+                body = self._read_body()
+            except Exception:
+                self._send_json({"error": "invalid JSON body"}, 400)
+                return
+
+            if action == "retain":
+                content = (body.get("content") or "").strip()
+                if not content:
+                    self._send_json({"error": "missing 'content' field"}, 400)
+                    return
+                memory_id = backend.retain(
+                    content,
+                    metadata=body.get("metadata"),
+                    tags=body.get("tags"),
+                    profile=profile,
+                )
+                self._send_json({"memory_id": memory_id})
+            elif action == "recall":
+                query = (body.get("query") or body.get("content") or "").strip()
+                if not query:
+                    self._send_json({"error": "missing 'query' field"}, 400)
+                    return
+                top_k = int(body.get("top_k", 10) or 10)
+                results = backend.recall(
+                    query, top_k=top_k,
+                    tag_filter=body.get("tag_filter"),
+                    profile=profile,
+                )
+                self._send_json({"results": results})
+            elif action == "forget":
+                memory_id = (body.get("memory_id") or "").strip()
+                if not memory_id:
+                    self._send_json({"error": "missing 'memory_id' field"}, 400)
+                    return
+                deleted = backend.forget(memory_id, profile=profile)
+                self._send_json({"deleted": deleted})
+        except Exception as exc:  # noqa: BLE001
+            from ..api.memory import MemoryError as MemErr
+            if isinstance(exc, MemErr):
+                self._send_json({"error": str(exc)}, 400)
+            else:
+                logger.error("memory_api_failed", action=action, profile=profile, error=str(exc))
+                self._send_json({"error": {"code": "LCP-5001", "message": "internal error"}}, 500)
+
+
 # ── First-run Setup Wizard Endpoints ─────────────────────────────────────────
 
 class SetupEndpoints:
@@ -2764,6 +2905,8 @@ class SetupEndpoints:
                 result = setup_mod.install_provider(self.engine, self.config, name, body)
             elif kind == "module" and name == "livebench":
                 result = setup_mod.start_livebench_install(self.engine)
+            elif kind == "module" and name == "memory":
+                result = setup_mod.start_memory_install(self.engine)
             else:
                 self._send_json({"error": f"unknown install target: {kind}/{name}"}, 404)
                 return
@@ -2775,14 +2918,38 @@ class SetupEndpoints:
             self._send_json({"error": str(e)}, 500)
 
     def _serve_setup_progress_api(self):
-        """GET /api/setup/progress — live progress of the benchmark install."""
+        """GET /api/setup/progress — live progress of module installs.
+
+        Returns per-module progress (``modules``) plus a back-compat top-level
+        ``progress``/``installed`` that reflect any single in-flight module
+        (livebench first, then memory) so older UIs keep working.
+        """
         from ..api import setup as setup_mod
 
-        progress = setup_mod.bench_progress()
-        last = setup_mod.bench_last()
+        entries = {}
+        for name, prog, last, step in (
+            ("livebench", setup_mod.bench_progress(), setup_mod.bench_last(),
+             setup_mod.benchmark_step),
+            ("memory", setup_mod.mem_progress(), setup_mod.mem_last(),
+             setup_mod.memory_step),
+        ):
+            entries[name] = prog or last or {"status": "idle", "progress": 0.0}
+            entries[name]["installed"] = bool(step()["installed"])
+
+        # Back-compat: the single in-flight/last module (livebench preferred).
+        active = None
+        for name in ("livebench", "memory"):
+            state = entries[name]
+            if state.get("status") not in (None, "idle"):
+                active = state
+                break
+        if active is None:
+            active = entries.get("livebench") or {"status": "idle", "progress": 0.0}
+
         self._send_json({
-            "progress": progress or last or {"status": "idle", "progress": 0.0},
-            "installed": bool(setup_mod.benchmark_step()["installed"]),
+            "progress": active,
+            "installed": bool(active.get("installed")),
+            "modules": entries,
         })
 
     def _serve_setup_skip_api(self):
@@ -2804,6 +2971,8 @@ class SetupEndpoints:
                 result = setup_mod.remove_provider(self.engine, self.config, name)
             elif kind == "module" and name == "livebench":
                 result = setup_mod.remove_livebench(self.engine)
+            elif kind == "module" and name == "memory":
+                result = setup_mod.remove_memory(self.engine)
             else:
                 self._send_json({"error": f"unknown remove target: {kind}/{name}"}, 404)
                 return

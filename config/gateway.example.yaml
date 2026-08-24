@@ -167,3 +167,15 @@ model_limits:
 database:
   path: /app/data/costs.db
   wal_mode: true
+# Optional installable plugins. `memory` is installed via the Setup page
+# (LanceDB + sentence-transformers); setting enabled:false disables it even
+# when installed.
+plugins:
+  memory:
+    enabled: true
+    backend: lancedb
+    # storage_path: /app/data/memory   # defaults to <dir-of-COST_DB>/memory
+    embedding:
+      model: BAAI/bge-small-en-v1.5
+      dim: 384
+      device: cpu          # cpu | cuda
