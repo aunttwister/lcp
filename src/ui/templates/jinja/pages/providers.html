@@ -582,6 +582,8 @@ setInterval(loadProviderHealth, 10000);
 setInterval(loadFailovers, 15000);
 
 // ── Routing tab ────────────────────────────────────────────────────────────
+const escC = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
 var ROUTING = { enabled: false, policy: 'eager', min_score: 0, rules: [], per_task: {}, recent_decisions: [], per_profile: {}, profiles: [] };
 
 function routingScope() {
