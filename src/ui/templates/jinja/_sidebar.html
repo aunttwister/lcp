@@ -7,13 +7,13 @@
     <a href="/dashboard"{% if active_page == 'dashboard' %} class="active"{% endif %}>Dashboard</a>
     <div class="sb-usage-nav" id="usageNav">
       <a href="/usage"{% if active_page == 'usage' %} class="active"{% endif %}>
+        Usage
         <span class="sb-usage-refresh" id="sbUsageRefreshBtn" role="button" tabindex="0"
           onclick="event.preventDefault();event.stopPropagation();sbUsageRefresh(event)"
           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();sbUsageRefresh(event)}"
           title="Refresh cached provider data" aria-label="Refresh usage cache" aria-live="polite">
           <span class="sb-usage-refresh-icon" aria-hidden="true">↻</span>
         </span>
-        Usage
         <span class="sb-usage-chev" id="usageChevron" onclick="event.preventDefault();event.stopPropagation();toggleUsageSubmenu()" title="Toggle provider details"><i aria-hidden="true"></i></span>
       </a>
       <div class="sb-usage-submenu" id="usageSubmenu"></div>
