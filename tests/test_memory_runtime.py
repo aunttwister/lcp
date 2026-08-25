@@ -93,6 +93,21 @@ class TestMemoryStatus:
         assert "site" in st and "models_dir" in st
 
 
+class TestRouterStatus:
+    def test_router_status_shape(self, monkeypatch):
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: True)
+        st = mem.router_status()
+        assert st["available"] is True
+        assert "site" in st and st["site"].endswith("router")
+        assert "models_dir" in st
+
+    def test_router_status_unavailable(self, monkeypatch):
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: False)
+        st = mem.router_status()
+        assert st["available"] is False
+        assert st["active"] is False
+
+
 class TestNoopEmbed:
     def test_returns_zero_vectors_of_default_dim(self):
         out = mem._noop_embed(["a", "b", "c"])

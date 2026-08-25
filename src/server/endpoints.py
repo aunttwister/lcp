@@ -2959,6 +2959,8 @@ class SetupEndpoints:
                 result = setup_mod.install_provider(self.engine, self.config, name, body)
             elif kind == "module" and name == "livebench":
                 result = setup_mod.start_livebench_install(self.engine)
+            elif kind == "module" and name == "router":
+                result = setup_mod.start_router_install(self.engine)
             elif kind == "module" and name == "memory":
                 result = setup_mod.start_memory_install(self.engine)
             else:
@@ -2984,6 +2986,8 @@ class SetupEndpoints:
         for name, prog, last, step in (
             ("livebench", setup_mod.bench_progress(), setup_mod.bench_last(),
              setup_mod.benchmark_step),
+            ("router", setup_mod.router_progress(), setup_mod.router_last(),
+             setup_mod.router_step),
             ("memory", setup_mod.mem_progress(), setup_mod.mem_last(),
              setup_mod.memory_step),
         ):
@@ -2992,7 +2996,7 @@ class SetupEndpoints:
 
         # Back-compat: the single in-flight/last module (livebench preferred).
         active = None
-        for name in ("livebench", "memory"):
+        for name in ("livebench", "router", "memory"):
             state = entries[name]
             if state.get("status") not in (None, "idle"):
                 active = state
@@ -3025,6 +3029,8 @@ class SetupEndpoints:
                 result = setup_mod.remove_provider(self.engine, self.config, name)
             elif kind == "module" and name == "livebench":
                 result = setup_mod.remove_livebench(self.engine)
+            elif kind == "module" and name == "router":
+                result = setup_mod.remove_router(self.engine)
             elif kind == "module" and name == "memory":
                 result = setup_mod.remove_memory(self.engine)
             else:

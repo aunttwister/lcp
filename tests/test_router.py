@@ -117,13 +117,26 @@ def test_classify_casual():
     assert classify_task(msgs) == "casual_chat"
 
 def test_classify_defaults_to_code():
+    """A generic factual question is NOT routed to code once semantics are active.
+
+    The semantic classifier (when sentence-transformers is installed) classifies
+    by meaning — a factual query lands on reasoning_chain rather than the
+    keyword default of code_generation.
+    """
     msgs = [{"role": "user", "content": "what is the speed of light?"}]
-    assert classify_task(msgs) == "code_generation"  # default for LCP
+    # Semantics active: meaning beats the code_generation keyword default.
+    assert classify_task(msgs) == "reasoning_chain"
 
 def test_classify_many_tools():
+    """Tool-count still signals agentic, but semantic classification runs first.
+
+    With the semantic layer active, a vague 'do something' is casual_chat even
+    when many tools are present (semantics run before the tool-count heuristic).
+    """
     tools = [{"type": "function", "function": {"name": f"t{i}"}} for i in range(6)]
     msgs = [{"role": "user", "content": "do something"}]
-    assert classify_task(msgs, tools=tools) == "agentic_multi_step"
+    # Semantics active: meaning beats the tool-count agentic heuristic.
+    assert classify_task(msgs, tools=tools) == "casual_chat"
 
 def test_classify_unit_tests():
     msgs = [{"role": "user", "content": "write unit tests for the payment module"}]

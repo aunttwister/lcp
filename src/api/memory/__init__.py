@@ -151,6 +151,48 @@ def memory_status() -> dict:
     }
 
 
+# ── Semantic routing module status ─────────────────────────────────────────
+# The embedding-based task classifier is its OWN installable module ("router"),
+# independent of the memory plugin. It reuses the same availability probe
+# (sentence-transformers importable) but against the router deps dir.
+
+def router_available(site: Optional[str] = None) -> bool:
+    """Return True when the router module's Python deps are importable.
+
+    Probes with a FRESH subprocess (like ``memory_available``) so a --target
+    install is detected correctly. When *site* is given it is prepended to
+    ``PYTHONPATH`` for the probe.
+    """
+    env = dict(os.environ)
+    if site:
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = site if not existing else f"{site}{os.pathsep}{existing}"
+    probe = (
+        "import importlib.util, sys;"
+        "sys.exit(0 if importlib.util.find_spec('sentence_transformers') else 1)"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        return result.returncode == 0
+    except Exception:  # noqa: BLE001 — treat as unavailable
+        return False
+
+
+def router_status() -> dict:
+    """Return a status dict for the semantic routing module (UI / manifest)."""
+    site = os.path.join(os.environ.get("LCP_MODULES_DIR", "").strip() or "/opt/lcp-modules", "router")
+    available = router_available(site)
+    return {
+        "available": available,
+        "active": available,
+        "site": site,
+        "models_dir": os.path.join(os.path.dirname(site), "models", "router"),
+    }
+
+
 def shutdown_memory() -> None:
     """Release the backend and its embedder (best-effort)."""
     global _backend

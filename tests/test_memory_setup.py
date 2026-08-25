@@ -60,13 +60,31 @@ class TestMemoryStep:
         step = setup_mod.memory_step()
         assert step["kind"] == "module"
         assert step["name"] == "memory"
-        assert step["installed"] is False
+        # 'installed' depends on the environment (sentence-transformers may or
+        # may not be importable), so only assert the shape here.
+        assert "installed" in step
         assert step["installing"] is None
 
     def test_manifest_includes_memory(self, mock_config):
         m = setup_mod.manifest(mock_config)
         names = {mod["name"] for mod in m["modules"]}
-        assert {"livebench", "memory"} <= names
+        assert {"livebench", "router", "memory"} <= names
+
+    def test_router_step_manifest(self, monkeypatch):
+        """The semantic-routing module is its own manifest entry."""
+        monkeypatch.setenv("LCP_MODULES_DIR", "/tmp/nowhere-router")
+        step = setup_mod.router_step()
+        assert step["kind"] == "module"
+        assert step["name"] == "router"
+        assert "installed" in step
+        assert step["install_path"].endswith("router")
+
+    def test_router_step_reflects_inflight(self, monkeypatch):
+        inflight = {"status": "running", "progress": 40.0}
+        with patch.object(setup_mod, "_router_install", inflight), \
+             patch("src.api.memory.router_status", return_value={"available": False}):
+            step = setup_mod.router_step()
+        assert step["installing"] is inflight
 
     def test_memory_step_reflects_inflight(self, monkeypatch):
         inflight = {"status": "running", "progress": 10.0}
@@ -158,6 +176,80 @@ class TestRemoveMemory:
         assert result["paths"] == []
 
 
+class TestRouterInstallCoordinator:
+    def test_router_progress_idle_by_default(self):
+        assert setup_mod.router_progress() is None
+        assert setup_mod.router_last() is None
+
+    def test_start_router_install_spawns_thread(self, temp_db):
+        with patch.object(setup_mod, "_run_router_install", lambda engine: None):
+            state = setup_mod.start_router_install(temp_db)
+        assert state["status"] in ("queued", "running")
+
+    def test_router_finish_marks_terminal(self, monkeypatch):
+        monkeypatch.setattr(setup_mod, "_router_install", {
+            "status": "running", "progress": 42.0, "detail": "x", "log": ["a"],
+        })
+        setup_mod._router_finish("done", "Semantic routing installed.")
+        assert setup_mod.router_progress() is None
+        last = setup_mod.router_last()
+        assert last is not None
+        assert last["status"] == "done"
+        assert last["progress"] == 100.0
+
+    def test_run_router_install_success(self, temp_db, monkeypatch, tmp_path):
+        monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "mods"))
+        monkeypatch.setattr(setup_mod.os, "makedirs", lambda *a, **k: None)
+        monkeypatch.setattr(setup_mod, "_stream_router", lambda *a, **k: None)
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: True)
+        def _no_popen(*a, **k):
+            raise FileNotFoundError("skip model")
+        monkeypatch.setattr(setup_mod.subprocess, "Popen", _no_popen)
+        setup_mod._router_install = {
+            "status": "running", "progress": 0.0, "detail": "", "log": [],
+        }
+
+        setup_mod._run_router_install(temp_db)
+        assert setup_mod.router_last()["status"] == "done"
+        assert setup_mod.load_state(temp_db)["module:router"]["status"] == "done"
+
+    def test_run_router_install_failure(self, temp_db, monkeypatch, tmp_path):
+        monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "mods"))
+        monkeypatch.setattr(setup_mod.os, "makedirs", lambda *a, **k: None)
+        def _boom(*a, **k):
+            raise Exception("pip exploded")
+        monkeypatch.setattr(setup_mod, "_stream_router", _boom)
+        setup_mod._router_install = {
+            "status": "running", "progress": 0.0, "detail": "", "log": [],
+        }
+
+        setup_mod._run_router_install(temp_db)
+        assert setup_mod.router_last()["status"] == "failed"
+
+
+class TestRemoveRouter:
+    def test_remove_router_deletes_dirs(self, temp_db, monkeypatch, tmp_path):
+        mods = tmp_path / "mods"
+        site = mods / "router"
+        models = mods / "models" / "router"
+        site.mkdir(parents=True)
+        models.mkdir(parents=True)
+        (site / "x").write_text("")
+        monkeypatch.setenv("LCP_MODULES_DIR", str(mods))
+
+        result = setup_mod.remove_router(temp_db)
+        assert result["removed"] is True
+        assert not site.exists()
+        assert not models.exists()
+        assert setup_mod.load_state(temp_db)["module:router"]["status"] == "removed"
+
+    def test_remove_router_noop_when_absent(self, temp_db, monkeypatch, tmp_path):
+        monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "mods"))
+        result = setup_mod.remove_router(temp_db)
+        assert result["removed"] is True
+        assert result["paths"] == []
+
+
 class TestMemoryAvailableProbe:
     def test_memory_available_false_when_missing(self, monkeypatch):
         monkeypatch.setattr(setup_mod.subprocess, "run",
@@ -170,3 +262,13 @@ class TestMemoryAvailableProbe:
                             lambda *a, **k: type("R", (), {"returncode": 0})())
         from src.api import memory as mem_mod
         assert mem_mod.memory_available() is True
+
+    def test_router_available_probe(self, monkeypatch):
+        monkeypatch.setattr(setup_mod.subprocess, "run",
+                            lambda *a, **k: type("R", (), {"returncode": 0})())
+        from src.api import memory as mem_mod
+        assert mem_mod.router_available() is True
+        monkeypatch.setattr(setup_mod.subprocess, "run",
+                            lambda *a, **k: type("R", (), {"returncode": 1})())
+        assert mem_mod.router_available() is False
+

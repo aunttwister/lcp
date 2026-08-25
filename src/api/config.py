@@ -150,6 +150,15 @@ SEED_CONFIG: dict[str, Any] = {
         "path": "/app/data/costs.db",
         "wal_mode": True,
     },
+    "plugins": {
+        "memory": {
+            "enabled": True,
+            "auto_recall": False,   # opt-in: auto-inject recalled facts into requests
+            "top_k": 3,
+            "min_score": 0.0,
+            "embedding": {"model": "BAAI/bge-small-en-v1.5", "dim": 384, "device": "cpu"},
+        },
+    },
 }
 
 # Sections stored in the DB. ``plugins`` is optional (memory module tolerates

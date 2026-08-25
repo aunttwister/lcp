@@ -65,8 +65,12 @@ class TestSeedHydration:
         cfg.raw["profiles"]["l2"]["chain"] = []
         assert SEED_CONFIG["profiles"]["l2"]["chain"] != []
 
-    def test_plugins_default_empty(self, cfg):
-        assert cfg.plugins == {}
+    def test_plugins_seed_has_memory_block(self, cfg):
+        # The seed ships a plugins.memory block with auto_recall off by default.
+        plugins = cfg.plugins
+        assert "memory" in plugins
+        assert plugins["memory"]["auto_recall"] is False
+        assert plugins["memory"]["top_k"] == 3
 
 
 class TestDbBacked:

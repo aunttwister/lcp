@@ -1,0 +1,238 @@
+"""Semantic task classification for the dynamic router.
+
+The router's ``classify_task`` is keyword/heuristic. This module adds an
+optional **embedding-based** classifier that uses its OWN embedder
+(bge-small-en-v1.5, 384-dim) so a prompt is classified by its *meaning* rather
+than exact keywords.
+
+This is the SEMANTIC ROUTING module — it is independent of the memory plugin.
+Its embedder comes from the ``plugins.router`` config block (installed as the
+``router`` module, grouped with LiveBench), not ``plugins.memory``.
+
+Design
+------
+* Each task type has a small set of **exemplar prompts** (canonical examples).
+  When the embedder is available, the exemplars are embedded once (cached) and
+  averaged into a per-task centroid. A prompt is embedded and classified to the
+  nearest centroid by cosine similarity (threshold-gated).
+* When no embedder is available (sentence-transformers not installed), the
+  module is a no-op and the caller falls back to the existing keyword path.
+* It returns the SAME task strings as the keyword classifier, so the rest of
+  the router is unchanged: ``agentic_multi_step``, ``unit_tests``,
+  ``code_generation``, ``debugging``, ``research_deep``, ``reasoning_chain``,
+  ``planning``, ``casual_chat``.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Optional
+
+from .memory.embeddings import DEFAULT_MODEL
+
+# Task type -> canonical exemplar prompts (short, representative).
+TASK_EXEMPLARS: dict[str, list[str]] = {
+    "agentic_multi_step": [
+        "You are an AI agent. Use the available tools to complete this multi-step task.",
+        "Use your tools to browse the web and gather information, then act on it.",
+        "Call the functions provided to fulfill this request step by step.",
+        "You have access to tools — delegate and execute the plan autonomously.",
+    ],
+    "unit_tests": [
+        "Write a pytest suite covering this function's edge cases.",
+        "Add unit tests for the new module, including mocking the database.",
+        "Create test cases for the API endpoint and assert the responses.",
+        "Write a test for this bug to prevent regression.",
+    ],
+    "code_generation": [
+        "Write a Python function that parses this CSV file.",
+        "Implement a REST endpoint in FastAPI that returns JSON.",
+        "Create a bash script to deploy this service.",
+        "Write a React component that renders a list of items.",
+    ],
+    "debugging": [
+        "Why does this code throw a KeyError? Here is the traceback.",
+        "Debug this failing test — it works locally but not in CI.",
+        "This endpoint returns 500. Help me find the bug.",
+        "The build is failing with an import error. What's wrong?",
+    ],
+    "research_deep": [
+        "Explain how attention mechanisms work in transformers, in detail.",
+        "Analyze the trade-offs between SQL and NoSQL for this workload.",
+        "Compare and contrast microservices and monoliths thoroughly.",
+        "Research the latest approaches to vector databases and summarize.",
+    ],
+    "reasoning_chain": [
+        "Solve this logic puzzle step by step.",
+        "Prove that this algorithm has O(n log n) complexity.",
+        "Calculate the time complexity of this recurrence relation.",
+        "Work through this mathematical problem carefully.",
+    ],
+    "planning": [
+        "Design the architecture for a multi-tenant SaaS product.",
+        "How should I structure this microservice codebase?",
+        "Create a roadmap and data model for this new feature.",
+        "Plan the tech stack and schema for this application.",
+    ],
+    "casual_chat": [
+        "hello",
+        "hi, how are you?",
+        "thanks!",
+        "good morning",
+        "what's up?",
+    ],
+}
+
+
+def _normalize(text: str) -> str:
+    return (text or "").strip().lower()
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two equal-length vectors (0..1)."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a)) or 1.0
+    nb = math.sqrt(sum(x * x for x in b)) or 1.0
+    return dot / (na * nb)
+
+
+class SemanticClassifier:
+    """Embedding-based task classifier with a keyword-free fallback.
+
+    Lazily embeds the task exemplars on first use. When no embedder is
+    available, ``classify()`` returns None and the caller should use the
+    keyword path.
+    """
+
+    def __init__(self, embed=None, min_score: float = 0.15):
+        self._embed = embed  # callable(texts: list[str]) -> list[list[float]]
+        self._min_score = min_score
+        self._centroids: Optional[dict[str, list[float]]] = None
+        self._task_order: list[str] = list(TASK_EXEMPLARS.keys())
+
+    @property
+    def available(self) -> bool:
+        return self._embed is not None
+
+    def _build_centroids(self) -> None:
+        if self._centroids is not None or not self.available:
+            return
+        centroids: dict[str, list[float]] = {}
+        for task, exemplars in TASK_EXEMPLARS.items():
+            if not exemplars:
+                continue
+            try:
+                vectors = self._embed(exemplars)  # type: ignore[misc]
+            except Exception:
+                continue
+            if not vectors:
+                continue
+            dim = len(vectors[0])
+            if dim == 0:
+                continue
+            centroid = [0.0] * dim
+            for v in vectors:
+                for i in range(dim):
+                    centroid[i] += v[i]
+            centroid = [x / len(vectors) for x in centroid]
+            # Normalize the centroid.
+            norm = math.sqrt(sum(x * x for x in centroid)) or 1.0
+            centroids[task] = [x / norm for x in centroid]
+        self._centroids = centroids if centroids else {}
+
+    def classify(self, text: str) -> Optional[str]:
+        """Return the best task for *text*, or None when unavailable/uncertain.
+
+        Uses cosine similarity to the nearest task centroid, gated by
+        ``min_score`` so low-confidence prompts fall through to the keyword
+        path.
+        """
+        if not self.available or not text:
+            return None
+        self._build_centroids()
+        if not self._centroids:
+            return None
+        try:
+            vec = self._embed([text])[0]  # type: ignore[misc]
+        except Exception:
+            return None
+        best_task: Optional[str] = None
+        best_score = 0.0
+        for task, centroid in self._centroids.items():
+            s = _cosine(vec, centroid)
+            if s > best_score:
+                best_score = s
+                best_task = task
+        if best_task is None or best_score < self._min_score:
+            return None
+        return best_task
+
+
+# Module-level cached classifier (built lazily from the memory embedder).
+_classifier: Optional[SemanticClassifier] = None
+
+
+def _probe_embed(embed) -> bool:
+    """Return True when *embed* actually produces real (non-zero) vectors.
+
+    Guards against the memory plugin's ``_noop_embed`` fallback (all-zero
+    vectors) and against sentence-transformers being absent (raises) — both of
+    which would produce garbage classification.
+    """
+    if embed is None:
+        return False
+    try:
+        vec = embed(["semantic probe"])[0]
+    except Exception:
+        return False
+    if not vec:
+        return False
+    return any(abs(x) > 1e-9 for x in vec)
+
+
+def get_semantic_classifier() -> Optional[SemanticClassifier]:
+    """Return the shared classifier if a real embedder is available, else None.
+
+    Builds an ``EmbeddingModel`` from ``plugins.router`` (the SEMANTIC ROUTING
+    module — independent of the memory plugin) and probes it. When
+    sentence-transformers isn't installed (or the embedder is the noop
+    fallback), returns None so callers use the keyword path.
+
+    This intentionally does NOT depend on ``plugins.memory``: semantic routing
+    and the memory bank are separate installable modules. Both share the same
+    embedder type, but the router module is what powers task classification.
+    """
+    global _classifier
+    if _classifier is not None:
+        return _classifier
+    try:
+        from ..api.config import get_config
+        from .memory.embeddings import EmbeddingModel
+
+        config = get_config()
+        router_cfg = (getattr(config, "plugins", None) or {}).get("router") or {}
+        if not router_cfg.get("enabled", True):
+            return None
+        # The router embedder lives in the router module's own deps dir so it
+        # is independent from the memory plugin's install.
+        from .memory import memory_models as _router_models  # reuse models dir pattern
+        models_dir = router_cfg.get("models_dir") or _router_models()
+        model = EmbeddingModel(
+            model_name=router_cfg.get("embedding", {}).get("model", DEFAULT_MODEL),
+            device=router_cfg.get("embedding", {}).get("device", "cpu"),
+            cache_dir=models_dir,
+        )
+        if not _probe_embed(model.embed):
+            return None
+        _classifier = SemanticClassifier(embed=model.embed)
+    except Exception:
+        _classifier = None
+    return _classifier if (_classifier is not None and _classifier.available) else None
+
+
+def invalidate_semantic_classifier() -> None:
+    """Drop the cached classifier (e.g. after router module install/uninstall)."""
+    global _classifier
+    _classifier = None

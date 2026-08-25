@@ -579,6 +579,23 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
     chain_len = len(chain)
     errors = []
 
+    # ── Memory harness: auto-recall + inject relevant facts into the request ─
+    # Opt-in via plugins.memory.auto_recall. No-op when memory is inactive.
+    try:
+        from .memory.harness import config_for, inject_memory_context
+        _mc = config_for(config)
+        if _mc["enabled"]:
+            body["messages"] = inject_memory_context(
+                body.get("messages", []),
+                profile=profile_name,
+                enabled=True,
+                top_k=_mc["top_k"],
+                min_score=_mc["min_score"],
+                tag_filter=_mc["tag_filter"],
+            )
+    except Exception:  # noqa: BLE001 — never let memory break the request
+        pass
+
     # ── Dynamic router: reorder chain so best (provider, model) step is first ─
     # Per-profile gating: a profile override (routing_enabled:<profile>) wins,
     # then the global toggle. select_step re-reads policy/rules per profile.

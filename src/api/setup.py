@@ -100,6 +100,21 @@ def memory_models_dir() -> str:
     return os.path.join(modules_dir(), "models", "memory")
 
 
+def router_site() -> str:
+    """Return the persistent site-packages dir for the SEMANTIC ROUTING module.
+
+    ``<LCP_MODULES_DIR>/router`` — pip installs ``--target`` here (sentence-
+    transformers + torch) so the embedding-based task classifier is independent
+    of the memory plugin's install. Grouped with LiveBench as a router module.
+    """
+    return os.path.join(modules_dir(), "router")
+
+
+def router_models_dir() -> str:
+    """Return the directory used to cache the router embedding model weights."""
+    return os.path.join(modules_dir(), "models", "router")
+
+
 # ── Manifest ────────────────────────────────────────────────────────────────
 
 def provider_steps(config) -> list[dict]:
@@ -185,11 +200,42 @@ def memory_step() -> dict:
     }
 
 
+def router_step() -> dict:
+    """Build the SEMANTIC ROUTING module manifest entry (grouped with LiveBench).
+
+    The embedding-based task classifier powers dynamic routing: it picks the
+    task type by MEANING (not keywords), which LiveBench's capability scores
+    then route to the best-fit model. Install sentence-transformers into its
+    own deps dir, independent of the memory plugin.
+    """
+    from .memory import router_status
+
+    status = router_status()
+    installing = _router_install
+    if installing is None and _router_last is not None and _router_last.get("status") == "failed":
+        installing = _router_last
+    return {
+        "kind": "module",
+        "name": "router",
+        "title": "Semantic routing",
+        "description": (
+            "Embedding-based task classification for the dynamic router — "
+            "classifies prompts by meaning so they route to the best-fit "
+            "model. Install sentence-transformers at runtime."
+        ),
+        "required": False,
+        "installed": bool(status.get("available")),
+        "status": status,
+        "install_path": router_site(),
+        "installing": installing,
+    }
+
+
 def manifest(config) -> dict:
-    """Return the full setup manifest (provider steps + benchmark + memory modules)."""
+    """Return the full setup manifest (provider steps + benchmark + modules)."""
     return {
         "steps": provider_steps(config),
-        "modules": [benchmark_step(), memory_step()],
+        "modules": [benchmark_step(), router_step(), memory_step()],
     }
 
 
@@ -590,6 +636,202 @@ def remove_memory(engine) -> dict:
     set_state(engine, "module:memory", "removed")
     logger.info("setup_memory_removed", removed=removed)
     return {"removed": True, "module": "memory", "paths": removed}
+
+
+# ── Semantic routing module install (background + progress) ─────────────────
+# Mirrors the memory module install but with its OWN deps dir (router_site) so
+# semantic task classification is independent of the memory plugin.
+
+_router_lock = threading.Lock()
+_router_install: Optional[dict] = None  # in-flight {status, progress, detail, log, ...}
+_router_last: Optional[dict] = None     # terminal result (done/failed) for the UI
+
+ROUTER_PACKAGES = ["sentence-transformers>=3.0"]
+ROUTER_MODEL = "BAAI/bge-small-en-v1.5"
+
+
+def _router_update(msg: Optional[str], progress: Optional[float] = None,
+                   status: Optional[str] = None) -> None:
+    """Mutate the shared router-install state (no-op when nothing in flight)."""
+    global _router_install
+    if _router_install is None:
+        return
+    if status is not None:
+        _router_install["status"] = status
+    if progress is not None:
+        _router_install["progress"] = round(min(max(progress, 0.0), 100.0), 1)
+    if msg is not None:
+        clean = (msg.rstrip("\n") if isinstance(msg, str) else str(msg)).strip("\r")
+        if clean:
+            _router_install["detail"] = clean[-200:]
+            log = _router_install.setdefault("log", [])
+            log.append(clean)
+            if len(log) > _LOG_MAX_LINES:
+                del log[: len(log) - _LOG_MAX_LINES]
+    _router_install["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def _router_finish(status: str, detail: str) -> None:
+    """Mark the router install terminal and move state into ``_router_last``."""
+    global _router_install, _router_last
+    _router_update(detail, status=status)
+    if status == "done":
+        _router_update(None, progress=100.0)
+    if _router_install is not None:
+        _router_install["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _router_last = dict(_router_install)
+    _router_install = None
+
+
+def router_progress() -> Optional[dict]:
+    """Return the in-flight router install state (or None when idle)."""
+    return _router_install
+
+
+def router_last() -> Optional[dict]:
+    """Return the most recent terminal router install result (or None)."""
+    return _router_last
+
+
+def start_router_install(engine) -> dict:
+    """Start (or join) the semantic routing module install and return its state."""
+    global _router_install, _router_last
+
+    with _router_lock:
+        if _router_install is not None and _router_install.get("status") in ("queued", "running"):
+            return _router_install
+        _router_last = None
+        _router_install = {
+            "status": "queued",
+            "progress": 0.0,
+            "detail": "Waiting to start…",
+            "log": [],
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        state = dict(_router_install)
+        thread = threading.Thread(target=_run_router_install, args=(engine,), daemon=True)
+        thread.start()
+        return state
+
+
+def _run_router_install(engine) -> None:
+    """Background install: pip sentence-transformers into router_site, probe
+    importability, and pre-download the embedding model weights."""
+    try:
+        site = router_site()
+        models_dir = router_models_dir()
+        _router_update(f"Target directory: {site}")
+        os.makedirs(site, exist_ok=True)
+        os.makedirs(models_dir, exist_ok=True)
+
+        _stream_router(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+             "--target", site] + ROUTER_PACKAGES,
+            cwd=None, start=2.0, end=70.0,
+            status_msg="Installing semantic-routing deps (sentence-transformers)…",
+        )
+
+        # Verify the deps actually became importable with the target dir on
+        # PYTHONPATH (fresh subprocess probe).
+        from .memory import router_available
+        if not router_available(site):
+            raise SetupError(
+                "Semantic-routing deps install did not take effect. The deps "
+                f"are at {site} — check the install log."
+            )
+
+        # Pre-download the embedding model into the persistent cache dir so the
+        # first classification doesn't hit the Hub at runtime.
+        try:
+            _stream_router(
+                [sys.executable, "-c",
+                 "import os,sys;"
+                 "os.environ.setdefault('LCP_MODULES_DIR', "
+                 f"{modules_dir()!r});"
+                 "from src.api.memory.embeddings import EmbeddingModel;"
+                 f"m=EmbeddingModel({ROUTER_MODEL!r}, cache_dir={models_dir!r});"
+                 "m.embed(['warmup'])",
+                 ],
+                cwd=None, start=70.0, end=100.0,
+                status_msg="Pre-downloading embedding model…",
+            )
+        except subprocess.CalledProcessError as exc:
+            _router_update(f"Model pre-download skipped ({exc}) — will download on first use.")
+            _router_update(None, progress=100.0)
+
+        set_state(engine, "module:router", "done")
+        _router_finish("done", "Semantic routing module installed.")
+    except subprocess.CalledProcessError as exc:
+        _router_finish("failed", _tail_router_detail(f"Install failed: {exc}"))
+    except FileNotFoundError as exc:
+        _router_finish("failed", f"Missing tool: {exc}")
+    except Exception as exc:  # noqa: BLE001 — background thread must not die
+        _router_finish("failed", _tail_router_detail(f"Install failed: {exc}"))
+
+
+def _stream_router(cmd: list[str], cwd: Optional[str], start: float, end: float,
+                   status_msg: str) -> None:
+    """Like ``_stream`` but updates the router-install log."""
+    _router_update(status_msg, progress=start, status="running")
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, errors="replace",
+    )
+    seen = 0
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        seen += 1
+        _router_update(line)
+        if seen % 3 == 0:
+            frac = min(0.9, seen / 90.0)
+            _router_update(None, progress=start + (end - start) * frac)
+    rc = proc.wait()
+    _router_update(None, progress=end)
+    if rc != 0:
+        raise subprocess.CalledProcessError(rc, cmd)
+
+
+def _tail_router_detail(fallback: str, lines: int = 6) -> str:
+    """Return *fallback* plus real error lines from the router install log."""
+    global _router_install
+    if _router_install is None:
+        return fallback
+    log = _router_install.get("log") or []
+    if not log:
+        return fallback
+    error_markers = (
+        "traceback", "error", "fatal", "failed", "exception", "conflict",
+        "cannot", "could not", "no matching", "not importable", "missing",
+    )
+    error_lines = [
+        ln for ln in log
+        if any(m in ln.lower() for m in error_markers)
+        and "pip.pypa.io" not in ln.lower()
+    ]
+    picked = error_lines[-lines:] if error_lines else log[-lines:]
+    tail = "\n".join(picked).strip()
+    if not tail:
+        tail = "\n".join(log[-lines:]).strip()
+    if not tail:
+        return fallback
+    return f"{fallback}\n{tail[-800:]}"
+
+
+def remove_router(engine) -> dict:
+    """Remove the semantic routing module (deps dir + model cache) and clear setup state."""
+    removed: list[str] = []
+    for path in (router_site(), router_models_dir()):
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path)
+
+    set_state(engine, "module:router", "removed")
+    from .task_classifier import invalidate_semantic_classifier
+    invalidate_semantic_classifier()
+    logger.info("setup_router_removed", removed=removed)
+    return {"removed": True, "module": "router", "paths": removed}
+
 
 
 # ── LiveBench runtime install (background + progress) ───────────────────────

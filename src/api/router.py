@@ -182,6 +182,20 @@ def classify_task(
             if kw in combined:
                 return task
 
+    # 1b. Semantic classification (embedding-based) — runs FIRST for
+    #     conversational intent when the embedder is available, so meaning (not
+    #     exact keywords) drives the task type. Falls back to the keyword
+    #     heuristics below when no embedder is installed or confidence is low.
+    try:
+        from .task_classifier import get_semantic_classifier
+        clf = get_semantic_classifier()
+        if clf is not None and combined.strip():
+            task = clf.classify(combined.strip())
+            if task is not None:
+                return task
+    except Exception:  # noqa: BLE001 — never let classification break routing
+        pass
+
     # 2. Agentic system prompt — the generic agent preamble.
     for kw in TASK_SIGNALS["agentic_multi_step"]:
         if kw in system_text:
