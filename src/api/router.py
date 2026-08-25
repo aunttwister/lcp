@@ -12,6 +12,7 @@ the best fit.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -131,6 +132,204 @@ _SPECIFIC_TASKS = (
 )
 
 
+# ── Intent extraction — newest genuine user instruction ──────────────────────
+#
+# The gateway classifies the CURRENT intent of each incoming request. The
+# client sends the whole conversation on every request, so "current intent" is
+# the newest user message that actually carries intent. Three things must be
+# filtered out before we pick it:
+#
+#   1. Assistant/system/tool-role messages (never user intent).
+#   2. Tool results that some clients send with role="user" — a violation of
+#      the OpenAI role="tool" / Anthropic tool_result schemas. Their
+#      "test"/"error" echoes would hijack classification.
+#   3. Continuation acknowledgements ("continue", "yes", "ok", …) — they
+#      carry no new intent, so we keep walking back to the last real
+#      instruction.
+
+# Tool-result prefixes on user-role messages (observed client marker:
+# "[tool result] ...", plus common shapes from other clients).
+_TOOL_RESULT_PREFIXES = (
+    "[tool", "[tool result", "[function result", "[file result",
+    "<tool_result", "<result>", "tool result", "tool ran without output",
+    "tool call:", "[tool_call", "tool output:", "tool response:",
+)
+
+# Regex shapes that mark tool/test-run output rather than an instruction.
+_TOOL_RESULT_PATTERNS = (
+    r"ran \d+ tests?", r"\d+/\d+ tests?",
+    r"all tests? passed", r"\d+ tests? (passed|failed|skipped)",
+    r"traceback \(most recent call last\)", r"exit code[:\s]\d+",
+    r"command finished", r"\d+ passed", r"\d+ failed",
+)
+
+# Continuation / acknowledgement messages with no new intent. Skipping them is
+# only meaningful when a real instruction exists earlier — the backward walk
+# naturally continues past them to find it, and the first-user-message fallback
+# covers a conversation that is continuations only.
+_CONTINUATIONS = {
+    "continue", "please continue", "continue please", "yes", "yeah", "yep",
+    "ok", "okay", "go on", "keep going", "and then", "next", "proceed",
+    "sounds good", "thanks", "thank you", "perfect", "great", "go ahead",
+    "sure", "alright", "got it", "cool", "more", "ok then",
+}
+
+# Short instructions that must NOT be treated as continuations (e.g. "fix it",
+# "make it work", "explain this").
+_SHORT_INSTRUCTION_STARTERS = (
+    "fix", "write", "make", "create", "do", "explain", "plan", "debug",
+    "run", "show", "give", "add", "change", "update", "remove", "help",
+    "implement", "test", "review", "refactor", "analyze", "solve", "design",
+)
+
+
+def _content_text(msg: dict) -> str:
+    """Extract plain text from a message's content (str or content blocks)."""
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if "text" in block and isinstance(block["text"], str):
+                parts.append(block["text"])
+            elif block.get("type") == "tool_result":
+                c = block.get("content")
+                if isinstance(c, str):
+                    parts.append(c)
+                elif isinstance(c, list):
+                    for sub in c:
+                        if isinstance(sub, dict) and isinstance(sub.get("text"), str):
+                            parts.append(sub["text"])
+        return " ".join(parts)
+    return ""
+
+
+def _message_has_tool_calls(msg: dict) -> bool:
+    """True when an assistant message issued tool calls (OpenAI ``tool_calls``
+    or Anthropic ``tool_use`` blocks)."""
+    if msg.get("tool_calls"):
+        return True
+    content = msg.get("content")
+    if isinstance(content, list):
+        return any(
+            isinstance(b, dict) and b.get("type") in ("tool_use", "tool_call")
+            for b in content
+        )
+    return False
+
+
+def _has_tool_result_blocks(msg: dict) -> bool:
+    """True when a user message carries Anthropic ``tool_result`` blocks."""
+    content = msg.get("content")
+    if isinstance(content, list):
+        return any(
+            isinstance(b, dict) and b.get("type") == "tool_result"
+            for b in content
+        )
+    return False
+
+
+def _matches_tool_result_patterns(text: str) -> bool:
+    """True when *text* looks like tool/test output rather than an instruction."""
+    lower = (text or "").strip().lower()
+    if not lower:
+        return False
+    for prefix in _TOOL_RESULT_PREFIXES:
+        if lower.startswith(prefix):
+            return True
+    for pat in _TOOL_RESULT_PATTERNS:
+        if re.search(pat, lower):
+            return True
+    if lower.lstrip().startswith("diff --git"):
+        return True
+    # Bare JSON array (common tool-result shape).
+    if lower.startswith("[") and lower.endswith("]") and '"' in lower:
+        return True
+    return False
+
+
+def _is_tool_result(msg: dict, msgs: list[dict], i: int) -> bool:
+    """True when a user-role message is really a tool result (schema violation).
+
+    Detection layers, most structural first:
+      1. Explicit markers: ``tool_call_id`` (OpenAI) or ``tool_result`` blocks.
+      2. The message immediately before is the assistant that MADE the call.
+      3. Content heuristics (prefixes, test-run/traceback/exit-code shapes).
+    """
+    if msg.get("tool_call_id") is not None:
+        return True
+    if _has_tool_result_blocks(msg):
+        return True
+    j = i - 1
+    if (j >= 0 and msgs[j].get("role") == "assistant"
+            and _message_has_tool_calls(msgs[j])):
+        return True
+    return _matches_tool_result_patterns(_content_text(msg))
+
+
+def _is_continuation(text: str) -> bool:
+    """True when *text* is a continuation/acknowledgement with no new intent."""
+    norm = re.sub(r"[^a-z0-9\s]", "", (text or "").strip().lower())
+    norm = re.sub(r"\s+", " ", norm).strip()
+    if norm in _CONTINUATIONS:
+        return True
+    words = norm.split()
+    if len(words) <= 3:
+        # A short message with a task keyword or an instruction starter is intent.
+        for task in _SPECIFIC_TASKS:
+            for kw in TASK_SIGNALS[task]:
+                if kw in norm:
+                    return False
+        if any(w in _SHORT_INSTRUCTION_STARTERS for w in words):
+            return False
+        return True
+    return False
+
+
+def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
+    """Return (intent_text, meta) — the NEWEST genuine user instruction.
+
+    Walks the conversation backward (most recent first), skipping system /
+    assistant / tool-role messages, tool results sent as role="user", and
+    continuation acknowledgements. The first survivor is the current intent.
+    Falls back to the first user message when nothing genuine survives.
+    """
+    meta = {"source": "none", "skipped_tool": 0, "skipped_cont": 0}
+    msgs = messages or []
+    if not msgs:
+        return "", meta
+    first_user_text = ""
+    for i in range(len(msgs) - 1, -1, -1):
+        msg = msgs[i]
+        role = msg.get("role")
+        if role == "system":
+            continue
+        text = _content_text(msg)
+        if role == "assistant":
+            continue
+        if role == "tool":
+            meta["skipped_tool"] += 1
+            continue
+        # role == "user"
+        if text.strip():
+            first_user_text = text  # overwrite → ends as the earliest user msg
+        if _is_tool_result(msg, msgs, i):
+            meta["skipped_tool"] += 1
+            continue
+        if _is_continuation(text):
+            # The backward walk keeps looking for the last real instruction; the
+            # first-user-message fallback covers an all-continuation tail.
+            meta["skipped_cont"] += 1
+            continue
+        meta["source"] = "last_instruction"
+        return text.strip(), meta
+    meta["source"] = "first_user_fallback"
+    return first_user_text.strip(), meta
+
+
 def classify_task(
     messages: list[dict],
     tools: Optional[list[dict]] = None,
@@ -141,13 +340,14 @@ def classify_task(
     Examines conversation content, tool usage, and metadata.
 
     Priority (first match wins):
-      1. USER message content — the actual intent signal — for SPECIFIC task
-         signals (planning, debugging, unit_tests, code_generation,
-         reasoning_chain, research_deep). Assistant/tool messages are
-         deliberately NOT scanned for specific-task keywords: they contain
-         incidental chatter ("let me check the test suite", tool output that
-         mentions tests) that would hijack the classification.
-      2. Semantic classification (embedding-based) of the USER message.
+      1. The CURRENT intent — the newest GENUINE user instruction — for SPECIFIC
+         task signals (planning, debugging, unit_tests, code_generation,
+         reasoning_chain, research_deep). We walk the conversation backward
+         from the most recent message and skip assistant/tool messages, tool
+         results that some clients send with role="user" (a schema violation —
+         "[tool result] Ran 12 tests" echoes hijack intent), and continuation
+         acknowledgements ("continue", "yes", …) that carry no new intent.
+      2. Semantic classification (embedding-based) of the intent message.
       3. Agentic system prompt ("you are an AI agent", "tools:", …).
       4. Tool-count / token-count heuristics, then casual (over the full
          conversation), then the code_generation default.
@@ -163,32 +363,15 @@ def classify_task(
     """
     # Gather USER text and the FULL conversation text (user + assistant + tool)
     # for casual detection. Neither includes the system prompt.
-    #
-    # We classify from the FIRST non-empty user message (the original
-    # instruction) — NOT the last and NOT all accumulated user text. Some
-    # clients send tool results as role="user" (e.g. "[tool result] Ran 12
-    # tests"), and multi-turn sessions append many user turns; the first user
-    # message is the most reliable signal of actual intent. Accumulating all
-    # user text lets a "test" in an earlier tool echo hijack the classification.
     user_text = ""
     combined = ""
-    first_user_text = ""
     for msg in messages or []:
         if msg.get("role") == "system":
             continue
-        content = msg.get("content", "")
-        chunk = ""
-        if isinstance(content, str):
-            chunk = content.lower() + " "
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and "text" in block:
-                    chunk += block["text"].lower() + " "
+        chunk = _content_text(msg).lower() + " "
         combined += chunk
         if msg.get("role") == "user":
             user_text += chunk
-            if chunk.strip() and not first_user_text:
-                first_user_text = chunk
 
     system_text = ""
     if messages and messages[0].get("role") == "system":
@@ -196,10 +379,15 @@ def classify_task(
         if isinstance(content, str):
             system_text = content.lower()
 
-    # 1. The FIRST user message: specific task signals (actual original intent).
-    #    Assistant/tool chatter AND later user turns ("test" echoes) must NOT
-    #    override what the user originally asked for.
-    intent_text = first_user_text.strip() or user_text
+    # 1. The CURRENT intent: the newest GENUINE user instruction. We walk the
+    #    conversation backward, skipping assistant/system/tool messages, tool
+    #    results that some clients send with role="user" (a schema violation —
+    #    their "[tool result] Ran 12 tests" echoes hijack intent), and
+    #    continuation acknowledgements ("continue", "yes", …) which carry no
+    #    new intent. A mid-session "let's plan the next feature" therefore
+    #    reclassifies instead of inheriting the first message's task forever.
+    intent_text, _intent_meta = _extract_intent_text(messages or [])
+    intent_text = intent_text.strip().lower() or user_text.strip()
     for task in _SPECIFIC_TASKS:
         for kw in TASK_SIGNALS[task]:
             if kw in intent_text:

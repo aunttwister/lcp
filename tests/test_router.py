@@ -123,6 +123,87 @@ def test_classify_first_user_msg_beats_later_test_echoes():
     ]
     assert classify_task(msgs) == "planning"
 
+# ── Newest genuine user instruction (intent extraction) ───────────────────
+
+def test_classify_mid_session_instruction_reclassifies():
+    """A session that started with debugging must RE-CLASSIFY when the user
+    later issues a new planning instruction (regression for sticky-debugging:
+    the old first-user-message behavior froze intent for the whole session)."""
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "fix this error in the code"},
+        {"role": "assistant", "content": "Let me reproduce."},
+        {"role": "user", "content": "[tool result] Ran 12 tests, 3 failed. test_plan.py: FAILED"},
+        {"role": "assistant", "content": "I see the bug."},
+        {"role": "user", "content": "can we plan the next feature in features folder?"},
+    ]
+    assert classify_task(msgs) == "planning"
+
+def test_classify_continuation_keeps_earlier_intent():
+    """A trailing 'continue' carries no new intent — it must NOT reset a
+    debugging session; the intent stays with the last real instruction."""
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "why does this endpoint return a 500? debug the traceback"},
+        {"role": "assistant", "content": "Running the endpoint..."},
+        {"role": "user", "content": "[tool] Exit code: 1, traceback below"},
+        {"role": "assistant", "content": "Found the failing line."},
+        {"role": "user", "content": "continue"},
+    ]
+    assert classify_task(msgs) == "debugging"
+
+def test_classify_short_instruction_not_treated_as_continuation():
+    """Short genuine instructions ('fix it', 'make it work') are intent, not
+    continuations."""
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "fix this"},
+    ]
+    assert classify_task(msgs) == "debugging"
+
+def test_classify_structural_tool_result_after_assistant_tool_calls():
+    """OpenAI-style: assistant.tool_calls followed by a bare user message is a
+    tool result and must be skipped in favour of the real instruction."""
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "add unit tests for the auth module with mocking"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "run_tests", "arguments": "{}"}}]},
+        {"role": "user", "content": '{"output": "3 tests passed, 1 failed"}'},
+    ]
+    assert classify_task(msgs) == "unit_tests"
+
+def test_extract_intent_text_meta():
+    """_extract_intent_text reports which source won and how many messages were
+    skipped (feeds the future observability work)."""
+    from src.api.router import _extract_intent_text
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "why does this test fail"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "[tool result] Ran 12 tests, 3 failed"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "continue"},
+    ]
+    text, meta = _extract_intent_text(msgs)
+    assert text == "why does this test fail"
+    assert meta["source"] == "last_instruction"
+    assert meta["skipped_tool"] == 1
+    assert meta["skipped_cont"] == 1
+
+def test_extract_intent_text_pure_tool_conversation_falls_back():
+    """Edge: a conversation with no genuine instruction falls back to the first
+    user message instead of erroring."""
+    from src.api.router import _extract_intent_text
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "[tool result] Ran 12 tests, 3 failed"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "[tool] command finished with exit code 1"},
+    ]
+    text, meta = _extract_intent_text(msgs)
+    assert meta["source"] == "first_user_fallback"
+    assert "Ran 12 tests" in text
+
 def test_classify_agentic_system_prompt_only_still_agentic():
     """With no concrete user task, the agentic system prompt still wins."""
     msgs = [{"role": "system", "content": "You are an AI agent with tools: read_file, write_file"}]
