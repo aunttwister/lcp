@@ -55,9 +55,10 @@
     </div>
     <div style="margin-bottom:0.75rem">
       <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Access Control</label>
-      <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.8125rem">
-        <input type="checkbox" id="pemAuthRequired" onchange="this.nextElementSibling.textContent = this.checked ? 'API key required' : 'No key required (public)'">
-        <span>API key required</span>
+      <label class="toggle" id="pemAuthWrap" title="Require an API key for this profile">
+        <input type="checkbox" id="pemAuthRequired" onchange="this.parentNode.querySelector('.toggle-label').textContent = this.checked ? 'API key required' : 'No key required (public)'">
+        <span class="toggle-track" aria-hidden="true"></span>
+        <span class="toggle-label" id="pemAuthLabel">API key required</span>
       </label>
     </div>
     <div style="margin-bottom:0.75rem;padding:0.625rem;border:1px solid hsl(var(--card-border));border-radius:var(--radius);background:hsl(var(--background) / 0.4)">
@@ -65,15 +66,16 @@
         <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin:0">Dynamic Routing</label>
         <button class="btn-sm btn-outline" id="pemRoutingClear" onclick="clearProfileRouting()" style="display:none" title="Clear this profile's routing override — falls back to global">Clear override</button>
       </div>
-      <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.8125rem;margin-bottom:0.5rem">
+      <label class="toggle" id="pemRoutingWrap" style="margin-bottom:0.5rem" title="Enable dynamic capability-based routing for this profile">
         <input type="checkbox" id="pemRoutingEnabled" onchange="pemRoutingDirty(this); updatePemRoutingEnabledLabel(this)">
-        <span id="pemRoutingEnabledLabel">Inherits global</span>
+        <span class="toggle-track" aria-hidden="true"></span>
+        <span class="toggle-label" id="pemRoutingEnabledLabel">Disabled</span>
       </label>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem" id="pemRoutingPolicyRow">
         <div><label style="font-size:0.625rem;color:hsl(var(--muted-foreground))">Policy Mode</label><select id="pemRoutingPolicy" onchange="pemRoutingDirty(this)" style="width:100%;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem"><option value="eager">eager — always best fit</option><option value="cost_first">cost_first — favor cheaper models</option><option value="explore">explore — weighted spread</option></select></div>
         <div><label style="font-size:0.625rem;color:hsl(var(--muted-foreground))">Min Score (0–1)</label><input id="pemRoutingMinScore" type="number" min="0" max="1" step="0.05" placeholder="global" onchange="pemRoutingDirty(this)" style="width:100%;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem"></div>
       </div>
-      <span style="font-size:0.625rem;color:hsl(var(--muted-foreground))">Per-profile routing override. Check to force routing on for this profile, uncheck to force it off; leave untouched to inherit the global default (see Routing tab).</span>
+      <span style="font-size:0.625rem;color:hsl(var(--muted-foreground))">Dynamic routing is off by default for each profile — toggle it on to route this profile by capability. Policy and min score apply when enabled.</span>
     </div>
     <div style="margin-bottom:0.75rem">
       <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Budget</label>
@@ -117,9 +119,11 @@ var _addProfileMode = false;
 // ── Dynamic routing (per-profile) ──────────────────────────────────────
 // Per-profile routing lives on the Profiles page: enabled / policy / min-score
 // write to the same settings store as the Routing tab (routing_*:<profile>).
-// The checkbox is a tri-state: unchecked+empty = "inherit global" (no write);
-// checking/unchecking or editing policy/min-score marks the section dirty so
-// Save persists an explicit per-profile override.
+// Dynamic routing is OFF by default for each profile unless explicitly
+// enabled. The toggle writes an explicit per-profile enabled override
+// (routing_enabled:<profile>) whenever the user changes it; policy/min-score
+// follow the same dirty-tracked save. "Clear override" removes the override
+// and returns the profile to the default (disabled).
 var _pemRoutingDirty = false;
 
 function pemRoutingDirty() {
@@ -132,7 +136,7 @@ function resetPemRouting() {
   var lbl = document.getElementById('pemRoutingEnabledLabel');
   var clearBtn = document.getElementById('pemRoutingClear');
   if (en) en.checked = false;
-  if (lbl) lbl.textContent = 'Inherits global';
+  if (lbl) lbl.textContent = 'Disabled';
   var pol = document.getElementById('pemRoutingPolicy');
   if (pol) { pol.value = 'eager'; pol.disabled = true; }
   var ms = document.getElementById('pemRoutingMinScore');
@@ -153,7 +157,7 @@ function setPemRoutingPolicyDisabled(disabled) {
 
 function updatePemRoutingEnabledLabel(el) {
   var lbl = document.getElementById('pemRoutingEnabledLabel');
-  if (lbl) lbl.textContent = el.checked ? 'Enabled for this profile' : 'Disabled for this profile';
+  if (lbl) lbl.textContent = el.checked ? 'Enabled' : 'Disabled';
   setPemRoutingPolicyDisabled(!el.checked);
 }
 
@@ -166,19 +170,18 @@ function loadProfileRouting(name) {
     var pol = document.getElementById('pemRoutingPolicy');
     var ms = document.getElementById('pemRoutingMinScore');
     var clearBtn = document.getElementById('pemRoutingClear');
-    // With an override, show the effective values and let the user edit them.
     if (d.has_override) {
+      // Profile has an explicit override — show its effective values.
       if (en) en.checked = !!d.enabled;
-      if (lbl) lbl.textContent = d.enabled ? 'Enabled for this profile' : 'Disabled for this profile';
+      if (lbl) lbl.textContent = d.enabled ? 'Enabled' : 'Disabled';
       if (pol) pol.value = d.policy || 'eager';
       if (ms) ms.value = (d.min_score != null && d.min_score !== '') ? d.min_score : '';
-      setPemRoutingPolicyDisabled(false);
+      setPemRoutingPolicyDisabled(!d.enabled);
       if (clearBtn) clearBtn.style.display = '';
     } else {
-      // No override: default to "inherit global" so saving without touching
-      // routing never creates an override.
+      // No override — default to disabled (dynamic routing off by default).
       if (en) en.checked = false;
-      if (lbl) lbl.textContent = 'Inherits global';
+      if (lbl) lbl.textContent = 'Disabled';
       if (pol) pol.value = 'eager';
       if (ms) ms.value = '';
       setPemRoutingPolicyDisabled(true);
@@ -188,7 +191,7 @@ function loadProfileRouting(name) {
 }
 
 function clearProfileRouting() {
-  if (!confirm('Clear this profile\'s routing override? It will fall back to the global routing settings.')) return;
+  if (!confirm('Clear this profile\'s routing override? It will return to the default (disabled) and inherit global policy.')) return;
   var name = _editProfileName || (document.getElementById('pemName').value.trim().toLowerCase());
   if (!name) return;
   api('POST', '/api/routing/policy', { profile: name, clear_profile: true }).then(function(d) {
@@ -209,7 +212,7 @@ function openAddProfile() {
     document.getElementById('pemNameRow').style.display = '';
     document.getElementById('pemName').value = '';
     document.getElementById('pemAuthRequired').checked = true;
-    document.getElementById('pemAuthRequired').nextElementSibling.textContent = 'API key required';
+    document.getElementById('pemAuthLabel').textContent = 'API key required';
     document.getElementById('pemBudgetAmount').value = '';
     document.getElementById('pemBudgetAction').value = 'log';
     document.getElementById('pemBudgetThresholds').value = '';
@@ -263,7 +266,7 @@ function editProfile(name) {
       document.getElementById('pemSaveBtn').textContent = 'Save';
       var authReq = prof.auth_required !== false;
       document.getElementById('pemAuthRequired').checked = authReq;
-      document.getElementById('pemAuthRequired').nextElementSibling.textContent = authReq ? 'API key required' : 'No key required (public)';
+      document.getElementById('pemAuthLabel').textContent = authReq ? 'API key required' : 'No key required (public)';
       renderPemTools();
       renderPemChain();
       // Load profile budget + per-profile routing
