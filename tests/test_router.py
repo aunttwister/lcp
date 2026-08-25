@@ -66,6 +66,38 @@ def test_classify_agentic_system_prompt_does_not_mask_unit_tests():
     ]
     assert classify_task(msgs) == "unit_tests"
 
+def test_classify_user_intent_beats_assistant_test_chatter():
+    """Regression: assistant/tool messages that mention 'test' must NOT hijack
+    the classification. The USER message is the actual intent signal."""
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "can we plan the next feature in features folder?"},
+        {"role": "assistant", "content": "Sure, let me look at the existing test suite first."},
+        {"role": "tool", "content": "Ran 12 tests, 3 failed. The test file is features/test_plan.py"},
+    ]
+    assert classify_task(msgs) == "planning"
+
+def test_classify_user_intent_beats_tool_test_output():
+    """A user debugging request must stay debugging even when tool output
+    mentions running tests."""
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "why does this endpoint return a 500? debug the traceback"},
+        {"role": "assistant", "content": "I ran the test suite to reproduce"},
+        {"role": "tool", "content": "test_plan.py: 3 tests passed, 1 failed"},
+    ]
+    assert classify_task(msgs) == "debugging"
+
+def test_classify_user_mentioning_tests_still_unit_tests():
+    """If the USER message itself asks for tests, it's still unit_tests despite
+    any assistant/tool chatter."""
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "write pytest unit tests for the auth module with mocking"},
+        {"role": "assistant", "content": "Let me check the current test coverage"},
+    ]
+    assert classify_task(msgs) == "unit_tests"
+
 def test_classify_agentic_system_prompt_only_still_agentic():
     """With no concrete user task, the agentic system prompt still wins."""
     msgs = [{"role": "system", "content": "You are an AI agent with tools: read_file, write_file"}]

@@ -141,12 +141,16 @@ def classify_task(
     Examines conversation content, tool usage, and metadata.
 
     Priority (first match wins):
-      1. Conversation content (user / assistant / tool messages — NOT the
-         system prompt) for SPECIFIC task signals: planning, debugging,
-         unit_tests, code_generation, reasoning_chain, research_deep.
-      2. Agentic system prompt ("you are an AI agent", "tools:", …).
-      3. Tool-count / token-count heuristics, then casual, then the
-         code_generation default.
+      1. USER message content — the actual intent signal — for SPECIFIC task
+         signals (planning, debugging, unit_tests, code_generation,
+         reasoning_chain, research_deep). Assistant/tool messages are
+         deliberately NOT scanned for specific-task keywords: they contain
+         incidental chatter ("let me check the test suite", tool output that
+         mentions tests) that would hijack the classification.
+      2. Semantic classification (embedding-based) of the USER message.
+      3. Agentic system prompt ("you are an AI agent", "tools:", …).
+      4. Tool-count / token-count heuristics, then casual (over the full
+         conversation), then the code_generation default.
 
     The system prompt is deliberately NOT scanned for specific task keywords:
     it's a fixed preamble that contains incidental words ("plan", "strategy",
@@ -157,18 +161,25 @@ def classify_task(
     ``planning`` (an agent implementing code often requests a large output
     budget, which is not a planning signal).
     """
-    # Gather conversation text (user/assistant/tool) — NOT the system prompt.
+    # Gather USER text (the actual intent) and the FULL conversation text
+    # (user + assistant + tool) for casual detection. Neither includes the
+    # system prompt.
+    user_text = ""
     combined = ""
     for msg in messages or []:
         if msg.get("role") == "system":
             continue
         content = msg.get("content", "")
+        chunk = ""
         if isinstance(content, str):
-            combined += content.lower() + " "
+            chunk = content.lower() + " "
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and "text" in block:
-                    combined += block["text"].lower() + " "
+                    chunk += block["text"].lower() + " "
+        combined += chunk
+        if msg.get("role") == "user":
+            user_text += chunk
 
     system_text = ""
     if messages and messages[0].get("role") == "system":
@@ -176,21 +187,23 @@ def classify_task(
         if isinstance(content, str):
             system_text = content.lower()
 
-    # 1. Conversation content: specific task signals (actual user intent).
+    # 1. USER message content: specific task signals (actual user intent).
+    #    Assistant/tool chatter ("test", "run the suite", …) must NOT override
+    #    what the user actually asked for.
     for task in _SPECIFIC_TASKS:
         for kw in TASK_SIGNALS[task]:
-            if kw in combined:
+            if kw in user_text:
                 return task
 
     # 1b. Semantic classification (embedding-based) — runs FIRST for
     #     conversational intent when the embedder is available, so meaning (not
-    #     exact keywords) drives the task type. Falls back to the keyword
-    #     heuristics below when no embedder is installed or confidence is low.
+    #     exact keywords) drives the task type. Classifies the USER message so
+    #     assistant/tool context doesn't bias the intent.
     try:
         from .task_classifier import get_semantic_classifier
         clf = get_semantic_classifier()
-        if clf is not None and combined.strip():
-            task = clf.classify(combined.strip())
+        if clf is not None and user_text.strip():
+            task = clf.classify(user_text.strip())
             if task is not None:
                 return task
     except Exception:  # noqa: BLE001 — never let classification break routing
@@ -211,7 +224,8 @@ def classify_task(
     if token_count > 8000:
         return "research_deep"
 
-    # Check casual signals
+    # Check casual signals over the full conversation (casual is harmless and
+    # the user may have greeted before the assistant/tool context).
     for kw in CASUAL_SIGNALS:
         if kw in combined:
             return "casual_chat"
