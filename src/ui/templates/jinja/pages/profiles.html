@@ -61,22 +61,6 @@
         <span class="toggle-label" id="pemAuthLabel">API key required</span>
       </label>
     </div>
-    <div style="margin-bottom:0.75rem;padding:0.625rem;border:1px solid hsl(var(--card-border));border-radius:var(--radius);background:hsl(var(--background) / 0.4)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.375rem">
-        <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin:0">Dynamic Routing</label>
-        <button class="btn-sm btn-outline" id="pemRoutingClear" onclick="clearProfileRouting()" style="display:none" title="Clear this profile's routing override — falls back to global">Clear override</button>
-      </div>
-      <label class="toggle" id="pemRoutingWrap" style="margin-bottom:0.5rem" title="Enable dynamic capability-based routing for this profile">
-        <input type="checkbox" id="pemRoutingEnabled" onchange="pemRoutingDirty(this); updatePemRoutingEnabledLabel(this)">
-        <span class="toggle-track" aria-hidden="true"></span>
-        <span class="toggle-label" id="pemRoutingEnabledLabel">Disabled</span>
-      </label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem" id="pemRoutingPolicyRow">
-        <div><label style="font-size:0.625rem;color:hsl(var(--muted-foreground))">Policy Mode</label><select id="pemRoutingPolicy" onchange="pemRoutingDirty(this)" style="width:100%;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem"><option value="eager">eager — always best fit</option><option value="cost_first">cost_first — favor cheaper models</option><option value="explore">explore — weighted spread</option></select></div>
-        <div><label style="font-size:0.625rem;color:hsl(var(--muted-foreground))">Min Score (0–1)</label><input id="pemRoutingMinScore" type="number" min="0" max="1" step="0.05" placeholder="global" onchange="pemRoutingDirty(this)" style="width:100%;padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem"></div>
-      </div>
-      <span style="font-size:0.625rem;color:hsl(var(--muted-foreground))">Dynamic routing is off by default for each profile — toggle it on to route this profile by capability. Policy and min score apply when enabled.</span>
-    </div>
     <div style="margin-bottom:0.75rem">
       <label style="display:block;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin-bottom:0.25rem">Budget</label>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
@@ -116,90 +100,6 @@
 {% raw %}
 var _addProfileMode = false;
 
-// ── Dynamic routing (per-profile) ──────────────────────────────────────
-// Per-profile routing lives on the Profiles page: enabled / policy / min-score
-// write to the same settings store as the Routing tab (routing_*:<profile>).
-// Dynamic routing is OFF by default for each profile unless explicitly
-// enabled. The toggle writes an explicit per-profile enabled override
-// (routing_enabled:<profile>) whenever the user changes it; policy/min-score
-// follow the same dirty-tracked save. "Clear override" removes the override
-// and returns the profile to the default (disabled).
-var _pemRoutingDirty = false;
-
-function pemRoutingDirty() {
-  _pemRoutingDirty = true;
-}
-
-function resetPemRouting() {
-  _pemRoutingDirty = false;
-  var en = document.getElementById('pemRoutingEnabled');
-  var lbl = document.getElementById('pemRoutingEnabledLabel');
-  var clearBtn = document.getElementById('pemRoutingClear');
-  if (en) en.checked = false;
-  if (lbl) lbl.textContent = 'Disabled';
-  var pol = document.getElementById('pemRoutingPolicy');
-  if (pol) { pol.value = 'eager'; pol.disabled = true; }
-  var ms = document.getElementById('pemRoutingMinScore');
-  if (ms) { ms.value = ''; ms.disabled = true; }
-  var row = document.getElementById('pemRoutingPolicyRow');
-  if (row) row.style.opacity = '0.5';
-  if (clearBtn) clearBtn.style.display = 'none';
-}
-
-function setPemRoutingPolicyDisabled(disabled) {
-  var pol = document.getElementById('pemRoutingPolicy');
-  var ms = document.getElementById('pemRoutingMinScore');
-  if (pol) pol.disabled = !!disabled;
-  if (ms) ms.disabled = !!disabled;
-  var row = document.getElementById('pemRoutingPolicyRow');
-  if (row) row.style.opacity = disabled ? '0.5' : '1';
-}
-
-function updatePemRoutingEnabledLabel(el) {
-  var lbl = document.getElementById('pemRoutingEnabledLabel');
-  if (lbl) lbl.textContent = el.checked ? 'Enabled' : 'Disabled';
-  setPemRoutingPolicyDisabled(!el.checked);
-}
-
-function loadProfileRouting(name) {
-  resetPemRouting();
-  api('GET', '/api/routing/status?profile=' + encodeURIComponent(name)).then(function(d) {
-    if (d.error) return;
-    var en = document.getElementById('pemRoutingEnabled');
-    var lbl = document.getElementById('pemRoutingEnabledLabel');
-    var pol = document.getElementById('pemRoutingPolicy');
-    var ms = document.getElementById('pemRoutingMinScore');
-    var clearBtn = document.getElementById('pemRoutingClear');
-    if (d.has_override) {
-      // Profile has an explicit override — show its effective values.
-      if (en) en.checked = !!d.enabled;
-      if (lbl) lbl.textContent = d.enabled ? 'Enabled' : 'Disabled';
-      if (pol) pol.value = d.policy || 'eager';
-      if (ms) ms.value = (d.min_score != null && d.min_score !== '') ? d.min_score : '';
-      setPemRoutingPolicyDisabled(!d.enabled);
-      if (clearBtn) clearBtn.style.display = '';
-    } else {
-      // No override — default to disabled (dynamic routing off by default).
-      if (en) en.checked = false;
-      if (lbl) lbl.textContent = 'Disabled';
-      if (pol) pol.value = 'eager';
-      if (ms) ms.value = '';
-      setPemRoutingPolicyDisabled(true);
-      if (clearBtn) clearBtn.style.display = 'none';
-    }
-  });
-}
-
-function clearProfileRouting() {
-  if (!confirm('Clear this profile\'s routing override? It will return to the default (disabled) and inherit global policy.')) return;
-  var name = _editProfileName || (document.getElementById('pemName').value.trim().toLowerCase());
-  if (!name) return;
-  api('POST', '/api/routing/policy', { profile: name, clear_profile: true }).then(function(d) {
-    if (d.error) { alert('Clear failed: ' + d.error); return; }
-    loadProfileRouting(name);
-  });
-}
-
 function openAddProfile() {
   _addProfileMode = true;
   _editProfileName = '';
@@ -221,7 +121,6 @@ function openAddProfile() {
     document.getElementById('pemSaveBtn').textContent = 'Create Profile';
     renderPemTools();
     renderPemChain();
-    resetPemRouting();
     openDialog('profileEditModal');
     document.getElementById('pemName').focus();
   });
@@ -269,9 +168,8 @@ function editProfile(name) {
       document.getElementById('pemAuthLabel').textContent = authReq ? 'API key required' : 'No key required (public)';
       renderPemTools();
       renderPemChain();
-      // Load profile budget + per-profile routing
+      // Load profile budget
       loadProfileBudget(name);
-      loadProfileRouting(name);
       openDialog('profileEditModal');
     });
   });
@@ -374,17 +272,6 @@ function saveProfileEdit() {
     return {provider: s.provider, model: s.model, base_url: bu};
   });
 
-  // Persist per-profile routing only when the user actually changed it, so a
-  // plain save never creates an override.
-  function saveRoutingFor(name) {
-    if (!_pemRoutingDirty) return Promise.resolve();
-    var body = { profile: name };
-    body.enabled = document.getElementById('pemRoutingEnabled').checked;
-    var ms = document.getElementById('pemRoutingMinScore').value;
-    if (ms !== '' && !isNaN(parseFloat(ms))) body.min_score = parseFloat(ms);
-    return api('POST', '/api/routing/policy', body);
-  }
-
   if (_addProfileMode) {
     var name = document.getElementById('pemName').value.trim().toLowerCase();
     if (!name) { statusEl.textContent = 'Enter a profile name'; statusEl.style.color = 'hsl(var(--red-fg))'; return; }
@@ -396,8 +283,6 @@ function saveProfileEdit() {
           forbidden_tools: _editProfileTools,
           auth_required: document.getElementById('pemAuthRequired').checked
         });
-      }).then(function() {
-        return saveRoutingFor(name);
       });
     }).then(function() {
       statusEl.textContent = 'Profile created';
@@ -429,8 +314,6 @@ function saveProfileEdit() {
       budgetPromise = Promise.resolve();
     }
     return budgetPromise.then(function() {
-      return saveRoutingFor(_editProfileName);
-    }).then(function() {
       if (profResult.ok) {
         statusEl.textContent = 'Saved';
         statusEl.style.color = 'hsl(var(--green-fg))';
