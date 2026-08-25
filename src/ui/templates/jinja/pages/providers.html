@@ -157,13 +157,25 @@
 <!-- ═══ ROUTING TAB ═══ -->
 <div id="tab-routing" class="tab-panel">
   <div style="background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem;margin-bottom:1rem">
-    <h3 style="font-size:0.9rem;margin-bottom:0.25rem">Dynamic routing</h3>
-    <p style="font-size:0.75rem;color:hsl(var(--muted-foreground));margin-bottom:1rem">
-      Requests are classified by task type and routed to the best-fit
-      (provider, model) chain step using benchmark capability scores + a
-      cost-bias boost, with a circuit-breaker health and credit-balance
-      tiebreaker. Decisions below are from the background router.
-    </p>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap">
+      <div>
+        <h3 style="font-size:0.9rem;margin-bottom:0.25rem">Dynamic routing</h3>
+        <p style="font-size:0.75rem;color:hsl(var(--muted-foreground));margin-bottom:1rem">
+          Requests are classified by task type and routed to the best-fit
+          (provider, model) chain step using benchmark capability scores + a
+          cost-bias boost, with a circuit-breaker health and credit-balance
+          tiebreaker. Decisions below are from the background router.
+        </p>
+      </div>
+      <div style="display:flex;align-items:center;gap:0.5rem">
+        <label class="form-label" for="routingProfile" style="margin:0">Scope</label>
+        <select id="routingProfile" onchange="routingScopeChanged(this)"
+          style="padding:0.3rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+          <option value="">All profiles (global)</option>
+        </select>
+        <button class="btn btn-outline btn-sm" id="routingClearOverride" onclick="clearRoutingOverride()" style="display:none" title="Remove this profile's routing override — falls back to global">Clear override</button>
+      </div>
+    </div>
     <div class="routing-controls">
       <div class="routing-group">
         <div class="form-label">Enabled</div>
@@ -856,12 +868,66 @@ loadCacheSettings();
 setInterval(loadCacheSettings, 15000);
 
 // ── Routing tab ────────────────────────────────────────────────────────────
-var ROUTING = { enabled: false, policy: 'eager', min_score: 0, rules: [], per_task: {}, recent_decisions: [] };
+var ROUTING = { enabled: false, policy: 'eager', min_score: 0, rules: [], per_task: {}, recent_decisions: [], per_profile: {}, profiles: [] };
 
-async function loadRouting() {
+function routingScope() {
+  const sel = document.getElementById('routingProfile');
+  return sel ? sel.value.trim() : '';
+}
+
+// Populate the scope dropdown from the global status (called once after the
+// first global loadRouting resolves).
+function renderRoutingScope() {
+  const sel = document.getElementById('routingProfile');
+  if (!sel || sel.dataset.built) return;
+  const profs = ROUTING.profiles || [];
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All profiles (global)</option>' +
+    profs.map(function (p) { return '<option value="' + escC(p) + '">' + escC(p) + '</option>'; }).join('');
+  if (cur) sel.value = cur;
+  sel.dataset.built = '1';
+}
+
+function routingScopeChanged() {
+  // Reload the editor for the new scope (global or per-profile).
+  const sel = document.getElementById('routingProfile');
+  const prof = sel ? sel.value.trim() : '';
+  const clearBtn = document.getElementById('routingClearOverride');
+  if (clearBtn) clearBtn.style.display = prof && ROUTING.per_profile && ROUTING.per_profile[prof] && ROUTING.per_profile[prof].has_override ? '' : 'none';
+  loadRouting(prof);
+}
+
+async function clearRoutingOverride() {
+  const prof = routingScope();
+  if (!prof) return;
+  if (!confirm('Remove the per-profile routing override for "' + prof + '"? It will fall back to the global settings.')) return;
+  const d = await api('POST', '/api/routing/policy', { profile: prof, clear_profile: true });
+  if (d.error) { document.getElementById('routingError').textContent = d.error; return; }
+  document.getElementById('routingClearOverride').style.display = 'none';
+  await loadRouting('');
+}
+
+async function loadRouting(profile) {
   try {
-    const d = await api('GET', '/api/routing/status');
-    ROUTING = d;
+    const scope = (profile !== undefined) ? profile : routingScope();
+    const url = scope ? '/api/routing/status?profile=' + encodeURIComponent(scope) : '/api/routing/status';
+    const d = await api('GET', url);
+    if (!scope) {
+      ROUTING = d;
+      renderRoutingScope();
+      // Restore the previously selected scope after the global refresh.
+      const sel = document.getElementById('routingProfile');
+      const cur = sel ? sel.value.trim() : '';
+      if (cur && d.per_profile && d.per_profile[cur]) {
+        d.enabled = d.per_profile[cur].enabled;
+        d.policy = d.per_profile[cur].policy;
+        d.min_score = d.per_profile[cur].min_score;
+        d.rules = d.per_profile[cur].rules;
+        ROUTING = d;
+      }
+    } else {
+      ROUTING = Object.assign({}, ROUTING, d);
+    }
     const badge = document.getElementById('routingStatusBadge');
     badge.textContent = d.enabled ? 'enabled' : 'disabled';
     badge.className = 'badge ' + (d.enabled ? 'badge-success' : 'badge-error');
@@ -869,6 +935,12 @@ async function loadRouting() {
     updateRoutingToggleLabel(d.enabled);
     document.getElementById('routingPolicy').value = d.policy;
     document.getElementById('routingMinScore').value = d.min_score;
+    const clearBtn = document.getElementById('routingClearOverride');
+    if (clearBtn) {
+      const prof = routingScope();
+      const hasOv = prof && d.per_profile && d.per_profile[prof] && d.per_profile[prof].has_override;
+      clearBtn.style.display = hasOv ? '' : 'none';
+    }
     renderRoutingTasks();
     renderRoutingDecisions();
     renderRoutingRules();
@@ -886,7 +958,10 @@ async function toggleRouting(el) {
   const err = document.getElementById('routingError');
   const status = document.getElementById('routingStatus');
   err.textContent = '';
-  const d = await api('POST', '/api/routing/policy', { enabled: el.checked });
+  const body = { enabled: el.checked };
+  const prof = routingScope();
+  if (prof) body.profile = prof;
+  const d = await api('POST', '/api/routing/policy', body);
   if (d.error) {
     err.textContent = d.error;
     el.checked = !el.checked;
@@ -1091,7 +1166,10 @@ async function persistRules() {
   const err = document.getElementById('routingError');
   const status = document.getElementById('routingStatus');
   err.textContent = '';
-  const d = await api('POST', '/api/routing/rules', { rules: ROUTING.rules });
+  const body = { rules: ROUTING.rules };
+  const prof = routingScope();
+  if (prof) body.profile = prof;
+  const d = await api('POST', '/api/routing/rules', body);
   if (d.error) { err.textContent = d.error; loadRouting(); return; }
   status.textContent = 'Rules saved — apply immediately to new requests.';
   loadRouting();
@@ -1103,6 +1181,8 @@ async function saveRouting() {
   err.textContent = '';
   const body = { policy: document.getElementById('routingPolicy').value };
   body.enabled = document.getElementById('routingEnabled').checked;
+  const prof = routingScope();
+  if (prof) body.profile = prof;
   const ms = parseFloat(document.getElementById('routingMinScore').value);
   if (!isNaN(ms)) body.min_score = ms;
   const d = await api('POST', '/api/routing/policy', body);
@@ -1113,6 +1193,6 @@ async function saveRouting() {
 
 loadRouting();
 loadProvModels();
-setInterval(loadRouting, 15000);
+setInterval(function () { loadRouting(); }, 15000);
 applyHashTab();
 {% endraw %}</script>{% endblock %}

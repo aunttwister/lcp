@@ -580,8 +580,10 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
     errors = []
 
     # ── Dynamic router: reorder chain so best (provider, model) step is first ─
+    # Per-profile gating: a profile override (routing_enabled:<profile>) wins,
+    # then the global toggle. select_step re-reads policy/rules per profile.
     router = get_dynamic_router()
-    if router.is_enabled(config) and chain_len > 0:
+    if router.is_enabled(config, profile_name) and chain_len > 0:
         reordered = router.select_step(
             messages=body.get("messages", []),
             tools=body.get("tools"),

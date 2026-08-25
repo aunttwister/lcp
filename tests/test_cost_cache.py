@@ -141,6 +141,52 @@ class TestSettingsStore:
         s.set("routing_enabled", "true")
         assert s.get_routing_enabled() is True
 
+    # ── Per-profile routing overrides ─────────────────────────────────────
+
+    def test_per_profile_policy_falls_back_to_global(self, engine):
+        s = SettingsStore(engine)
+        s.set_routing_policy("cost_first")          # global
+        assert s.get_routing_policy(profile="l2") == "cost_first"  # no override
+        s.set_routing_policy("explore", profile="l2")
+        assert s.get_routing_policy(profile="l2") == "explore"
+        assert s.get_routing_policy() == "cost_first"  # global unchanged
+
+    def test_per_profile_policy_persists(self, engine):
+        s = SettingsStore(engine)
+        s.set_routing_policy("explore", profile="l2")
+        s2 = SettingsStore(engine)
+        assert s2.get_routing_policy(profile="l2") == "explore"
+
+    def test_per_profile_min_score(self, engine):
+        s = SettingsStore(engine)
+        s.set_routing_min_score(0.7, profile="career")
+        assert s.get_routing_min_score(profile="career") == 0.7
+        assert s.get_routing_min_score() == 0.0  # global untouched
+
+    def test_per_profile_enabled(self, engine):
+        s = SettingsStore(engine)
+        s.set_routing_enabled(True, profile="l2")
+        assert s.get_routing_enabled(profile="l2") is True
+        assert s.get_routing_enabled() is None  # global untouched
+
+    def test_per_profile_rules(self, engine):
+        s = SettingsStore(engine)
+        rules = [{"task": "planning", "action": "prefer", "model": "deepseek-v4-pro"}]
+        s.set_routing_rules(rules, profile="coder")
+        s2 = SettingsStore(engine)
+        assert s2.get_routing_rules(profile="coder") == rules
+        assert s2.get_routing_rules() == []  # global untouched
+
+    def test_per_profile_clear(self, engine):
+        s = SettingsStore(engine)
+        s.set_routing_enabled(True, profile="l2")
+        s.set_routing_policy("explore", profile="l2")
+        assert s.get_routing_enabled(profile="l2") is True
+        s.clear_routing_enabled("l2")
+        s.clear_routing_policy("l2")
+        assert s.get_routing_enabled(profile="l2") is None
+        assert s.get_routing_policy(profile="l2") == "eager"
+
 
 class TestCostPluginCache:
     def test_get_missing_is_none(self, engine):

@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1480%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-1495%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -452,13 +452,13 @@ Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 1480 unit tests covering routing (incl. benchmark-driven capability routing, runtime enable toggle, `unit_tests` taxonomy), budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, the memory plugin, and the plugin system |
+| `pytest` | Test runner — 1495 unit tests covering routing (incl. benchmark-driven capability routing, runtime enable toggle, per-profile routing overrides, `unit_tests` taxonomy), budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, the memory plugin, and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**92% overall** — 7,161 of 7,791 statements covered (1480 tests, 0 integration tests).
+**92% overall** — 7,247 of 7,884 statements covered (1495 tests, 0 integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 

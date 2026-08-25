@@ -379,13 +379,38 @@ class CapabilityRouter:
         """
         self._matrix = None
 
+    def _has_profile_override(self, profile: str) -> bool:
+        """True when *profile* has any per-profile routing setting stored."""
+        try:
+            from .cost_cache import get_settings
+            settings = get_settings()
+            if settings is None:
+                return False
+            from .cost_cache import SettingsStore
+            for key in (
+                f"{SettingsStore.ROUTING_ENABLED_KEY}:{profile}",
+                f"{SettingsStore.ROUTING_POLICY_KEY}:{profile}",
+                f"{SettingsStore.ROUTING_MIN_SCORE_KEY}:{profile}",
+                f"{SettingsStore.ROUTING_RULES_KEY}:{profile}",
+            ):
+                if settings.get(key, None) is not None:
+                    return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
     # ── Policy + decisions ────────────────────────────────────────────────
 
-    def _effective_policy(self, config: Optional[object] = None) -> tuple[str, float]:
-        """Return (policy, min_score): runtime settings override config.
+    def _effective_policy(self, config: Optional[object] = None,
+                          profile: Optional[str] = None) -> tuple[str, float]:
+        """Return (policy, min_score) for a scope: runtime settings override
+        config.
 
-        Policy ∈ {eager, cost_first, explore}; min_score is a 0–1 floor below
-        which a reorder is never recommended.
+        A per-profile override (``routing_policy:<profile>`` /
+        ``routing_min_score:<profile>``) wins when set; otherwise the global
+        setting; otherwise the config value. Policy ∈ {eager, cost_first,
+        explore}; min_score is a 0–1 floor below which a reorder is never
+        recommended.
         """
         policy = "eager"
         min_score = 0.0
@@ -393,8 +418,14 @@ class CapabilityRouter:
             from .cost_cache import get_settings
             settings = get_settings()
             if settings is not None:
-                policy = settings.get_routing_policy(default=policy)
-                min_score = settings.get_routing_min_score(default=min_score)
+                try:
+                    policy = settings.get_routing_policy(default=policy, profile=profile)
+                except TypeError:
+                    policy = settings.get_routing_policy(default=policy)
+                try:
+                    min_score = settings.get_routing_min_score(default=min_score, profile=profile)
+                except TypeError:
+                    min_score = settings.get_routing_min_score(default=min_score)
         except Exception:  # noqa: BLE001
             pass
         if config is not None:
@@ -406,9 +437,11 @@ class CapabilityRouter:
                 pass
         return policy, min_score
 
-    def is_enabled(self, config: Optional[object] = None) -> bool:
-        """Effective enabled state: a runtime toggle (settings table, UI) wins,
-        otherwise fall back to the boot-time value (seeded from config).
+    def is_enabled(self, config: Optional[object] = None,
+                   profile: Optional[str] = None) -> bool:
+        """Effective enabled state for a scope: a per-profile runtime toggle
+        (``routing_enabled:<profile>``) wins, then the global toggle (settings
+        table, UI), then the boot-time value (seeded from config).
 
         ``config`` is accepted for API symmetry (callers pass it through) but
         the boot-time ``self.enabled`` already reflects config at startup.
@@ -417,7 +450,10 @@ class CapabilityRouter:
             from .cost_cache import get_settings
             settings = get_settings()
             if settings is not None:
-                override = settings.get_routing_enabled(default=None)
+                try:
+                    override = settings.get_routing_enabled(default=None, profile=profile)
+                except TypeError:
+                    override = settings.get_routing_enabled(default=None)
                 if override is not None:
                     return override
         except Exception:  # noqa: BLE001 — toggle must never break routing
@@ -575,17 +611,22 @@ class CapabilityRouter:
 
     # ── Routing rules (UI-defined overrides) ─────────────────────────────
 
-    def _rules(self, config: Optional[object] = None) -> list:
-        """Return the effective routing-rules list.
+    def _rules(self, config: Optional[object] = None,
+               profile: Optional[str] = None) -> list:
+        """Return the effective routing-rules list for a scope.
 
-        Runtime settings (settings table, UI-editable) win; ``config``
-        ``dynamic_routing.rules`` seeds defaults when no setting exists.
+        A per-profile rules list (``routing_rules:<profile>``) replaces the
+        global list when set; otherwise the global setting wins; otherwise
+        ``config`` ``dynamic_routing.rules`` seeds defaults.
         """
         try:
             from .cost_cache import get_settings
             settings = get_settings()
             if settings is not None:
-                stored = settings.get_routing_rules()
+                try:
+                    stored = settings.get_routing_rules(profile=profile)
+                except TypeError:
+                    stored = settings.get_routing_rules()
                 if stored:
                     return stored
         except Exception:  # noqa: BLE001
@@ -648,7 +689,7 @@ class CapabilityRouter:
         (with an optional ``min_score`` gate). The global ``min_score`` floor
         still applies afterwards.
         """
-        rules = self._rules(config)
+        rules = self._rules(config, profile)
         if not rules:
             return list(chain), []
         candidates = [dict(step) for step in chain]
@@ -777,9 +818,18 @@ class CapabilityRouter:
         >= it. Returns None to keep the chain's existing order. The caller
         applies it to its own copy — this never mutates the profile config.
         """
-        if not self.is_enabled(config) or not chain:
+        # Attempt the profile-scoped enabled check + policy; tolerate
+        # duck-typed/monkeypatched implementations that only accept ``config``.
+        try:
+            enabled = self.is_enabled(config, profile)
+        except TypeError:
+            enabled = self.is_enabled(config)
+        if not enabled or not chain:
             return None
-        policy, min_score = self._effective_policy(config)
+        try:
+            policy, min_score = self._effective_policy(config, profile)
+        except TypeError:
+            policy, min_score = self._effective_policy(config)
         task = classify_task(messages, tools, max_tokens)
 
         # The circuit breaker only GATES PROVIDERS; the router owns model
@@ -795,7 +845,7 @@ class CapabilityRouter:
 
         # Apply UI-defined rules: blocks filter candidates; prefers pin a step;
         # policy rules override the policy for this scope.
-        for rule in self._rules(config):
+        for rule in self._rules(config, profile):
             if rule.get("action") == "policy" and self._rule_matches(rule, task, profile or ""):
                 p = rule.get("policy")
                 if p in ("eager", "cost_first", "explore"):
@@ -811,7 +861,7 @@ class CapabilityRouter:
         # Audit: why didn't a rule fire? Surfaces silent rule misses in the
         # decision log (e.g. "rules exist for planning but task=agentic…").
         note = None
-        rules = self._rules(config)
+        rules = self._rules(config, profile)
         if rules:
             scope_matched = [r for r in rules
                              if self._rule_matches(r, task, profile or "")]
@@ -971,13 +1021,28 @@ def invalidate_router_matrix() -> None:
     _dynamic_router.invalidate_matrix()
 
 
+def _status_for_profile(router, config, profile: Optional[str]) -> dict:
+    """Build one profile-scoped routing-status block."""
+    policy, min_score = router._effective_policy(config, profile)
+    return {
+        "enabled": router.is_enabled(config, profile),
+        "policy": policy,
+        "min_score": min_score,
+        "rules": router._rules(config, profile),
+        # Per-profile has no matrix of its own; decisions are global (recent
+        # decisions are not filtered by profile here — UI can filter).
+        "has_override": bool(profile and router._has_profile_override(profile)),
+    }
+
+
 def routing_status(config: Optional[object] = None) -> dict:
     """Return a snapshot for the UI (Providers → Routing tab).
 
-    Includes enabled state, effective policy/min_score, the top recommended
-    model per task (from the capability matrix, restricted to models that are
-    actually selected — i.e. referenced by a profile chain), the active rules,
-    and recent decisions.
+    Includes the GLOBAL enabled state, effective policy/min_score, the top
+    recommended model per task (from the capability matrix, restricted to
+    models that are actually selected — i.e. referenced by a profile chain),
+    the active rules, and recent decisions. Also includes a ``per_profile``
+    map so the UI can show each profile's effective routing state.
     """
     router = get_dynamic_router()
 
@@ -1000,12 +1065,11 @@ def routing_status(config: Optional[object] = None) -> dict:
     except Exception:  # noqa: BLE001
         selected = set()
 
-    policy, min_score = router._effective_policy(config)
-    profiles: list = []
+    profile_names: list = []
     providers: list = []
     try:
         if config is not None:
-            profiles = sorted((config.profiles or {}).keys())
+            profile_names = sorted((config.profiles or {}).keys())
             providers = sorted((config.providers or {}).keys())
     except Exception:  # noqa: BLE001
         pass
@@ -1025,6 +1089,9 @@ def routing_status(config: Optional[object] = None) -> dict:
             per_task[task] = {"model": top[0], "score": round(top[1], 3)}
     except Exception:  # noqa: BLE001
         pass
+
+    policy, min_score = router._effective_policy(config)
+    per_profile = {p: _status_for_profile(router, config, p) for p in profile_names}
     return {
         "enabled": router.is_enabled(config),
         "policy": policy,
@@ -1033,6 +1100,7 @@ def routing_status(config: Optional[object] = None) -> dict:
         "per_task": per_task,
         "recent_decisions": router.recent_decisions(25),
         # For rule-dropdowns in the UI: available profiles and providers.
-        "profiles": profiles,
+        "profiles": profile_names,
         "providers": providers,
+        "per_profile": per_profile,
     }

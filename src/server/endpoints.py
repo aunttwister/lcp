@@ -1718,15 +1718,36 @@ class SettingsEndpoints:
         self._send_json({"ok": True})
 
     def _serve_routing_status_api(self):
-        """GET /api/routing/status — dynamic-routing snapshot for the UI."""
-        from ..api.router import routing_status
+        """GET /api/routing/status — dynamic-routing snapshot for the UI.
+
+        Accepts ``?profile=<name>`` to return just that profile's effective
+        block; without it, returns the global snapshot + a ``per_profile`` map.
+        """
+        from urllib.parse import parse_qs, urlparse
+        from ..api.router import routing_status, _status_for_profile, get_dynamic_router
+
+        qs = parse_qs(urlparse(self.path).query)
+        profile = (qs.get("profile") or [None])[0]
+        if profile:
+            router = get_dynamic_router()
+            block = _status_for_profile(router, self.config, profile)
+            block["per_task"] = routing_status(self.config)["per_task"]
+            block["recent_decisions"] = routing_status(self.config)["recent_decisions"]
+            block["profiles"] = routing_status(self.config)["profiles"]
+            block["providers"] = routing_status(self.config)["providers"]
+            block["profile"] = profile
+            self._send_json(block)
+            return
         self._send_json(routing_status(self.config))
 
     def _serve_routing_policy_api(self):
-        """POST /api/routing/policy {policy?, min_score?} — persist routing policy.
+        """POST /api/routing/policy {policy?, min_score?, enabled?, profile?}
+        — persist routing policy for a scope.
 
+        ``profile`` (optional) scopes the change to that profile's override
+        (``routing_*:<profile>`` keys); without it the global value is set.
         ``policy`` ∈ eager | cost_first | explore; ``min_score`` is a 0–1 floor.
-        Both are stored in the settings table (apply immediately, no restart).
+        Applies immediately, no restart.
         """
         try:
             body = self._read_body()
@@ -1738,33 +1759,44 @@ class SettingsEndpoints:
         if settings is None:
             self._send_json({"error": "settings store not initialized"}, 500)
             return
+        profile = (body.get("profile") or "").strip() or None
+        if "clear_profile" in body and body.get("clear_profile") is True and profile:
+            settings.clear_routing_enabled(profile)
+            settings.clear_routing_policy(profile)
+            settings.clear_routing_min_score(profile)
+            settings.clear_routing_rules(profile)
+            from ..api.router import routing_status
+            self._send_json(routing_status(self.config))
+            return
         if "policy" in body:
             policy = (body.get("policy") or "").strip().lower()
             if policy not in ("eager", "cost_first", "explore"):
                 self._send_json({"error": "policy must be eager | cost_first | explore"}, 400)
                 return
-            settings.set_routing_policy(policy)
+            settings.set_routing_policy(policy, profile=profile)
         if "min_score" in body:
             try:
                 min_score = max(0.0, min(1.0, float(body["min_score"])))
             except (TypeError, ValueError):
                 self._send_json({"error": "min_score must be a number 0–1"}, 400)
                 return
-            settings.set_routing_min_score(min_score)
+            settings.set_routing_min_score(min_score, profile=profile)
         if "enabled" in body:
             enabled = body.get("enabled")
             if not isinstance(enabled, bool):
                 self._send_json({"error": "enabled must be a boolean"}, 400)
                 return
-            settings.set_routing_enabled(enabled)
+            settings.set_routing_enabled(enabled, profile=profile)
         from ..api.router import routing_status
         self._send_json(routing_status(self.config))
 
     def _serve_routing_rules_api(self):
-        """POST /api/routing/rules {rules: [...]} — validate + persist rules.
+        """POST /api/routing/rules {rules: [...], profile?} — validate + persist.
 
         Each rule: {task, profile, action (prefer|block|policy), provider?,
-        model?, min_score?, policy?, enabled?}. Replaces the whole list.
+        model?, min_score?, policy?, enabled?}. ``profile`` (optional) scopes
+        the rules to that profile's override (``routing_rules:<profile>``).
+        Replaces the whole list for that scope.
         """
         try:
             body = self._read_body()
@@ -1801,7 +1833,8 @@ class SettingsEndpoints:
         if settings is None:
             self._send_json({"error": "settings store not initialized"}, 500)
             return
-        settings.set_routing_rules(rules)
+        profile = (body.get("profile") or "").strip() or None
+        settings.set_routing_rules(rules, profile=profile)
         from ..api.router import routing_status
         self._send_json(routing_status(self.config))
 

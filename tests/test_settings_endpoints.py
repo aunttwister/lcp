@@ -254,6 +254,80 @@ class TestSettingsApi:
         h.do_POST()
         assert _status(h) == 400
 
+    # ── Per-profile routing overrides ─────────────────────────────────────
+
+    def test_routing_policy_per_profile(self, engine, mock_config):
+        init_settings(engine)
+        h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,
+                        body=json.dumps({"policy": "explore", "profile": "l2"}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        assert get_settings().get_routing_policy(profile="l2") == "explore"
+        assert get_settings().get_routing_policy() == "eager"  # global untouched
+
+    def test_routing_enabled_per_profile(self, engine, mock_config):
+        init_settings(engine)
+        h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,
+                        body=json.dumps({"enabled": False, "profile": "career"}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        assert get_settings().get_routing_enabled(profile="career") is False
+        assert get_settings().get_routing_enabled() is None  # global untouched
+
+    def test_routing_rules_per_profile(self, engine, mock_config):
+        init_settings(engine)
+        rules = [{"task": "planning", "action": "prefer", "model": "deepseek-v4-pro"}]
+        h = TestHandler(path="/api/routing/rules", method="POST", engine=engine,
+                        body=json.dumps({"rules": rules, "profile": "coder"}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        assert get_settings().get_routing_rules(profile="coder") == rules
+        assert get_settings().get_routing_rules() == []  # global untouched
+
+    def test_routing_status_per_profile(self, engine, mock_config):
+        init_settings(engine)
+        get_settings().set_routing_enabled(True, profile="l2")
+        from src.api.router import init_router
+        init_router(enabled=True)
+        try:
+            h = TestHandler(path="/api/routing/status?profile=l2", engine=engine)
+            h.config = mock_config
+            h.do_GET()
+            body = _json_body(h)
+            assert body["profile"] == "l2"
+            assert body["enabled"] is True
+            assert "rules" in body
+        finally:
+            init_router(enabled=False)
+
+    def test_routing_status_has_per_profile_map(self, engine, mock_config):
+        init_settings(engine)
+        from src.api.router import init_router
+        init_router(enabled=True)
+        try:
+            h = TestHandler(path="/api/routing/status", engine=engine)
+            h.config = mock_config
+            h.do_GET()
+            body = _json_body(h)
+            assert "per_profile" in body
+        finally:
+            init_router(enabled=False)
+
+    def test_routing_clear_profile_override(self, engine, mock_config):
+        init_settings(engine)
+        get_settings().set_routing_enabled(True, profile="l2")
+        get_settings().set_routing_policy("explore", profile="l2")
+        h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,
+                        body=json.dumps({"profile": "l2", "clear_profile": True}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        assert get_settings().get_routing_enabled(profile="l2") is None
+        assert get_settings().get_routing_policy(profile="l2") == "eager"
+
     def test_provider_create_requests_refresh(self, engine, mock_config, monkeypatch):
         init_settings(engine)
         cache = init_cost_cache(engine)

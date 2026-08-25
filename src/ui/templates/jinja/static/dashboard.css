@@ -42,7 +42,31 @@
   padding: 1.25rem 1rem 1rem; font-size: 1.125rem; font-weight: 700;
   letter-spacing: -0.02em; color: hsl(var(--foreground));
   border-bottom: 1px solid hsl(var(--card-border));
+  display: flex; align-items: center; justify-content: space-between;
 }
+/* ── Sidebar cache tools (↻ refresh / clear) ── */
+.sb-cache-wrap { position: relative; }
+.sb-cache-btn {
+  width: 28px; height: 28px; border-radius: var(--radius);
+  background: transparent; border: 1px solid hsl(var(--card-border));
+  color: hsl(var(--muted-foreground)); cursor: pointer; font-size: 0.9rem;
+  line-height: 1; display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.sb-cache-btn:hover { background: hsl(var(--secondary)); color: hsl(var(--foreground)); }
+.sb-cache-menu {
+  position: absolute; top: 32px; right: 0; z-index: 120;
+  min-width: 150px; background: hsl(var(--card));
+  border: 1px solid hsl(var(--card-border)); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35); overflow: hidden;
+}
+.sb-cache-item {
+  display: block; width: 100%; text-align: left; padding: 0.5rem 0.75rem;
+  background: none; border: none; color: hsl(var(--foreground));
+  font-size: 0.75rem; cursor: pointer; font-family: inherit;
+}
+.sb-cache-item:hover { background: hsl(var(--secondary)); }
+.sb-cache-item.sb-cache-danger { color: #f87171; }
 .sidebar-nav { padding: 0.75rem; flex: 1; overflow-x: hidden; }
 .sidebar-nav a {
   display: flex; align-items: center; gap: 0.5rem;

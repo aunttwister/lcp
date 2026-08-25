@@ -701,6 +701,108 @@ def test_routing_status_includes_rules(registry_db, monkeypatch):
     finally:
         init_router(enabled=False)
 
+# ── Per-profile routing (enable/policy/min_score/rules overrides) ─────────
+
+class _PerProfileSettings:
+    """A duck-typed settings store that supports per-profile routing keys."""
+
+    def __init__(self, store):
+        self._store = store
+
+    def get_routing_enabled(self, default=None, profile=None):
+        return self._store.get_routing_enabled(default=default, profile=profile)
+
+    def get_routing_policy(self, default="eager", profile=None):
+        return self._store.get_routing_policy(default=default, profile=profile)
+
+    def get_routing_min_score(self, default=0.0, profile=None):
+        return self._store.get_routing_min_score(default=default, profile=profile)
+
+    def get_routing_rules(self, default=None, profile=None):
+        return self._store.get_routing_rules(default=default, profile=profile)
+
+
+def test_per_profile_enabled_wins_over_global(registry_db, monkeypatch):
+    import tempfile, os
+    from src.api.cost_cache import SettingsStore
+    from src.api.models import get_engine, Base
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    engine = get_engine(path)
+    Base.metadata.create_all(engine)
+    try:
+        store = SettingsStore(engine)
+        store.set_routing_enabled(False)            # global off
+        store.set_routing_enabled(True, profile="l2")  # l2 on
+        monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: store)
+
+        router = CapabilityRouter(enabled=True, db_path=registry_db)
+        assert router.is_enabled(None) is False          # global off
+        assert router.is_enabled(None, "l2") is True     # l2 override on
+        assert router.is_enabled(None, "career") is False  # falls back to global
+    finally:
+        engine.dispose()
+        for ext in ("", "-wal", "-shm"):
+            try:
+                os.unlink(path + ext)
+            except FileNotFoundError:
+                pass
+
+
+def test_per_profile_policy_and_rules(registry_db, monkeypatch):
+    import tempfile, os
+    from src.api.cost_cache import SettingsStore
+    from src.api.models import get_engine, Base
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    engine = get_engine(path)
+    Base.metadata.create_all(engine)
+    try:
+        store = SettingsStore(engine)
+        store.set_routing_policy("cost_first")                     # global
+        store.set_routing_policy("explore", profile="l2")          # l2 override
+        store.set_routing_rules([{"task": "planning", "action": "prefer",
+                                  "model": "deepseek-v4-pro"}], profile="l2")
+        monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: store)
+
+        router = CapabilityRouter(enabled=True, db_path=registry_db)
+        pol, ms = router._effective_policy(None, "l2")
+        assert pol == "explore"
+        pol_g, _ = router._effective_policy(None)
+        assert pol_g == "cost_first"
+        assert len(router._rules(None, "l2")) == 1
+        assert router._rules(None) == []  # global rules untouched
+    finally:
+        engine.dispose()
+        for ext in ("", "-wal", "-shm"):
+            try:
+                os.unlink(path + ext)
+            except FileNotFoundError:
+                pass
+
+
+def test_routing_status_includes_per_profile(registry_db, monkeypatch):
+    from src.api.router import routing_status, init_router, _status_for_profile
+    init_router(registry_db, enabled=True)
+    monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: None)
+    try:
+        class _Cfg:
+            profiles = {"l2": {"chain": [{"provider": "deepseek", "model": "deepseek-v4-pro"}]},
+                        "career": {"chain": [{"provider": "deepseek", "model": "deepseek-v4-flash"}]}}
+            dynamic_routing = {}
+        st = routing_status(_Cfg())
+        assert "per_profile" in st
+        assert set(st["per_profile"].keys()) == {"l2", "career"}
+        assert st["per_profile"]["l2"]["enabled"] is True
+        # _status_for_profile returns the same shape for a direct profile query.
+        router = get_dynamic_router()
+        block = _status_for_profile(router, _Cfg(), "l2")
+        assert block["enabled"] is True
+        assert "rules" in block
+    finally:
+        init_router(enabled=False)
+
+
 def test_routing_status_restricts_to_selected_models(registry_db, monkeypatch):
     """Per-task recommendations only include models referenced by a chain."""
     from src.api.seed_capabilities import seed_livebench

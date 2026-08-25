@@ -1,3 +1,53 @@
+// ── Sidebar cache tools (refresh / clear) ──────────────────────────────
+function toggleSbCacheMenu(ev) {
+  ev.stopPropagation();
+  var menu = document.getElementById('sbCacheMenu');
+  if (!menu) return;
+  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+
+function closeSbCacheMenu() {
+  var menu = document.getElementById('sbCacheMenu');
+  if (menu) menu.style.display = 'none';
+}
+
+document.addEventListener('click', function (ev) {
+  var wrap = document.getElementById('sbCacheWrap');
+  if (wrap && !wrap.contains(ev.target)) closeSbCacheMenu();
+});
+
+function sbCacheFlash(msg) {
+  var btn = document.getElementById('sbCacheBtn');
+  if (!btn) return;
+  btn.textContent = msg;
+  setTimeout(function () { if (btn) btn.textContent = '↻'; }, 1200);
+}
+
+function sbCacheRefresh(ev) {
+  ev.stopPropagation();
+  closeSbCacheMenu();
+  fetch('/api/settings/cache/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      sbCacheFlash(d.ok ? '✓' : '!');
+      if (!d.ok && d.error) alert('Refresh failed: ' + d.error);
+    })
+    .catch(function (e) { sbCacheFlash('!'); });
+}
+
+function sbCacheClear(ev) {
+  ev.stopPropagation();
+  if (!confirm('Clear the cached provider data? The background worker will re-scrape shortly.')) return;
+  closeSbCacheMenu();
+  fetch('/api/settings/cache/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      sbCacheFlash(d.ok ? '✓' : '!');
+      if (!d.ok && d.error) alert('Clear failed: ' + d.error);
+    })
+    .catch(function (e) { sbCacheFlash('!'); });
+}
+
 // Sidebar toggle — shared across all pages.
 function toggleSidebar() {
   var sb = document.getElementById('sidebar');

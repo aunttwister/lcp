@@ -157,54 +157,99 @@ class SettingsStore:
     ROUTING_MIN_SCORE_KEY = "routing_min_score"
     VALID_POLICIES = ("eager", "cost_first", "explore")
 
-    def get_routing_policy(self, default: str = "eager") -> str:
-        raw = self.get(self.ROUTING_POLICY_KEY, default)
+    @staticmethod
+    def _profile_key(base: str, profile: Optional[str]) -> str:
+        """Return the per-profile settings key (or the global base key)."""
+        return f"{base}:{profile}" if profile else base
+
+    def get_routing_policy(self, default: str = "eager",
+                           profile: Optional[str] = None) -> str:
+        """Return the effective routing policy for a scope.
+
+        A per-profile override (``routing_policy:<profile>``) wins when set;
+        otherwise the global value (``routing_policy``). ``profile=None`` reads
+        the global value directly.
+        """
+        raw = self.get(self._profile_key(self.ROUTING_POLICY_KEY, profile), None)
+        if raw is None and profile:
+            raw = self.get(self.ROUTING_POLICY_KEY, None)
+        if raw is None:
+            raw = default
         return raw if raw in self.VALID_POLICIES else default
 
-    def set_routing_policy(self, policy: str) -> None:
+    def set_routing_policy(self, policy: str,
+                           profile: Optional[str] = None) -> None:
         if policy not in self.VALID_POLICIES:
             raise ValueError(f"invalid routing policy {policy!r}; expected {self.VALID_POLICIES}")
-        self.set(self.ROUTING_POLICY_KEY, policy)
+        self.set(self._profile_key(self.ROUTING_POLICY_KEY, profile), policy)
 
-    def get_routing_min_score(self, default: float = 0.0) -> float:
-        raw = self.get(self.ROUTING_MIN_SCORE_KEY, default)
+    def clear_routing_policy(self, profile: Optional[str] = None) -> None:
+        """Remove a routing-policy override (per-profile or global)."""
+        self._clear_key(self._profile_key(self.ROUTING_POLICY_KEY, profile))
+
+    def get_routing_min_score(self, default: float = 0.0,
+                              profile: Optional[str] = None) -> float:
+        """Effective min-score for a scope (per-profile override wins)."""
+        raw = self.get(self._profile_key(self.ROUTING_MIN_SCORE_KEY, profile), None)
+        if raw is None and profile:
+            raw = self.get(self.ROUTING_MIN_SCORE_KEY, None)
+        if raw is None:
+            raw = default
         try:
             return float(raw)
         except (TypeError, ValueError):
             return default
 
-    def set_routing_min_score(self, value: float) -> None:
-        self.set(self.ROUTING_MIN_SCORE_KEY, float(value))
+    def set_routing_min_score(self, value: float,
+                              profile: Optional[str] = None) -> None:
+        self.set(self._profile_key(self.ROUTING_MIN_SCORE_KEY, profile), float(value))
+
+    def clear_routing_min_score(self, profile: Optional[str] = None) -> None:
+        self._clear_key(self._profile_key(self.ROUTING_MIN_SCORE_KEY, profile))
 
     # ── Dynamic-routing enable/disable (runtime toggle) ───────────────────
 
     ROUTING_ENABLED_KEY = "routing_enabled"
 
-    def get_routing_enabled(self, default: Optional[bool] = None) -> Optional[bool]:
+    def get_routing_enabled(self, default: Optional[bool] = None,
+                            profile: Optional[str] = None) -> Optional[bool]:
         """Return the runtime enable override, or *default* when unset.
 
-        ``None`` (unset) means "no override" — the caller falls back to the
-        boot-time config value. Stored as ``"1"``/``"0"``.
+        A per-profile override (``routing_enabled:<profile>``) wins when set;
+        otherwise the global value. ``None`` (unset) means "no override" — the
+        caller falls back to the boot-time config value. Stored as ``"1"``/
+        ``"0"``.
         """
-        raw = self.get(self.ROUTING_ENABLED_KEY, None)
+        raw = self.get(self._profile_key(self.ROUTING_ENABLED_KEY, profile), None)
+        if raw is None and profile:
+            raw = self.get(self.ROUTING_ENABLED_KEY, None)
         if raw is None:
             return default
         return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
-    def set_routing_enabled(self, enabled: bool) -> None:
-        self.set(self.ROUTING_ENABLED_KEY, "1" if enabled else "0")
+    def set_routing_enabled(self, enabled: bool,
+                            profile: Optional[str] = None) -> None:
+        self.set(self._profile_key(self.ROUTING_ENABLED_KEY, profile), "1" if enabled else "0")
+
+    def clear_routing_enabled(self, profile: Optional[str] = None) -> None:
+        self._clear_key(self._profile_key(self.ROUTING_ENABLED_KEY, profile))
 
     # ── Routing rules (UI-defined, JSON list in the settings table) ───────
 
     ROUTING_RULES_KEY = "routing_rules"
 
-    def get_routing_rules(self, default: Optional[list] = None) -> list:
-        """Return the routing-rules list (JSON). Empty list when unset.
+    def get_routing_rules(self, default: Optional[list] = None,
+                          profile: Optional[str] = None) -> list:
+        """Return the effective routing-rules list for a scope.
 
-        Each rule: {task, profile, action, provider?, model?, min_score?,
-        policy?, enabled?}.
+        A per-profile rules list (``routing_rules:<profile>``) replaces the
+        global list when set (the profile owns its routing); otherwise the
+        global list applies. Each rule: {task, profile, action, provider?,
+        model?, min_score?, policy?, enabled?}.
         """
-        raw = self.get(self.ROUTING_RULES_KEY, None)
+        raw = self.get(self._profile_key(self.ROUTING_RULES_KEY, profile), None)
+        if raw is None and profile:
+            raw = self.get(self.ROUTING_RULES_KEY, None)
         if raw is None:
             return list(default) if default else []
         try:
@@ -214,9 +259,26 @@ class SettingsStore:
         except (TypeError, ValueError):
             return list(default) if default else []
 
-    def set_routing_rules(self, rules: list) -> None:
+    def set_routing_rules(self, rules: list,
+                          profile: Optional[str] = None) -> None:
         import json as _json
-        self.set(self.ROUTING_RULES_KEY, _json.dumps(rules or []))
+        self.set(self._profile_key(self.ROUTING_RULES_KEY, profile), _json.dumps(rules or []))
+
+    def clear_routing_rules(self, profile: Optional[str] = None) -> None:
+        self._clear_key(self._profile_key(self.ROUTING_RULES_KEY, profile))
+
+    def _clear_key(self, key: str) -> None:
+        """Delete a settings row if it exists (ignore when absent)."""
+        try:
+            with get_session(self._engine) as session:
+                row = session.query(Setting).filter(Setting.key == key).first()
+                if row is not None:
+                    session.delete(row)
+                    session.commit()
+            with self._lock:
+                self._cache.pop(key, None)
+        except Exception:  # noqa: BLE001 — best-effort clear
+            logger.warning("settings_clear_failed", key=key)
 
     def clear_ttl_minutes(self, provider: str) -> None:
         """Remove a per-provider override so it falls back to the default."""
