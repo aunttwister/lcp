@@ -66,14 +66,22 @@ def _cleanup_singletons():
 
 
 class TestSettingsApi:
-    def test_providers_page_has_cache_tab(self, mock_config):
-        # The settings cache lives in the Providers page's Cache tab.
-        from src.ui.pages import render_providers_page
-        html = render_providers_page(mock_config)
-        assert 'data-tab="cache"' in html
+    def test_usage_page_has_cache_section(self, mock_config):
+        # The settings cache now lives on the Usage page (moved from the
+        # Providers page's Cache tab).
+        from src.ui.pages import render_usage_page
+        html = render_usage_page(mock_config)
         assert "Cost data refresh" in html
         assert 'id="cacheRows"' in html
+        assert 'id="ttlRows"' in html
         assert "/api/settings" in html
+
+    def test_providers_page_no_cache_tab(self, mock_config):
+        # The Cache tab has been removed from the Providers page.
+        from src.ui.pages import render_providers_page
+        html = render_providers_page(mock_config)
+        assert 'data-tab="cache"' not in html
+        assert 'id="cacheRows"' not in html
 
     def test_settings_page_route_removed(self, engine, mock_config):
         # /settings no longer exists; it should 404.

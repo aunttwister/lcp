@@ -221,6 +221,10 @@ class TestPageRenderers:
         assert "name=value" in html
         assert "bare token value" in html
         assert "__Secure-commandcode_prod_.session_token" in html
+        # Cache management (moved from Providers → Cache tab)
+        assert 'id="cacheRows"' in html
+        assert 'id="ttlRows"' in html
+        assert "Cost data refresh" in html
 
     def test_all_four_pages_return_different_content(self, mock_config):
         from src.ui.pages import (
