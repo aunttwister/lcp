@@ -2900,7 +2900,7 @@ class MemoryEndpoints:
                 deleted = backend.forget(memory_id, profile=profile)
                 self._send_json({"deleted": deleted})
         except Exception as exc:  # noqa: BLE001
-            from ..api.memory import MemoryError as MemErr
+            from ..api.memory.base import MemoryError as MemErr
             if isinstance(exc, MemErr):
                 self._send_json({"error": str(exc)}, 400)
             else:

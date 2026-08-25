@@ -133,6 +133,22 @@ class TestMemoryEndpoints:
         assert h.send_response.call_args[0][0] == 501
         assert _json_body(h)["error"]["code"] == "LCP-5010"
 
+    def test_memory_error_returns_400_not_crash(self, handler, monkeypatch):
+        """A MemoryError from the backend (e.g. embedder missing) must return a
+        clean 400, not crash the handler with an ImportError."""
+        from src.api.memory.base import MemoryError as MemErr
+
+        class _RaisingBackend:
+            def count(self, profile):
+                raise MemErr("sentence-transformers is not installed")
+
+        monkeypatch.setattr("src.api.memory.get_memory", lambda: _RaisingBackend())
+        h = TestHandler(path="/l2/memory/count", method="GET", engine=MagicMock())
+        h.config = handler.config
+        h.do_GET()
+        assert h.send_response.call_args[0][0] == 400
+        assert "sentence-transformers" in _json_body(h)["error"]
+
     def test_unknown_action_404(self, handler):
         h = TestHandler(path="/l2/memory/frobnicate", method="POST", body="{}")
         h.config = handler.config
