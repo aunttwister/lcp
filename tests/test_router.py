@@ -98,6 +98,31 @@ def test_classify_user_mentioning_tests_still_unit_tests():
     ]
     assert classify_task(msgs) == "unit_tests"
 
+def test_classify_first_user_msg_beats_tool_result_as_user():
+    """Regression: some clients send tool results as role='user'. The classifier
+    must use the FIRST user message (the original instruction), not the
+    accumulated user text or the latest tool echo."""
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "can we plan the next feature in features folder?"},
+        {"role": "assistant", "content": "Let me look at the current state."},
+        {"role": "user", "content": "[tool result] Ran 12 tests, 3 failed. test_plan.py: FAILED"},
+    ]
+    assert classify_task(msgs) == "planning"
+
+def test_classify_first_user_msg_beats_later_test_echoes():
+    """A multi-turn session where the first user turn was planning and later
+    tool-result user turns mention tests must stay planning."""
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "design the architecture for the new feature"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "[tool] running tests..."},
+        {"role": "assistant", "content": "done"},
+        {"role": "user", "content": "[tool] 10 tests passed"},
+    ]
+    assert classify_task(msgs) == "planning"
+
 def test_classify_agentic_system_prompt_only_still_agentic():
     """With no concrete user task, the agentic system prompt still wins."""
     msgs = [{"role": "system", "content": "You are an AI agent with tools: read_file, write_file"}]

@@ -161,11 +161,18 @@ def classify_task(
     ``planning`` (an agent implementing code often requests a large output
     budget, which is not a planning signal).
     """
-    # Gather USER text (the actual intent) and the FULL conversation text
-    # (user + assistant + tool) for casual detection. Neither includes the
-    # system prompt.
+    # Gather USER text and the FULL conversation text (user + assistant + tool)
+    # for casual detection. Neither includes the system prompt.
+    #
+    # We classify from the FIRST non-empty user message (the original
+    # instruction) — NOT the last and NOT all accumulated user text. Some
+    # clients send tool results as role="user" (e.g. "[tool result] Ran 12
+    # tests"), and multi-turn sessions append many user turns; the first user
+    # message is the most reliable signal of actual intent. Accumulating all
+    # user text lets a "test" in an earlier tool echo hijack the classification.
     user_text = ""
     combined = ""
+    first_user_text = ""
     for msg in messages or []:
         if msg.get("role") == "system":
             continue
@@ -180,6 +187,8 @@ def classify_task(
         combined += chunk
         if msg.get("role") == "user":
             user_text += chunk
+            if chunk.strip() and not first_user_text:
+                first_user_text = chunk
 
     system_text = ""
     if messages and messages[0].get("role") == "system":
@@ -187,23 +196,23 @@ def classify_task(
         if isinstance(content, str):
             system_text = content.lower()
 
-    # 1. USER message content: specific task signals (actual user intent).
-    #    Assistant/tool chatter ("test", "run the suite", …) must NOT override
-    #    what the user actually asked for.
+    # 1. The FIRST user message: specific task signals (actual original intent).
+    #    Assistant/tool chatter AND later user turns ("test" echoes) must NOT
+    #    override what the user originally asked for.
+    intent_text = first_user_text.strip() or user_text
     for task in _SPECIFIC_TASKS:
         for kw in TASK_SIGNALS[task]:
-            if kw in user_text:
+            if kw in intent_text:
                 return task
 
     # 1b. Semantic classification (embedding-based) — runs FIRST for
     #     conversational intent when the embedder is available, so meaning (not
-    #     exact keywords) drives the task type. Classifies the USER message so
-    #     assistant/tool context doesn't bias the intent.
+    #     exact keywords) drives the task type. Classifies the FIRST user turn.
     try:
         from .task_classifier import get_semantic_classifier
         clf = get_semantic_classifier()
-        if clf is not None and user_text.strip():
-            task = clf.classify(user_text.strip())
+        if clf is not None and intent_text.strip():
+            task = clf.classify(intent_text.strip())
             if task is not None:
                 return task
     except Exception:  # noqa: BLE001 — never let classification break routing
