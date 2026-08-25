@@ -21,6 +21,19 @@ def render_dashboard(config, engine, headers, profile_filter=None):
 
     from sqlalchemy import func, case
 
+    # Map a raw stored model ID (e.g. "deepseek/deepseek-v4-pro" or
+    # "deepseek-v4-pro") to its logical gateway name so the graphs group and
+    # label models consistently (same as Models/Benchmarks pages).
+    def _logical(model: str) -> str:
+        if not model:
+            return model or ""
+        try:
+            db_path = str(engine.url.database) if engine is not None else "data/costs.db"
+            from ..api.router import logical_model_name
+            return logical_model_name(model, db_path)
+        except Exception:  # noqa: BLE001 — never break the dashboard on a name
+            return model
+
     try:
         with get_session(engine) as session:
             # ── Summary query ──
@@ -247,11 +260,12 @@ def render_dashboard(config, engine, headers, profile_filter=None):
             pm_data = {"dates": sorted(set(r.date for r in pm_rows)), "models": {}}
             pm_date_to_idx = {d: i for i, d in enumerate(pm_data["dates"])}
             for r in pm_rows:
-                if r.model not in pm_data["models"]:
-                    pm_data["models"][r.model] = {"costs": [0.0] * len(pm_data["dates"]), "lats": [0.0] * len(pm_data["dates"])}
+                logical = _logical(r.model)
+                if logical not in pm_data["models"]:
+                    pm_data["models"][logical] = {"costs": [0.0] * len(pm_data["dates"]), "lats": [0.0] * len(pm_data["dates"])}
                 idx = pm_date_to_idx[r.date]
-                pm_data["models"][r.model]["costs"][idx] = float(r.cost)
-                pm_data["models"][r.model]["lats"][idx] = float(r.avg_lat)
+                pm_data["models"][logical]["costs"][idx] = float(r.cost)
+                pm_data["models"][logical]["lats"][idx] = float(r.avg_lat)
     except Exception:
         logger.error("dashboard_query_failed", exc_info=True)
         summary = type("S", (), {"total_cost": 0, "total_requests": 0, "cache_hits": 0, "cache_misses": 0, "prompt_tokens": 0, "output_tokens": 0})()
@@ -342,7 +356,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         daily_rows_data.append({
             "date": r.date,
             "profile": r.profile,
-            "model": r.model,
+            "model": _logical(r.model),
             "provider": r.provider,
             "reqs": r.reqs,
             "fb_count": r.fb_count,
@@ -371,7 +385,7 @@ def render_dashboard(config, engine, headers, profile_filter=None):
         recent_rows_data.append({
             "time": time_str,
             "profile": r.profile,
-            "model": r.model,
+            "model": _logical(r.model),
             "provider": r.provider,
             "badges": status_badges,
             "latency_s": r.latency_ms / 1000,
