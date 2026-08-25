@@ -1,13 +1,19 @@
-"""Tests for scripts/migrate_gateway_yaml_to_db.py — legacy YAML → DB config."""
+"""Tests for scripts/migrate_gateway_yaml_to_db.py — legacy YAML → DB config.
 
-import textwrap
+The script is self-contained (stdlib + yaml, no app imports), so these tests
+exercise it directly against a temp SQLite DB.
+"""
+
+import json
+import sqlite3
 
 import pytest
 import yaml
 
-from src.api.cost_cache import SettingsStore
-from src.api.exceptions import ConfigError
-from src.api.models import Base, get_engine
+from scripts.migrate_gateway_yaml_to_db import (
+    ConfigError,
+    migrate_gateway_yaml,
+)
 
 
 def _write_yaml(tmp_path, data) -> str:
@@ -17,11 +23,20 @@ def _write_yaml(tmp_path, data) -> str:
     return str(path)
 
 
-def _db_store(tmp_path) -> SettingsStore:
-    db_path = str(tmp_path / "test.db")
-    e = get_engine(db_path)
-    Base.metadata.create_all(e)
-    return SettingsStore(e), db_path
+def _db_path(tmp_path) -> str:
+    return str(tmp_path / "test.db")
+
+
+def _read_section(db_path, section):
+    con = sqlite3.connect(db_path)
+    try:
+        row = con.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (f"gateway_config:{section}",),
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+    finally:
+        con.close()
 
 
 def _sample_yaml() -> dict:
@@ -54,15 +69,11 @@ def _sample_yaml() -> dict:
     }
 
 
-from scripts.migrate_gateway_yaml_to_db import migrate_gateway_yaml  # noqa: E402
-
-
 class TestMigrate:
     def test_writes_present_sections_by_default(self, tmp_path):
-        store, db_path = _db_store(tmp_path)
+        db_path = _db_path(tmp_path)
         yaml_path = _write_yaml(tmp_path, _sample_yaml())
         summary = migrate_gateway_yaml(yaml_path, db_path, overwrite=True)
-        # Present sections are written.
         assert summary["server"] == "written"
         assert summary["profiles"] == "written"
         assert summary["providers"] == "written"
@@ -70,46 +81,69 @@ class TestMigrate:
         assert summary["circuit_breaker"] == "written"
         assert summary["database"] == "written"
         assert summary["dynamic_routing"] == "written"
-        # Absent sections are skipped.
         assert summary["retry"] == "absent"
         assert summary["model_limits"] == "absent"
         assert summary["plugins"] == "absent"
-        # DB now holds the YAML values.
-        assert store.get_config_section("profiles") == _sample_yaml()["profiles"]
-        assert store.get_config_section("pricing") == _sample_yaml()["pricing"]
-        assert store.get_config_section("dynamic_routing") == {"enabled": True, "cost_bias": 0.4}
+        assert _read_section(db_path, "profiles") == _sample_yaml()["profiles"]
+        assert _read_section(db_path, "pricing") == _sample_yaml()["pricing"]
+        assert _read_section(db_path, "dynamic_routing") == {"enabled": True, "cost_bias": 0.4}
 
     def test_if_absent_skips_existing(self, tmp_path):
-        store, db_path = _db_store(tmp_path)
-        store.set_config_section("profiles", {"custom": {"chain": []}})
+        db_path = _db_path(tmp_path)
+        # Pre-seed a profiles section directly.
+        con = sqlite3.connect(db_path)
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "key TEXT UNIQUE NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        )
+        con.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
+            ("gateway_config:profiles", json.dumps({"custom": {"chain": []}}), "now"),
+        )
+        con.commit()
+        con.close()
         yaml_path = _write_yaml(tmp_path, _sample_yaml())
         summary = migrate_gateway_yaml(yaml_path, db_path, overwrite=False)
         assert summary["profiles"] == "skipped_exists"
-        # DB value preserved.
-        assert store.get_config_section("profiles") == {"custom": {"chain": []}}
-        # Not-yet-present sections are still written.
+        assert _read_section(db_path, "profiles") == {"custom": {"chain": []}}
         assert summary["providers"] == "written"
         assert summary["pricing"] == "written"
 
     def test_overwrite_replaces_existing(self, tmp_path):
-        store, db_path = _db_store(tmp_path)
-        store.set_config_section("dynamic_routing", {"enabled": False, "cost_bias": 0.1})
+        db_path = _db_path(tmp_path)
+        con = sqlite3.connect(db_path)
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "key TEXT UNIQUE NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        )
+        con.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
+            ("gateway_config:dynamic_routing",
+             json.dumps({"enabled": False, "cost_bias": 0.1}), "now"),
+        )
+        con.commit()
+        con.close()
         yaml_path = _write_yaml(tmp_path, _sample_yaml())
         summary = migrate_gateway_yaml(yaml_path, db_path, overwrite=True)
         assert summary["dynamic_routing"] == "written"
-        # Verify via a fresh store (the original store's in-memory cache is stale).
-        fresh, _ = _db_store(tmp_path)
-        assert fresh.get_config_section("dynamic_routing") == {"enabled": True, "cost_bias": 0.4}
+        assert _read_section(db_path, "dynamic_routing") == {"enabled": True, "cost_bias": 0.4}
 
     def test_dry_run_writes_nothing(self, tmp_path):
-        store, db_path = _db_store(tmp_path)
+        db_path = _db_path(tmp_path)
         yaml_path = _write_yaml(tmp_path, _sample_yaml())
         summary = migrate_gateway_yaml(yaml_path, db_path, overwrite=True, dry_run=True)
         assert summary["profiles"] == "would_write"
-        assert store.config_sections() == []  # nothing written
+        con = sqlite3.connect(db_path)
+        try:
+            count = con.execute(
+                "SELECT COUNT(*) FROM settings WHERE key LIKE 'gateway_config:%'"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        assert count == 0  # nothing written
 
     def test_missing_required_section_raises(self, tmp_path):
-        store, db_path = _db_store(tmp_path)
+        db_path = _db_path(tmp_path)
         data = _sample_yaml()
         del data["profiles"]
         yaml_path = _write_yaml(tmp_path, data)
@@ -117,6 +151,6 @@ class TestMigrate:
             migrate_gateway_yaml(yaml_path, db_path)
 
     def test_missing_file_raises(self, tmp_path):
-        store, db_path = _db_store(tmp_path)
+        db_path = _db_path(tmp_path)
         with pytest.raises(ConfigError, match="not found"):
             migrate_gateway_yaml(str(tmp_path / "nope.yaml"), db_path)

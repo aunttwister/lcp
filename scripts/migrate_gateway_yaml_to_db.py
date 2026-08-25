@@ -5,19 +5,29 @@ The gateway config is now DB-backed (``gateway_config:<section>`` JSON blobs in
 the ``settings`` table, seeded from ``src/api/config.py`` ``SEED_CONFIG``).
 This script reads an existing legacy YAML and writes its sections into the
 target DB, so a production deployment's custom config (profiles, providers,
-pricing, …) is preserved when the YAML is obsoleted.
+pricing, ...) is preserved when the YAML is obsoleted.
 
-Usage:
-    python scripts/migrate_gateway_yaml_to_db.py [--yaml PATH] [--db PATH]
-        [--overwrite] [--if-absent] [--dry-run]
+This script is SELF-CONTAINED: it uses only the Python standard library plus
+``yaml`` (no app imports), so it runs with a plain ``python3`` — no venv, no
+``src`` package on the path. Run it on the host that has the SQLite file, or
+inside the LCP container:
 
     # local dev (YAML at ./config/gateway.yaml, DB at data/costs.db)
-    python scripts/migrate_gateway_yaml_to_db.py --dry-run
+    python3 scripts/migrate_gateway_yaml_to_db.py --dry-run
+    python3 scripts/migrate_gateway_yaml_to_db.py
 
-    # production (inside the LCP container)
+    # production (inside the LCP container, from the repo mount)
+    docker exec lcp python3 /app/scripts/migrate_gateway_yaml_to_db.py --dry-run
+    docker exec lcp python3 /app/scripts/migrate_gateway_yaml_to_db.py
+
+    # ...or copy it in and run from /tmp
     docker cp scripts/migrate_gateway_yaml_to_db.py lcp:/tmp/migrate.py
-    docker exec lcp python3 /tmp/migrate.py --overwrite --dry-run
-    docker exec lcp python3 /tmp/migrate.py --overwrite
+    docker exec lcp python3 /tmp/migrate.py --dry-run
+    docker exec lcp python3 /tmp/migrate.py
+
+Usage:
+    python3 scripts/migrate_gateway_yaml_to_db.py [--yaml PATH] [--db PATH]
+        [--overwrite] [--if-absent] [--dry-run]
 
 YAML path:  ``--yaml``, else ``./config/gateway.yaml``, else
             ``/app/config/gateway.yaml``.
@@ -33,17 +43,29 @@ to only write sections the DB doesn't already have (non-destructive merge).
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import sqlite3
 import sys
 from typing import Any, Optional
 
-# Allow running as a plain script from anywhere in the repo.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import yaml
 
-import yaml  # noqa: E402
 
-from src.api.config import ALL_SECTIONS, REQUIRED_SECTIONS, SEED_CONFIG, _validate  # noqa: E402
-from src.api.exceptions import ConfigError  # noqa: E402
+# ── Section inventory (mirrors src/api/config.py) ──────────────────────────
+# Sections stored in the DB. ``plugins`` is optional; the rest are required.
+REQUIRED_SECTIONS = ("server", "profiles", "providers", "pricing",
+                     "circuit_breaker", "database")
+ALL_SECTIONS = ("server", "profiles", "providers", "pricing",
+                "circuit_breaker", "retry", "database",
+                "dynamic_routing", "model_limits", "plugins")
+
+# Seed default DB path (mirrors src/api/config.py SEED_CONFIG database.path).
+SEED_DB_PATH = "/app/data/costs.db"
+
+
+class ConfigError(Exception):
+    """Raised for invalid YAML / missing sections."""
 
 
 def resolve_yaml_path(explicit: Optional[str]) -> str:
@@ -65,7 +87,32 @@ def resolve_db_path(explicit: Optional[str]) -> str:
         return env
     if os.path.isfile("data/costs.db"):
         return "data/costs.db"
-    return SEED_CONFIG["database"]["path"]
+    return SEED_DB_PATH
+
+
+def _validate(section: str, data: Any) -> None:
+    """Validate a loaded section; raise ConfigError on structural problems."""
+    if section == "server":
+        if not isinstance(data, dict) or "port" not in data:
+            raise ConfigError("Missing 'server.port'")
+        if "default_profile" not in data:
+            raise ConfigError("Missing 'server.default_profile'")
+    elif section == "profiles":
+        if not isinstance(data, dict):
+            raise ConfigError("'profiles' must be a dict")
+        for name, prof in data.items():
+            if not isinstance(prof, dict) or "chain" not in prof:
+                raise ConfigError(f"Profile '{name}' missing 'chain'")
+            if not prof["chain"]:
+                raise ConfigError(f"Profile '{name}' has empty 'chain'")
+    elif section == "pricing":
+        if not isinstance(data, list):
+            raise ConfigError("'pricing' must be a list")
+    elif section in ("providers", "circuit_breaker", "database"):
+        if not isinstance(data, dict):
+            raise ConfigError(f"'{section}' must be a dict")
+    # dynamic_routing / retry / model_limits / plugins are optional; handled by
+    # the accessors.
 
 
 def load_yaml(path: str) -> dict:
@@ -89,6 +136,35 @@ def load_yaml(path: str) -> dict:
     return raw
 
 
+def _read_section(conn: sqlite3.Connection, section: str) -> Optional[Any]:
+    """Return a stored gateway_config section (parsed), or None if absent."""
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = ?",
+        (f"gateway_config:{section}",),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _write_section(conn: sqlite3.Connection, section: str, value: Any) -> None:
+    """Upsert a gateway_config section (JSON blob) into the settings table."""
+    conn.execute(
+        "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+        "updated_at = excluded.updated_at",
+        (f"gateway_config:{section}", json.dumps(value), _now()),
+    )
+
+
+def _now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 def migrate_gateway_yaml(
     yaml_path: str,
     db_path: str,
@@ -101,29 +177,35 @@ def migrate_gateway_yaml(
     ``written``, ``would_write`` (dry-run), ``skipped_exists`` (--if-absent),
     or ``absent`` (not present in the YAML).
     """
-    from src.api.cost_cache import SettingsStore
-    from src.api.models import Base, get_engine
-
     raw = load_yaml(yaml_path)
-    engine = get_engine(db_path)
-    Base.metadata.create_all(engine)
-    store = SettingsStore(engine)
-
-    summary: dict[str, str] = {}
-    for section in ALL_SECTIONS:
-        if section not in raw or raw[section] is None:
-            summary[section] = "absent"
-            continue
-        value = raw[section]
-        existing = store.get_config_section(section, None)
-        if existing is not None and not overwrite:
-            summary[section] = "skipped_exists"
-            continue
-        if dry_run:
-            summary[section] = "would_write"
-            continue
-        store.set_config_section(section, value)
-        summary[section] = "written"
+    conn = sqlite3.connect(db_path)
+    try:
+        # Ensure the settings table exists (same schema as src/api/models.py).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "key TEXT UNIQUE NOT NULL, "
+            "value TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL)"
+        )
+        summary: dict[str, str] = {}
+        for section in ALL_SECTIONS:
+            if section not in raw or raw[section] is None:
+                summary[section] = "absent"
+                continue
+            value = raw[section]
+            existing = _read_section(conn, section)
+            if existing is not None and not overwrite:
+                summary[section] = "skipped_exists"
+                continue
+            if dry_run:
+                summary[section] = "would_write"
+                continue
+            _write_section(conn, section, value)
+            summary[section] = "written"
+        conn.commit()
+    finally:
+        conn.close()
     return summary
 
 
