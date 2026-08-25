@@ -75,53 +75,55 @@
 
 <div id="providerPanels"></div>
 
-<!-- ═══ CACHE (moved from Providers → Cache tab) ═══ -->
-<div style="margin-top:2rem;max-width:760px;background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem;margin-bottom:1rem">
-  <h3 style="font-size:0.9rem;margin-bottom:0.25rem">Cost data refresh</h3>
-  <p style="font-size:0.75rem;color:hsl(var(--muted-foreground));margin-bottom:1rem">
-    Live provider usage and credits (subscriptions, balances) are scraped by a background worker
-    and cached in the database. The dashboard and usage pages always read the cache, so page loads
-    never trigger a scrape. New providers are picked up automatically — an entry appears here on the
-    next refresh cycle whenever a provider exposes usage/balance/credits data.
-  </p>
-  <div style="display:flex;align-items:flex-end;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem">
-    <div>
-      <label class="form-label" for="defaultTtlMinutes" style="display:block;margin-bottom:0.25rem">Default refresh (minutes)</label>
-      <input class="form-input" type="number" id="defaultTtlMinutes" min="1" step="1" style="width:120px;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+<!-- ═══ CACHE CONFIG (a sub-tab of the Usage page) ═══ -->
+<div class="tab-panel" id="panel-cache">
+  <div style="max-width:760px;background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem;margin-bottom:1rem">
+    <h3 style="font-size:0.9rem;margin-bottom:0.25rem">Cost data refresh</h3>
+    <p style="font-size:0.75rem;color:hsl(var(--muted-foreground));margin-bottom:1rem">
+      Live provider usage and credits (subscriptions, balances) are scraped by a background worker
+      and cached in the database. The dashboard and usage pages always read the cache, so page loads
+      never trigger a scrape. New providers are picked up automatically — an entry appears here on the
+      next refresh cycle whenever a provider exposes usage/balance/credits data.
+    </p>
+    <div style="display:flex;align-items:flex-end;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem">
+      <div>
+        <label class="form-label" for="defaultTtlMinutes" style="display:block;margin-bottom:0.25rem">Default refresh (minutes)</label>
+        <input class="form-input" type="number" id="defaultTtlMinutes" min="1" step="1" style="width:120px;padding:0.375rem 0.5rem;background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:var(--radius);color:hsl(var(--foreground));font-size:0.75rem">
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="saveTtl()">Save default</button>
     </div>
-    <button class="btn btn-primary btn-sm" onclick="saveTtl()">Save default</button>
+
+    <div class="ttl-collapse" id="ttlCollapse">
+      <div class="ttl-collapse-head" onclick="toggleTtlSection()" role="button" tabindex="0" aria-expanded="true">
+        <span style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground))">Per-provider refresh</span>
+        <span class="ttl-collapse-chev" style="font-size:0.625rem;color:hsl(var(--muted-foreground))">▾</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:0.375rem" id="ttlRows">
+        <div class="form-help">Loading…</div>
+      </div>
+    </div>
+
+    <div class="form-error" id="settingsError"></div>
+    <div class="form-help" id="settingsStatus"></div>
   </div>
 
-  <div class="ttl-collapse" id="ttlCollapse">
-    <div class="ttl-collapse-head" onclick="toggleTtlSection()" role="button" tabindex="0" aria-expanded="true">
-      <span style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground))">Per-provider refresh</span>
-      <span class="ttl-collapse-chev" style="font-size:0.625rem;color:hsl(var(--muted-foreground))">▾</span>
+  <div style="max-width:760px;background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+      <h3 style="font-size:0.9rem;margin:0">Cache</h3>
+      <div style="display:flex;gap:0.5rem">
+        <button class="btn btn-outline btn-sm" id="refreshNowBtn" onclick="refreshNow()">Refresh now</button>
+        <button class="btn btn-outline btn-sm" onclick="clearCache()">Clear cache</button>
+      </div>
     </div>
-    <div style="display:flex;flex-direction:column;gap:0.375rem" id="ttlRows">
-      <div class="form-help">Loading…</div>
+    <div class="table-wrap">
+      <table class="capability-table"><thead><tr>
+        <th>Provider</th><th>Kind</th><th>Fetched</th><th>Age</th><th>Status</th>
+      </tr></thead><tbody id="cacheRows">
+        <tr><td colspan="5" class="empty">Loading…</td></tr>
+      </tbody></table>
     </div>
+    <div class="form-help" id="cacheStatus"></div>
   </div>
-
-  <div class="form-error" id="settingsError"></div>
-  <div class="form-help" id="settingsStatus"></div>
-</div>
-
-<div style="margin-top:1rem;background:hsl(var(--card));border:1px solid hsl(var(--card-border));border-radius:var(--radius);padding:1rem">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
-    <h3 style="font-size:0.9rem;margin:0">Cache</h3>
-    <div style="display:flex;gap:0.5rem">
-      <button class="btn btn-outline btn-sm" id="refreshNowBtn" onclick="refreshNow()">Refresh now</button>
-      <button class="btn btn-outline btn-sm" onclick="clearCache()">Clear cache</button>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table class="capability-table"><thead><tr>
-      <th>Provider</th><th>Kind</th><th>Fetched</th><th>Age</th><th>Status</th>
-    </tr></thead><tbody id="cacheRows">
-      <tr><td colspan="5" class="empty">Loading…</td></tr>
-    </tbody></table>
-  </div>
-  <div class="form-help" id="cacheStatus"></div>
 </div>
 
 <p style="margin-top:2rem;font-size:0.75rem;color:hsl(var(--muted-foreground))">
@@ -673,6 +675,11 @@ function buildPage(providers) {
         var tabsHtml = '';
         var panelsHtml = '';
 
+        // Cache configuration is a fixed first sub-tab, distinct from the
+        // per-provider usage tabs.
+        tabsHtml += '<button class="tab-btn" id="tabBtn-cache" onclick="switchTab(\'cache\')">Cache config</button>';
+        panelsHtml += '';
+
         providers.forEach(function(prov, i) {
             var activeClass = i === 0 ? ' active' : '';
             tabsHtml += '<button class="tab-btn' + activeClass + '" onclick="switchTab(\'' + prov + '\')">' + prov + '</button>';
@@ -871,6 +878,9 @@ window.switchTab = function(prov) {
     if (btn) btn.classList.add('active');
     if (panel) panel.classList.add('active');
 
+    // Cache config tab has no chart state — nothing further to restore.
+    if (prov === 'cache') return;
+
     // Restore this tab's saved chart title from state
     var st = window._tabState[prov];
     var titleEl = document.getElementById('chartTitle-' + prov);
@@ -940,10 +950,11 @@ window.applyDateRange = function(btnEl, provider, range) {
         });
 };
 
-// Deep-link support: /usage#<provider> opens that provider's tab.
+// Deep-link support: /usage#<provider> opens that provider's tab, and
+// /usage#cache opens the cache configuration sub-tab.
 function applyHashProvider() {
     var hashProv = (window.location.hash || '').replace(/^#/, '');
-    if (hashProv && configuredProviders.indexOf(hashProv) !== -1) {
+    if (hashProv === 'cache' || (hashProv && configuredProviders.indexOf(hashProv) !== -1)) {
         switchTab(hashProv);
     }
 }
