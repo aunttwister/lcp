@@ -202,13 +202,23 @@ picker with their full context windows and capabilities.**
 
 ## Configuration
 
-Your local configuration lives in `config/gateway.yaml` — it is **not** tracked by git, so it
-never causes merge conflicts on pull. The tracked template is `config/gateway.example.yaml`; on a
-fresh machine copy it over (`cp config/gateway.example.yaml config/gateway.yaml`). Set
-`LCP_CONFIG` to point at a different path if you prefer. The config is hot-reloaded — edit while
-the server is running, no restart needed.
+Configuration is **DB-backed** (stored in the SQLite `settings` table as JSON
+blobs under `gateway_config:<section>`). There is no `gateway.yaml` and no
+hot-reload: on first boot the gateway seeds the DB from a built-in Python
+default (`src/api/config.py` → `SEED_CONFIG`), and all edits via the UI
+(Providers, Profiles, Routing, Cache) are written straight to the DB and
+persist across restarts.
+
+The only env vars needed to bootstrap are the DB path and listen port
+(`COST_DB`, `LISTEN_PORT`) — everything else is configurable at runtime.
+
+The shape of each section (for reference, matching `SEED_CONFIG` and the
+tracked `config/gateway.example.yaml`):
 
 ```yaml
+server:
+  port: 8734
+  default_profile: l2
 profiles:
   l2:
     forbidden_tools: [write_file, patch, cronjob]
@@ -217,13 +227,11 @@ profiles:
         model: deepseek-v4-pro
       - provider: deepseek                       # fallback
         model: deepseek-v4-pro
-
   cron:
     forbidden_tools: null                        # null = strip ALL tools
     chain:
       - provider: deepseek
         model: deepseek-v4-flash
-
 providers:
   deepseek:
     # API key is entered via the dashboard (Providers → Configuration tab),
@@ -232,7 +240,6 @@ providers:
       strategy: prefix
       savings: cost
       hit_field: prompt_cache_hit_tokens
-
 pricing:
   - provider: deepseek
     model: deepseek-v4-pro

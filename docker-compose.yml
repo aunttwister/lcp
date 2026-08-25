@@ -8,7 +8,6 @@ services:
     volumes:
       - /your/data/app/lcp/data:/app/data
       - /your/data/app/lcp/modules:/opt/lcp-modules
-      - ./config/gateway.yaml:/app/config/gateway.yaml
     env_file:
       - .env
     environment:

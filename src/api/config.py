@@ -1,10 +1,16 @@
-"""YAML configuration loader with validation and hot-reload."""
+"""DB-backed gateway configuration.
+
+The whole gateway config lives in the ``settings`` table as JSON blobs under
+``gateway_config:<section>`` (server, profiles, providers, pricing,
+circuit_breaker, retry, database, dynamic_routing, model_limits, plugins).
+``gateway.yaml`` and the YAML hot-reload are obsolete: a Python ``SEED_CONFIG``
+dict seeds a fresh DB on first boot, and edits via the UI (which mutate
+``config.raw`` then call ``config.save()``) are written straight to the DB, so
+they persist across restarts.
+"""
 
 import os
-from pathlib import Path
-from typing import Any
-
-import yaml
+from typing import Any, Optional
 
 from .exceptions import ConfigError
 from .logging_config import get_logger
@@ -12,88 +18,238 @@ from .logging_config import get_logger
 logger = get_logger("lcp.config")
 
 
-class Config:
-    """Loads and validates gateway.yaml. Supports hot-reload via file mtime tracking."""
+# ─────────────────────────────────────────────────────────────────────────────
+# Default seed — used ONLY to initialise a fresh DB (first boot) or when a
+# section is missing. Once a section row exists in the DB it is the source of
+# truth; edits to this dict do not affect a running gateway.
+# ─────────────────────────────────────────────────────────────────────────────
+SEED_CONFIG: dict[str, Any] = {
+    "server": {
+        "port": 8734,
+        "default_profile": "l2",
+    },
+    "dynamic_routing": {
+        "enabled": False,
+        "cost_bias": 0.15,
+    },
+    "profiles": {
+        "l2": {
+            "forbidden_tools": ["write_file", "patch", "cronjob"],
+            "chain": [
+                {"provider": "opencode", "model": "deepseek-v4-pro",
+                 "base_url": "https://opencode.ai/zen/go/v1"},
+                {"provider": "deepseek", "model": "deepseek-v4-pro",
+                 "base_url": "https://api.deepseek.com/v1"},
+            ],
+            "auth_required": False,
+        },
+        "l1": {
+            "forbidden_tools": ["write_file", "patch", "terminal", "execute_code",
+                                "cronjob", "process", "delegate_task", "memory",
+                                "send_message", "vision_analyze"],
+            "chain": [
+                {"provider": "opencode", "model": "deepseek-v4-flash",
+                 "base_url": "https://opencode.ai/zen/go/v1"},
+                {"provider": "deepseek", "model": "deepseek-v4-flash",
+                 "base_url": "https://api.deepseek.com/v1"},
+            ],
+            "auth_required": False,
+        },
+        "career": {
+            "forbidden_tools": ["write_file", "patch", "terminal", "execute_code",
+                                "cronjob", "process", "delegate_task", "memory",
+                                "vision_analyze", "read_file", "search_files",
+                                "skill_manage", "todo"],
+            "chain": [
+                {"provider": "deepseek", "model": "deepseek-v4-flash",
+                 "base_url": "https://api.deepseek.com/v1"},
+            ],
+            "auth_required": False,
+        },
+        "cron": {
+            "chain": [
+                {"provider": "deepseek", "model": "deepseek-v4-flash",
+                 "base_url": "https://api.deepseek.com/v1"},
+            ],
+            "forbidden_tools": None,
+            "auth_required": False,
+        },
+        "coder": {
+            "chain": [
+                {"provider": "opencode", "model": "deepseek-v4-pro",
+                 "base_url": "https://opencode.ai/zen/go/v1"},
+                {"provider": "deepseek", "model": "deepseek-v4-flash",
+                 "base_url": "https://api.deepseek.com/v1"},
+            ],
+            "forbidden_tools": [],
+            "auth_required": True,
+        },
+    },
+    "providers": {
+        "opencode": {
+            "api_key_env": "OPENCODE_API_KEY",
+            "api_base": "https://opencode.ai/zen/go/v1",
+            "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
+        },
+        "deepseek": {
+            "api_key_env": "DEEPSEEK_API_KEY",
+            "api_base": "https://api.deepseek.com/v1",
+            "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
+            "cache": {
+                "strategy": "prefix",
+                "savings": "cost",
+                "hit_field": "prompt_cache_hit_tokens",
+            },
+        },
+        "commandcode": {
+            "api_base": "https://api.commandcode.ai/provider/v1",
+            "models": ["deepseek-v4-pro", "deepseek-v4-flash", "claude-sonnet-5",
+                       "gpt-5.6-luna", "kimi-k3", "minimax-m3", "qwen3.8-max"],
+        },
+    },
+    "pricing": [
+        {"provider": "deepseek", "model": "deepseek-v4-pro",
+         "cache_hit": 0.003625, "cache_miss": 0.435, "output": 0.87},
+        {"provider": "deepseek", "model": "deepseek-v4-flash",
+         "cache_hit": 0.0028, "cache_miss": 0.14, "output": 0.28},
+        {"provider": "opencode", "model": "deepseek-v4-pro",
+         "cache_hit": 0.003625, "cache_miss": 0.435, "output": 0.87},
+        {"provider": "opencode", "model": "deepseek-v4-flash",
+         "cache_hit": 0.0028, "cache_miss": 0.14, "output": 0.28},
+    ],
+    "circuit_breaker": {
+        "failures_degraded": 3,
+        "failures_dead": 6,
+        "degraded_cooldown_seconds": 30,
+        "dead_cooldown_seconds": 120,
+    },
+    "retry": {
+        "max_attempts": 3,
+        "backoff_base": 0.5,
+        "backoff_multiplier": 2,
+        "max_backoff": 10,
+        "jitter": True,
+    },
+    "model_limits": {
+        "deepseek-v4-pro": {
+            "context_window": 1000000,
+            "max_output_tokens": 384000,
+            "supports_vision": False,
+            "supports_thinking": True,
+            "description": "DeepSeek V4 Pro — flagship MoE for coding, reasoning, and agentic work",
+        },
+        "deepseek-v4-flash": {
+            "context_window": 1000000,
+            "max_output_tokens": 384000,
+            "supports_vision": False,
+            "supports_thinking": True,
+            "description": "DeepSeek V4 Flash — fast lane for economical reasoning and long-context work",
+        },
+    },
+    "database": {
+        "path": "/app/data/costs.db",
+        "wal_mode": True,
+    },
+}
 
-    def __init__(self, path: str = "/app/config/gateway.yaml"):
-        self._path = Path(path)
-        self._data: dict[str, Any] = {}
-        self._mtime: float = 0
-        self._reload()
+# Sections stored in the DB. ``plugins`` is optional (memory module tolerates
+# its absence), the rest are required for a valid config.
+REQUIRED_SECTIONS = ("server", "profiles", "providers", "pricing",
+                     "circuit_breaker", "database")
+ALL_SECTIONS = ("server", "profiles", "providers", "pricing",
+                "circuit_breaker", "retry", "database",
+                "dynamic_routing", "model_limits", "plugins")
 
-    def _reload(self) -> None:
-        """Load and validate the config file."""
-        if not self._path.exists():
-            raise ConfigError(f"Config file not found: {self._path}")
 
-        with open(self._path) as f:
-            raw = yaml.safe_load(f)
+def _env_db_path() -> str:
+    """Resolve the DB path from env (COST_DB) or the seed default."""
+    return os.environ.get("COST_DB", SEED_CONFIG["database"]["path"])
 
-        if raw is None:
-            raise ConfigError(f"Empty config file: {self._path}")
 
-        self._validate(raw)
-        self._data = raw
-        self._mtime = self._path.stat().st_mtime
-        logger.info("config_loaded", path=str(self._path))
+def _env_port() -> int:
+    """Resolve the listen port from env (LISTEN_PORT) or the seed default."""
+    return int(os.environ.get("LISTEN_PORT", str(SEED_CONFIG["server"]["port"])))
 
-    def _validate(self, raw: dict) -> None:
-        """Validate required sections exist."""
-        required = ["server", "profiles", "providers", "pricing", "circuit_breaker", "database"]
-        for key in required:
-            if key not in raw:
-                raise ConfigError(f"Missing required config section: '{key}'")
 
-        if "port" not in raw["server"]:
+def _validate(section: str, data: Any) -> None:
+    """Validate a loaded section; raise ConfigError on structural problems."""
+    if section == "server":
+        if not isinstance(data, dict) or "port" not in data:
             raise ConfigError("Missing 'server.port'")
-        if "default_profile" not in raw["server"]:
+        if "default_profile" not in data:
             raise ConfigError("Missing 'server.default_profile'")
-        if raw["server"]["default_profile"] not in raw["profiles"]:
-            raise ConfigError(
-                f"Default profile '{raw['server']['default_profile']}' not found in profiles"
-            )
-
-        for name, prof in raw["profiles"].items():
-            if "chain" not in prof:
+    elif section == "profiles":
+        if not isinstance(data, dict):
+            raise ConfigError("'profiles' must be a dict")
+        for name, prof in data.items():
+            if not isinstance(prof, dict) or "chain" not in prof:
                 raise ConfigError(f"Profile '{name}' missing 'chain'")
             if not prof["chain"]:
                 raise ConfigError(f"Profile '{name}' has empty 'chain'")
+    elif section == "pricing":
+        if not isinstance(data, list):
+            raise ConfigError("'pricing' must be a list")
+    elif section in ("providers", "circuit_breaker", "database"):
+        if not isinstance(data, dict):
+            raise ConfigError(f"'{section}' must be a dict")
+    # dynamic_routing / retry / model_limits / plugins are optional; handled by
+    # the accessors.
 
-    def check_reload(self) -> bool:
-        """Check if config file changed on disk. Returns True if reloaded."""
+
+class Config:
+    """DB-backed gateway configuration.
+
+    Hydrated from the ``settings`` table (``gateway_config:<section>`` rows)
+    at init, seeding any missing section from ``SEED_CONFIG``. ``raw`` returns
+    the live in-memory dict (mutated by the CRUD endpoints); ``save()`` writes
+    every section back to the DB. There is no YAML file and no hot-reload.
+    """
+
+    def __init__(self, store: Optional[Any] = None, seed: Optional[dict] = None):
+        self._store = store
+        self._seed = seed or SEED_CONFIG
+        self._data: dict[str, Any] = {}
+        self._hydrate()
+
+    def _hydrate(self) -> None:
+        """Load every section into ``_data``: DB row if present, else seed."""
+        for section in ALL_SECTIONS:
+            stored = None
+            if self._store is not None:
+                try:
+                    stored = self._store.get_config_section(section, None)
+                except Exception:  # noqa: BLE001 — never break config reads
+                    stored = None
+            if isinstance(stored, (dict, list)) and stored:
+                self._data[section] = stored
+            elif section in self._seed and self._seed[section] is not None:
+                import copy
+                self._data[section] = copy.deepcopy(self._seed[section])
+            else:
+                self._data[section] = {}
+        # Validate required sections; fall back to seed on failure so boot and
+        # read paths never hard-fail from a corrupt DB section.
+        for section in REQUIRED_SECTIONS:
+            try:
+                _validate(section, self._data.get(section))
+            except ConfigError as exc:
+                logger.warning("config_section_invalid", section=section, error=str(exc))
+                if section in self._seed:
+                    import copy
+                    self._data[section] = copy.deepcopy(self._seed[section])
+        # Env overrides for the two bootstrap-critical values — only when the
+        # env var is actually set (so a DB value is preserved otherwise).
         try:
-            mtime = self._path.stat().st_mtime
-            if mtime > self._mtime:
-                self._reload()
-                return True
-        except FileNotFoundError:
+            if os.environ.get("LISTEN_PORT"):
+                self._data["server"]["port"] = _env_port()
+        except Exception:  # noqa: BLE001
             pass
-        except Exception:
-            logger.warning("config_reload_failed", exc_info=True)
-        return False
-
-    # ── DB-backed runtime config sections ─────────────────────────────────
-    # The runtime-tunable sections (dynamic_routing, retry, circuit_breaker,
-    # model_limits) live in the settings DB (gateway_config:<section>) once
-    # the store is available, so edits via the UI persist and survive
-    # restarts. gateway.yaml remains only a seed: when no DB row exists the
-    # YAML value is used. ``save()`` writes both so YAML stays a working
-    # seed/backup.
-
-    _DB_SECTIONS = ("dynamic_routing", "retry", "circuit_breaker", "model_limits")
-
-    def _db_section(self, section: str, default: dict) -> dict:
-        """Return a DB-backed section if the store has it, else *default*."""
         try:
-            from .cost_cache import get_settings
-            store = get_settings()
-            if store is not None:
-                stored = store.get_config_section(section, None)
-                if isinstance(stored, dict) and stored:
-                    return stored
-        except Exception:  # noqa: BLE001 — never break config reads
+            if os.environ.get("COST_DB"):
+                self._data["database"]["path"] = _env_db_path()
+        except Exception:  # noqa: BLE001
             pass
-        return default
+        logger.info("config_loaded", sections=sorted(self._data.keys()))
 
     # ── Accessors ──────────────────────────────────────────────────────────
 
@@ -115,19 +271,17 @@ class Config:
 
     @property
     def circuit_breaker(self) -> dict:
-        return self._db_section("circuit_breaker", self._data["circuit_breaker"])
+        return self._data.get("circuit_breaker", {})
 
     @property
     def retry(self) -> dict:
-        """Per-provider retry config, with sensible defaults when absent."""
-        default = self._data.get("retry", {
+        return self._data.get("retry", {
             "max_attempts": 3,
             "backoff_base": 0.5,
             "backoff_multiplier": 2,
             "max_backoff": 10,
             "jitter": True,
         })
-        return self._db_section("retry", default)
 
     @property
     def database(self) -> dict:
@@ -135,30 +289,20 @@ class Config:
 
     @property
     def dynamic_routing(self) -> dict:
-        """Dynamic routing config, with sensible defaults when absent.
-
-        ``enabled`` gates the CapabilityRouter; ``cost_bias`` controls how
-        strongly cheaper models are favored (0.0 = pure capability). Prefers
-        the DB-backed section so the UI toggle persists; falls back to the
-        YAML seed (which defaults to disabled).
-        """
-        default = self._data.get("dynamic_routing", {
+        return self._data.get("dynamic_routing", {
             "enabled": False,
             "cost_bias": 0.15,
         })
-        return self._db_section("dynamic_routing", default)
 
     @property
     def model_limits(self) -> dict:
-        return self._db_section("model_limits", self._data.get("model_limits", {}))
+        return self._data.get("model_limits", {})
 
     @property
     def plugins(self) -> dict:
         """Plugin config blocks, e.g. ``plugins.memory``.
 
-        Absent/partial config falls back to the memory plugin's defaults
-        (enabled with the default embedding model). No validation here — the
-        memory module tolerates a missing block.
+        Absent/partial config falls back to the memory plugin's defaults.
         """
         return self._data.get("plugins", {})
 
@@ -184,11 +328,7 @@ class Config:
         raise ConfigError(f"No pricing found for {provider}/{model}")
 
     def get_provider_cache_config(self, provider_name: str) -> dict:
-        """Return cache config for a provider, or empty dict if not configured.
-
-        Returns: {"strategy": "prefix"|"none", "savings": "cost"|"latency"|"none",
-                   "hit_field": "prompt_cache_hit_tokens"|...|null}
-        """
+        """Return cache config for a provider, or empty dict if not configured."""
         p = self.providers.get(provider_name, {})
         return p.get("cache", {"strategy": "none", "savings": "none", "hit_field": None})
 
@@ -197,35 +337,24 @@ class Config:
         return self._data
 
     def save(self) -> None:
-        # 1. Seed runtime-tunable sections into the settings DB only when a
-        #    row is absent. The migrated sections are DB-owned at runtime (the
-        #    UI/routing toggle writes them straight to the settings table), so
-        #    we must NOT clobber an existing DB value with the (possibly
-        #    stale) YAML ``_data`` on unrelated config saves.
-        try:
-            from .cost_cache import get_settings
-            store = get_settings()
-            if store is not None:
-                for section in self._DB_SECTIONS:
-                    if store.get_config_section(section, None) is None:
-                        value = self._data.get(section)
-                        if isinstance(value, dict) and value:
-                            store.set_config_section(section, dict(value))
-        except Exception:  # noqa: BLE001 — DB write must not break YAML save
-            logger.warning("config_db_save_failed", error=True)
-        # 2. Keep writing YAML as a working seed/backup (and for the sections
-        #    that still live in YAML: server/profiles/providers/pricing/...).
-        import tempfile, shutil
-        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=self._path.parent, delete=False)
-        try:
-            yaml.dump(self._data, tmp, default_flow_style=False, sort_keys=False, allow_unicode=True)
-            tmp.flush()
-            shutil.move(tmp.name, self._path)
-            self._mtime = self._path.stat().st_mtime
-            logger.info("config_saved", path=str(self._path))
-        finally:
-            if os.path.exists(tmp.name):
-                os.unlink(tmp.name)
+        """Persist every section to the settings DB (source of truth).
+
+        This is the write path for all UI/config edits (the CRUD endpoints
+        mutate ``config.raw`` then call ``save()``). Missing sections are
+        seeded; present sections are fully replaced by the current ``_data``.
+        """
+        if self._store is None:
+            logger.warning("config_save_no_store", error=True)
+            return
+        for section in ALL_SECTIONS:
+            value = self._data.get(section)
+            if value is None:
+                continue
+            try:
+                self._store.set_config_section(section, value)
+            except Exception:  # noqa: BLE001 — best-effort per section
+                logger.warning("config_section_save_failed", section=section)
+        logger.info("config_saved")
 
 
 # Global config instance — loaded at startup
@@ -235,13 +364,14 @@ _config: Config | None = None
 def get_config() -> Config:
     global _config
     if _config is None:
-        config_path = os.environ.get("LCP_CONFIG", "/app/config/gateway.yaml")
-        _config = Config(config_path)
+        # Back-compat fallback: build from a store if one is already bound.
+        from .cost_cache import get_settings
+        _config = Config(store=get_settings())
     return _config
 
 
-def init_config(path: str | None = None) -> Config:
+def init_config(store: Optional[Any] = None) -> Config:
+    """Create the global Config bound to the settings store (DB-backed)."""
     global _config
-    config_path = path or os.environ.get("LCP_CONFIG", "/app/config/gateway.yaml")
-    _config = Config(config_path)
+    _config = Config(store=store)
     return _config

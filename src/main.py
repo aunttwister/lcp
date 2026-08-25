@@ -3,7 +3,6 @@
 import os
 import time
 
-from .api.config import init_config
 from .api.logging_config import setup_logging, get_logger
 from .api.models import get_engine, Base
 from .api.circuit_breaker import get_circuit_breaker
@@ -25,29 +24,42 @@ def main():
     _boot = time.monotonic()
     t0 = _boot
 
-    config = init_config()
-    t0 = _startup_step("config_load", t0)
-
-    cfg = config.server
-
     setup_logging(os.environ.get("LOG_LEVEL", "INFO"))
 
+    # ── Bootstrap: the DB path + listen port come from env (with seed
+    #    defaults) so we can open the DB BEFORE reading the DB-backed config.
+    from .api.config import _env_db_path, _env_port, init_config
+    db_path = _env_db_path()
+    port = _env_port()
     logger.info("startup_begin", version=__import__("src").__version__,
-                port=int(os.environ.get("LISTEN_PORT", str(cfg.get("port", 8734)))),
-                config=os.environ.get("LCP_CONFIG", "") or "default",
-                log_level=os.environ.get("LOG_LEVEL", "INFO"))
+                port=port, log_level=os.environ.get("LOG_LEVEL", "INFO"))
 
-    get_circuit_breaker(config)
-    t0 = _startup_step("circuit_breaker_init", t0)
-    logger.info("circuit_breaker_initialized")
-
-    # ── Database (must exist before plugins that query it) ──────────────
-    db_path = os.environ.get("COST_DB", config.database.get("path", "/app/data/costs.db"))
+    # ── Database (must exist before the DB-backed config can be read) ────
     assert db_path is not None
     engine = get_engine(db_path)
     Base.metadata.create_all(engine)
     t0 = _startup_step("db_init", t0)
     logger.info("db_initialized", path=db_path)
+
+    # ── DB-backed config: settings store → Config (seeds missing sections
+    #    from the Python seed on first boot).
+    from .api.cost_cache import init_settings
+    settings = init_settings(engine)
+    config = init_config(store=settings)
+    # Persist the seed to the DB on first boot so the DB is the materialised
+    # source of truth (idempotent — later boots load from the DB and skip).
+    try:
+        if settings.config_sections() == []:
+            config.save()
+            logger.info("config_seeded_db")
+    except Exception:  # noqa: BLE001 — never block boot
+        logger.warning("config_seed_failed", error=True)
+    t0 = _startup_step("config_load", t0)
+    logger.info("config_loaded_db")
+
+    get_circuit_breaker(config)
+    t0 = _startup_step("circuit_breaker_init", t0)
+    logger.info("circuit_breaker_initialized")
 
     # Initialize the dynamic router (benchmark-driven model selection) with
     # the config's enabled/cost_bias. Disabled when not configured.
@@ -80,29 +92,14 @@ def main():
 
     # Initialize the cost-plugin cache + background refresher. The refresher
     # owns ALL live scraping; the HTTP endpoints read the cache only.
-    from .api.cost_cache import init_cost_cache, init_refresher, init_settings
-    settings = init_settings(engine)
+    from .api.cost_cache import init_cost_cache, init_refresher
     cache = init_cost_cache(engine)
     refresher = init_refresher(cache, settings)
     refresher.start()
     t0 = _startup_step("cost_cache_init", t0)
     logger.info("cost_cache_initialized", ttl_minutes=settings.get_ttl_minutes())
 
-    # Seed runtime-tunable config sections (dynamic_routing, retry,
-    # circuit_breaker, model_limits) into the settings DB from the YAML seed
-    # on first boot. Once a section exists in the DB it becomes the source of
-    # truth (gateway.yaml is only a seed), so UI edits persist across restarts.
-    try:
-        for _section in ("dynamic_routing", "retry", "circuit_breaker", "model_limits"):
-            if settings.get_config_section(_section, None) is None:
-                _val = getattr(config, _section, None)
-                if isinstance(_val, dict) and _val:
-                    settings.set_config_section(_section, dict(_val))
-        logger.info("gateway_config_seeded")
-    except Exception:  # noqa: BLE001 — never block boot
-        logger.warning("gateway_config_seed_failed", error=True)
-
-    # The UI toggle (settings.routing_enabled) overrides the gateway.yaml
+    # The UI toggle (settings.routing_enabled) overrides the DB config's
     # baseline — re-sync the router's enabled state so boot reflects it.
     try:
         from .api.router import sync_router_enabled_from_settings
@@ -131,7 +128,6 @@ def main():
     except Exception as exc:  # noqa: BLE001 — never block boot
         logger.warning("memory_init_failed", error=str(exc))
 
-    port = int(os.environ.get("LISTEN_PORT", str(cfg.get("port", 8734))))
     server = create_server(config, engine, port)
     t0 = _startup_step("server_create", t0)
 

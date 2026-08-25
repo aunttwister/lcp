@@ -70,8 +70,9 @@ Example: `fix: include upstream error body in 401/403 auth failures`
 ## Style
 
 - Python 3.11+, stdlib-first where reasonable.
-- Follow the existing structure: config stays in `gateway.yaml`, providers are
-  added via the dashboard (encrypted credential store), not new env vars.
+- Follow the existing structure: config is DB-backed (seeded from
+  `src/api/config.py` → `SEED_CONFIG`), providers are added via the dashboard
+  (encrypted credential store), not new env vars or a YAML file.
 - Log with `structlog` (structured key/value pairs) rather than `print`.
 
 ## Reporting issues / security

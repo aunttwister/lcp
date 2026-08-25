@@ -167,12 +167,19 @@ class TestSettingsStore:
         s.set("gateway_config:model_limits", "{not json")
         assert s.get_config_section("model_limits", {"default": True}) == {"default": True}
 
-    def test_config_section_non_dict_returns_default(self, engine):
+    def test_config_section_scalar_returns_default(self, engine):
         s = SettingsStore(engine)
-        s.set_config_section("dynamic_routing", {"enabled": False})
-        # Store a non-dict under the same key directly (simulate bad data).
-        s.set("gateway_config:dynamic_routing", "[1,2,3]")
+        # Store a bare scalar (neither dict nor list) — treated as invalid.
+        s.set("gateway_config:dynamic_routing", '"just-a-string"')
         assert s.get_config_section("dynamic_routing", {"fallback": 1}) == {"fallback": 1}
+
+    def test_config_section_list_supported(self, engine):
+        # pricing is stored as a list section.
+        s = SettingsStore(engine)
+        prices = [{"provider": "deepseek", "model": "m", "cache_hit": 0.1}]
+        s.set_config_section("pricing", prices)
+        s2 = SettingsStore(engine)
+        assert s2.get_config_section("pricing") == prices
 
     def test_config_sections_lists_present(self, engine):
         s = SettingsStore(engine)

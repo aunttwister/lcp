@@ -304,10 +304,9 @@ class SettingsStore:
         return out
 
     # ── DB-backed gateway config sections (gateway_config:<section>) ─────
-    # Runtime-tunable config sections (dynamic_routing, retry,
-    # circuit_breaker, model_limits) are stored here as JSON blobs so they no
-    # longer live in gateway.yaml. The Config adapter reads DB-first and falls
-    # back to the YAML seed when a row is absent.
+    # The whole gateway config lives here (JSON blobs per top-level section)
+    # so nothing is stored in gateway.yaml anymore. The Config adapter reads
+    # these rows and falls back to the Python seed when a row is absent.
 
     GATEWAY_CONFIG_PREFIX = "gateway_config:"
 
@@ -315,21 +314,24 @@ class SettingsStore:
     def _config_section_key(section: str) -> str:
         return f"{SettingsStore.GATEWAY_CONFIG_PREFIX}{section}"
 
-    def get_config_section(self, section: str, default: Optional[dict] = None) -> Optional[dict]:
-        """Return a gateway-config section as a dict, or *default* if absent.
+    def get_config_section(self, section: str, default: Any = None) -> Any:
+        """Return a gateway-config section (dict OR list), or *default* if absent.
 
-        Stored as a JSON blob under ``gateway_config:<section>``.
+        Stored as a JSON blob under ``gateway_config:<section>``. ``pricing``
+        is a list; the rest are dicts.
         """
         raw = self.get(self._config_section_key(section), None)
         if raw is None:
             return default
         try:
             parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else default
+            if isinstance(parsed, (dict, list)):
+                return parsed
+            return default
         except (TypeError, ValueError):
             return default
 
-    def set_config_section(self, section: str, value: dict) -> None:
+    def set_config_section(self, section: str, value: Any) -> None:
         """Upsert a gateway-config section (JSON blob) into the settings table."""
         self.set(self._config_section_key(section), json.dumps(value or {}))
 

@@ -370,9 +370,6 @@ class LCPHandler(
             self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
-        # Config hot-reload check
-        self.config.check_reload()
-
         profile = self._resolve_profile()
         logger.debug("request_start", method="POST", path=self.path,
                      client_ip=self.client_address[0], profile=profile or "none")
@@ -783,7 +780,6 @@ class LCPHandler(
             self._send_error(e)
 
     def do_PUT(self):
-        self.config.check_reload()
         logger.debug("request_start", method="PUT", path=self.path,
                      client_ip=self.client_address[0])
         if self.path.startswith("/api/providers/") and len(self.path.split("/")) == 4:
@@ -808,7 +804,6 @@ class LCPHandler(
             self._send_json({"error": "not found"}, 404)
 
     def do_DELETE(self):
-        self.config.check_reload()
         logger.debug("request_start", method="DELETE", path=self.path,
                      client_ip=self.client_address[0])
         if self.path.startswith("/api/providers/") and len(self.path.split("/")) == 4:

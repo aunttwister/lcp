@@ -48,21 +48,13 @@ def resolve_db_path(explicit: str | None) -> str:
     if env:
         return env
 
-    # Local dev DB takes precedence over the Docker-path in gateway.yaml.
+    # Local dev DB takes precedence over the seed default (config is DB-backed
+    # now; gateway.yaml no longer exists).
     if os.path.isfile("data/costs.db"):
         return "data/costs.db"
 
-    # Fall back to gateway.yaml's database.path (production container).
-    try:
-        import yaml
-        with open("config/gateway.yaml") as f:
-            raw = yaml.safe_load(f) or {}
-        path = (raw.get("database") or {}).get("path")
-        if path:
-            return path
-    except Exception:
-        pass
-    return "data/costs.db"
+    # Seed default (same as src/api/config.py SEED_CONFIG database.path).
+    return "/app/data/costs.db"
 
 
 def counts_by_source(conn: sqlite3.Connection) -> Counter:

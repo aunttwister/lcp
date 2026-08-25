@@ -19,6 +19,7 @@ def boot_config():
     cfg.database = {"path": "/tmp/test.db"}
     cfg.profiles = {"l2": {"chain": []}, "l1": {"chain": []}}
     cfg.providers = {}
+    cfg.dynamic_routing = {"enabled": False, "cost_bias": 0.15}
     return cfg
 
 
@@ -31,20 +32,24 @@ class TestMain:
         import src.main
         server = MagicMock()
         engine = MagicMock()
+        settings = MagicMock()
 
-        with patch.object(src.main, "init_config", return_value=boot_config), \
+        with patch.object(src.main, "get_engine", return_value=engine) as mock_engine, \
              patch.object(src.main, "setup_logging") as mock_log, \
-             patch.object(src.main, "get_engine", return_value=engine) as mock_engine, \
              patch.object(src.main, "init_alert_manager") as mock_alert, \
              patch.object(src.main, "create_server", return_value=server) as mock_server, \
+             patch("src.api.cost_cache.init_settings", return_value=settings) as mock_settings, \
+             patch("src.api.config.init_config", return_value=boot_config) as mock_init_cfg, \
              patch("src.api.cost_plugins.init_plugins") as mock_plugins:
 
             src.main.main()
 
         mock_log.assert_called_once()
-        mock_engine.assert_called_once_with("/tmp/test.db")
+        mock_engine.assert_called_once_with("/app/data/costs.db")
         mock_plugins.assert_called_once_with(engine=engine)
         mock_alert.assert_called_once_with(engine)
+        mock_settings.assert_called_once_with(engine)
+        mock_init_cfg.assert_called_once_with(store=settings)
         mock_server.assert_called_once()
         server.serve_forever.assert_called_once()
 
@@ -53,19 +58,18 @@ class TestMain:
         server = MagicMock()
         engine = MagicMock()
 
-        with patch.object(src.main, "init_config", return_value=boot_config), \
-             patch.object(src.main, "get_engine", return_value=engine) as mock_engine, \
+        with patch.object(src.main, "get_engine", return_value=engine) as mock_engine, \
              patch.object(src.main, "init_alert_manager"), \
              patch.object(src.main, "create_server", return_value=server), \
+             patch("src.api.cost_cache.init_settings", return_value=MagicMock()), \
+             patch("src.api.config.init_config", return_value=boot_config), \
              patch("src.api.cost_plugins.init_plugins"), \
-             patch.dict("os.environ", {"COST_DB": "/env/costs.db", "LISTEN_PORT": "9000"}):
+             patch.dict("os.environ", {"COST_DB": "/env/costs.db", "LISTEN_PORT": "9000"}, clear=False):
 
             src.main.main()
 
         mock_engine.assert_called_once_with("/env/costs.db")
-        # create_server receives the env port
-        args = server.serve_forever  # ensure server was returned & used
-        assert args is not None
+        assert server.serve_forever is not None
 
     def test_main_shuts_down_on_keyboard_interrupt(self, boot_config):
         import src.main
@@ -73,11 +77,12 @@ class TestMain:
         server.serve_forever.side_effect = KeyboardInterrupt()
         engine = MagicMock()
 
-        with patch.object(src.main, "init_config", return_value=boot_config), \
+        with patch.object(src.main, "get_engine", return_value=engine), \
              patch.object(src.main, "setup_logging"), \
-             patch.object(src.main, "get_engine", return_value=engine), \
              patch.object(src.main, "init_alert_manager"), \
              patch.object(src.main, "create_server", return_value=server), \
+             patch("src.api.cost_cache.init_settings", return_value=MagicMock()), \
+             patch("src.api.config.init_config", return_value=boot_config), \
              patch("src.api.cost_plugins.init_plugins"):
 
             src.main.main()  # should not raise
@@ -90,30 +95,31 @@ class TestMain:
         boot_config.dynamic_routing = {"enabled": True, "cost_bias": 0.3}
         engine = MagicMock()
 
-        with patch.object(src.main, "init_config", return_value=boot_config), \
-             patch.object(src.main, "get_engine", return_value=engine), \
+        with patch.object(src.main, "get_engine", return_value=engine), \
              patch.object(src.main, "init_alert_manager"), \
              patch.object(src.main, "create_server", return_value=MagicMock()), \
+             patch("src.api.cost_cache.init_settings", return_value=MagicMock()), \
+             patch("src.api.config.init_config", return_value=boot_config), \
              patch("src.api.cost_plugins.init_plugins"), \
              patch("src.api.router.init_router") as mock_router:
 
             src.main.main()
 
         mock_router.assert_called_once()
-        args, kwargs = mock_router.call_args
+        _, kwargs = mock_router.call_args
         assert kwargs["enabled"] is True
         assert kwargs["cost_bias"] == 0.3
 
     def test_main_router_defaults_disabled(self, boot_config):
-        """A config without dynamic_routing leaves the router disabled."""
+        """A config with dynamic_routing disabled leaves the router disabled."""
         import src.main
-        # boot_config is a MagicMock → dynamic_routing returns a non-dict → disabled.
         engine = MagicMock()
 
-        with patch.object(src.main, "init_config", return_value=boot_config), \
-             patch.object(src.main, "get_engine", return_value=engine), \
+        with patch.object(src.main, "get_engine", return_value=engine), \
              patch.object(src.main, "init_alert_manager"), \
              patch.object(src.main, "create_server", return_value=MagicMock()), \
+             patch("src.api.cost_cache.init_settings", return_value=MagicMock()), \
+             patch("src.api.config.init_config", return_value=boot_config), \
              patch("src.api.cost_plugins.init_plugins"), \
              patch("src.api.router.init_router") as mock_router:
 

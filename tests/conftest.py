@@ -5,7 +5,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-import yaml
 
 
 @pytest.fixture
@@ -16,54 +15,57 @@ def temp_dir():
 
 
 @pytest.fixture
-def temp_yaml_config(temp_dir):
-    """Create a temporary gateway.yaml with valid structure and return its path."""
-    config = {
-        "server": {"port": 8734, "default_profile": "l2"},
-        "profiles": {
-            "l2": {
-                "forbidden_tools": ["write_file"],
-                "chain": [
-                    {"provider": "test_prov", "model": "test-model", "base_url": "https://test.api/v1"}
-                ],
-            },
-            "l1": {
-                "forbidden_tools": ["terminal"],
-                "chain": [
-                    {"provider": "test_prov", "model": "test-model-flash", "base_url": "https://test.api/v1"}
-                ],
-            },
+def config_store(temp_dir):
+    """A SettingsStore bound to a temp DB, seeded with a minimal config.
+
+    The DB-backed Config reads sections from here; any section we don't seed
+    falls back to the Python SEED_CONFIG defaults.
+    """
+    from src.api.models import Base, get_engine
+    from src.api.cost_cache import SettingsStore
+    db_path = str(temp_dir / "test.db")
+    e = get_engine(db_path)
+    Base.metadata.create_all(e)
+    store = SettingsStore(e)
+    store.set_config_section("profiles", {
+        "l2": {
+            "forbidden_tools": ["write_file"],
+            "chain": [
+                {"provider": "test_prov", "model": "test-model", "base_url": "https://test.api/v1"}
+            ],
         },
-        "providers": {
-            "test_prov": {
-                "api_key_env": "TEST_API_KEY",
-                "api_base": "https://test.api/v1",
-                "models": ["test-model", "test-model-flash"],
-            }
+        "l1": {
+            "forbidden_tools": ["terminal"],
+            "chain": [
+                {"provider": "test_prov", "model": "test-model-flash", "base_url": "https://test.api/v1"}
+            ],
         },
-        "pricing": [
-            {"provider": "test_prov", "model": "test-model", "cache_hit": 0.01, "cache_miss": 0.5, "output": 1.0},
-            {"provider": "test_prov", "model": "test-model-flash", "cache_hit": 0.005, "cache_miss": 0.1, "output": 0.2},
-        ],
-        "circuit_breaker": {
-            "failures_degraded": 3,
-            "failures_dead": 6,
-            "degraded_cooldown_seconds": 30,
-            "dead_cooldown_seconds": 120,
-        },
-        "database": {"path": str(temp_dir / "test.db"), "wal_mode": True},
-    }
-    path = temp_dir / "gateway.yaml"
-    with open(path, "w") as f:
-        yaml.dump(config, f)
-    return path
+    })
+    store.set_config_section("providers", {
+        "test_prov": {
+            "api_key_env": "TEST_API_KEY",
+            "api_base": "https://test.api/v1",
+            "models": ["test-model", "test-model-flash"],
+        }
+    })
+    store.set_config_section("pricing", [
+        {"provider": "test_prov", "model": "test-model", "cache_hit": 0.01, "cache_miss": 0.5, "output": 1.0},
+        {"provider": "test_prov", "model": "test-model-flash", "cache_hit": 0.005, "cache_miss": 0.1, "output": 0.2},
+    ])
+    store.set_config_section("circuit_breaker", {
+        "failures_degraded": 3,
+        "failures_dead": 6,
+        "degraded_cooldown_seconds": 30,
+        "dead_cooldown_seconds": 120,
+    })
+    return store
 
 
 @pytest.fixture
-def mock_config(temp_yaml_config):
-    """Return a loaded Config object from a temp YAML file."""
+def mock_config(config_store):
+    """Return a DB-backed Config from a temp settings store."""
     from src.api.config import Config
-    return Config(str(temp_yaml_config))
+    return Config(store=config_store)
 
 
 @pytest.fixture
