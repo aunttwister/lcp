@@ -32,6 +32,23 @@ def _fmt_params(n: int) -> str:
     return str(n)
 
 
+def _sync_dynamic_routing_enabled(settings, enabled: bool) -> None:
+    """Update the DB-backed ``dynamic_routing`` config section's ``enabled``.
+
+    Keeps ``config.dynamic_routing`` (which reads the settings DB first) in
+    sync with the global routing toggle, so the section reflects the current
+    runtime state. Best-effort: never breaks the request on failure.
+    """
+    try:
+        section = settings.get_config_section("dynamic_routing", None)
+        if not isinstance(section, dict):
+            section = {}
+        section["enabled"] = bool(enabled)
+        settings.set_config_section("dynamic_routing", section)
+    except Exception:  # noqa: BLE001 — best-effort sync
+        logger.warning("dynamic_routing_config_sync_failed", error=True)
+
+
 def _savings_for_model(config, model: str, hit_tokens: int) -> float:
     """Estimate dollars saved via provider prefix caching for a model."""
     if hit_tokens <= 0:
@@ -1787,6 +1804,10 @@ class SettingsEndpoints:
                 self._send_json({"error": "enabled must be a boolean"}, 400)
                 return
             settings.set_routing_enabled(enabled, profile=profile)
+            # Keep the DB-backed dynamic_routing config section in sync so
+            # ``config.dynamic_routing`` reflects the current global toggle.
+            if not profile:
+                _sync_dynamic_routing_enabled(settings, enabled)
         from ..api.router import routing_status
         self._send_json(routing_status(self.config))
 

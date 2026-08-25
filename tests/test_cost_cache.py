@@ -141,6 +141,52 @@ class TestSettingsStore:
         s.set("routing_enabled", "true")
         assert s.get_routing_enabled() is True
 
+    # ── DB-backed gateway config sections (gateway_config:<section>) ──────
+
+    def test_config_section_default_when_absent(self, engine):
+        s = SettingsStore(engine)
+        assert s.get_config_section("dynamic_routing", None) is None
+        assert s.get_config_section("dynamic_routing", {"enabled": False}) == {"enabled": False}
+
+    def test_config_section_set_and_persist(self, engine):
+        s = SettingsStore(engine)
+        section = {"enabled": True, "cost_bias": 0.3}
+        s.set_config_section("dynamic_routing", section)
+        # Fresh store must read the persisted JSON blob.
+        s2 = SettingsStore(engine)
+        assert s2.get_config_section("dynamic_routing") == section
+
+    def test_config_section_overwrites(self, engine):
+        s = SettingsStore(engine)
+        s.set_config_section("retry", {"max_attempts": 3})
+        s.set_config_section("retry", {"max_attempts": 5, "backoff_base": 1.0})
+        assert s.get_config_section("retry") == {"max_attempts": 5, "backoff_base": 1.0}
+
+    def test_config_section_bad_json_returns_default(self, engine):
+        s = SettingsStore(engine)
+        s.set("gateway_config:model_limits", "{not json")
+        assert s.get_config_section("model_limits", {"default": True}) == {"default": True}
+
+    def test_config_section_non_dict_returns_default(self, engine):
+        s = SettingsStore(engine)
+        s.set_config_section("dynamic_routing", {"enabled": False})
+        # Store a non-dict under the same key directly (simulate bad data).
+        s.set("gateway_config:dynamic_routing", "[1,2,3]")
+        assert s.get_config_section("dynamic_routing", {"fallback": 1}) == {"fallback": 1}
+
+    def test_config_sections_lists_present(self, engine):
+        s = SettingsStore(engine)
+        assert s.config_sections() == []
+        s.set_config_section("retry", {"max_attempts": 3})
+        s.set_config_section("circuit_breaker", {"failures_dead": 6})
+        assert sorted(s.config_sections()) == ["circuit_breaker", "retry"]
+
+    def test_config_section_clear(self, engine):
+        s = SettingsStore(engine)
+        s.set_config_section("dynamic_routing", {"enabled": True})
+        s._clear_key("gateway_config:dynamic_routing")
+        assert s.get_config_section("dynamic_routing", None) is None
+
     # ── Per-profile routing overrides ─────────────────────────────────────
 
     def test_per_profile_policy_falls_back_to_global(self, engine):

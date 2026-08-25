@@ -306,6 +306,76 @@ class TestConfigEdgeCases:
         # Clean up
         os.unlink(str(path))
 
+
+class TestConfigDbBacked:
+    """DB-backed runtime config sections (gateway_config:<section>)."""
+
+    @pytest.fixture
+    def db_store(self, tmp_path):
+        """A real SettingsStore backed by a temp DB."""
+        from src.api.models import Base, get_engine
+        from src.api.cost_cache import SettingsStore
+        db_path = str(tmp_path / "test.db")
+        e = get_engine(db_path)
+        Base.metadata.create_all(e)
+        return SettingsStore(e)
+
+    def _cfg(self, tmp_path):
+        data = _base_config()
+        data["dynamic_routing"] = {"enabled": True, "cost_bias": 0.3}
+        data["retry"] = {"max_attempts": 3, "backoff_base": 0.5}
+        data["model_limits"] = {"m1": {"context_window": 1000}}
+        path = tmp_path / "config.yaml"
+        with open(path, "w") as f:
+            yaml.dump(data, f)
+        return Config(str(path))
+
+    def test_properties_fall_back_to_yaml_when_no_db(self, tmp_path):
+        cfg = self._cfg(tmp_path)
+        # No settings store initialized -> reads the YAML seed.
+        assert cfg.dynamic_routing["enabled"] is True
+        assert cfg.retry["max_attempts"] == 3
+        assert cfg.model_limits["m1"]["context_window"] == 1000
+        assert cfg.circuit_breaker["failures_before_skip"] == 5
+
+    def test_properties_prefer_db_over_yaml(self, tmp_path, monkeypatch, db_store):
+        cfg = self._cfg(tmp_path)
+        monkeypatch.setattr("src.api.cost_cache._settings_store", db_store)
+        # Seed a DB section that differs from YAML.
+        db_store.set_config_section("dynamic_routing", {"enabled": False, "cost_bias": 0.5})
+        assert cfg.dynamic_routing["enabled"] is False
+        assert cfg.dynamic_routing["cost_bias"] == 0.5
+        # Sections absent from DB still fall back to YAML.
+        assert cfg.retry["max_attempts"] == 3
+
+    def test_save_seeds_absent_db_sections(self, tmp_path, monkeypatch, db_store):
+        cfg = self._cfg(tmp_path)
+        monkeypatch.setattr("src.api.cost_cache._settings_store", db_store)
+        cfg.save()
+        assert db_store.get_config_section("dynamic_routing") == {"enabled": True, "cost_bias": 0.3}
+        assert db_store.get_config_section("retry") == {"max_attempts": 3, "backoff_base": 0.5}
+        # YAML is still written too (seed/backup).
+        cfg2 = Config(str(cfg._path))
+        assert cfg2.dynamic_routing["enabled"] is True
+
+    def test_save_does_not_clobber_existing_db_sections(self, tmp_path, monkeypatch, db_store):
+        cfg = self._cfg(tmp_path)
+        monkeypatch.setattr("src.api.cost_cache._settings_store", db_store)
+        # DB already has a newer value (e.g. user toggled routing on).
+        db_store.set_config_section("dynamic_routing", {"enabled": False, "cost_bias": 0.5})
+        # config._data still holds the YAML seed (enabled: True) — a stale save
+        # must NOT overwrite the DB value.
+        cfg.save()
+        assert db_store.get_config_section("dynamic_routing") == {"enabled": False, "cost_bias": 0.5}
+
+    def test_save_without_db_keeps_yaml_only(self, tmp_path, monkeypatch):
+        cfg = self._cfg(tmp_path)
+        monkeypatch.setattr("src.api.cost_cache._settings_store", None)
+        cfg.raw["retry"] = {"max_attempts": 9}
+        cfg.save()
+        cfg2 = Config(str(cfg._path))
+        assert cfg2.retry["max_attempts"] == 9
+
     def test_check_reload_no_change(self, temp_dir):
         data = _base_config()
         path = temp_dir / "config2.yaml"

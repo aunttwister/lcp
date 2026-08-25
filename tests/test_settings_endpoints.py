@@ -216,6 +216,44 @@ class TestSettingsApi:
         assert _status(h) == 200
         assert get_settings().get_routing_enabled() is False
 
+    def test_routing_enabled_syncs_db_config_section(self, engine, mock_config):
+        """The global toggle also updates gateway_config:dynamic_routing."""
+        init_settings(engine)
+        # Seed a section like boot does.
+        get_settings().set_config_section("dynamic_routing", {"enabled": False, "cost_bias": 0.15})
+        h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,
+                        body=json.dumps({"enabled": True}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        section = get_settings().get_config_section("dynamic_routing")
+        assert section["enabled"] is True
+        assert section["cost_bias"] == 0.15  # other keys preserved
+
+    def test_routing_enabled_sync_ignores_per_profile(self, engine, mock_config):
+        """A per-profile toggle must NOT clobber the global config section."""
+        init_settings(engine)
+        get_settings().set_config_section("dynamic_routing", {"enabled": False, "cost_bias": 0.15})
+        h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,
+                        body=json.dumps({"enabled": True, "profile": "l2"}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        section = get_settings().get_config_section("dynamic_routing")
+        assert section["enabled"] is False  # global unchanged
+
+    def test_routing_policy_disable_all_syncs(self, engine, mock_config):
+        """Disable-all (global off + clear every profile) persists in the DB section."""
+        init_settings(engine)
+        get_settings().set_config_section("dynamic_routing", {"enabled": True, "cost_bias": 0.15})
+        h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,
+                        body=json.dumps({"enabled": False}))
+        h.config = mock_config
+        h.do_POST()
+        assert _status(h) == 200
+        section = get_settings().get_config_section("dynamic_routing")
+        assert section["enabled"] is False
+
     def test_routing_enabled_rejects_non_bool(self, engine, mock_config):
         init_settings(engine)
         h = TestHandler(path="/api/routing/policy", method="POST", engine=engine,

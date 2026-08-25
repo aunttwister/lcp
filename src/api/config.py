@@ -72,6 +72,29 @@ class Config:
             logger.warning("config_reload_failed", exc_info=True)
         return False
 
+    # ── DB-backed runtime config sections ─────────────────────────────────
+    # The runtime-tunable sections (dynamic_routing, retry, circuit_breaker,
+    # model_limits) live in the settings DB (gateway_config:<section>) once
+    # the store is available, so edits via the UI persist and survive
+    # restarts. gateway.yaml remains only a seed: when no DB row exists the
+    # YAML value is used. ``save()`` writes both so YAML stays a working
+    # seed/backup.
+
+    _DB_SECTIONS = ("dynamic_routing", "retry", "circuit_breaker", "model_limits")
+
+    def _db_section(self, section: str, default: dict) -> dict:
+        """Return a DB-backed section if the store has it, else *default*."""
+        try:
+            from .cost_cache import get_settings
+            store = get_settings()
+            if store is not None:
+                stored = store.get_config_section(section, None)
+                if isinstance(stored, dict) and stored:
+                    return stored
+        except Exception:  # noqa: BLE001 — never break config reads
+            pass
+        return default
+
     # ── Accessors ──────────────────────────────────────────────────────────
 
     @property
@@ -92,18 +115,19 @@ class Config:
 
     @property
     def circuit_breaker(self) -> dict:
-        return self._data["circuit_breaker"]
+        return self._db_section("circuit_breaker", self._data["circuit_breaker"])
 
     @property
     def retry(self) -> dict:
         """Per-provider retry config, with sensible defaults when absent."""
-        return self._data.get("retry", {
+        default = self._data.get("retry", {
             "max_attempts": 3,
             "backoff_base": 0.5,
             "backoff_multiplier": 2,
             "max_backoff": 10,
             "jitter": True,
         })
+        return self._db_section("retry", default)
 
     @property
     def database(self) -> dict:
@@ -114,16 +138,19 @@ class Config:
         """Dynamic routing config, with sensible defaults when absent.
 
         ``enabled`` gates the CapabilityRouter; ``cost_bias`` controls how
-        strongly cheaper models are favored (0.0 = pure capability).
+        strongly cheaper models are favored (0.0 = pure capability). Prefers
+        the DB-backed section so the UI toggle persists; falls back to the
+        YAML seed (which defaults to disabled).
         """
-        return self._data.get("dynamic_routing", {
+        default = self._data.get("dynamic_routing", {
             "enabled": False,
             "cost_bias": 0.15,
         })
+        return self._db_section("dynamic_routing", default)
 
     @property
     def model_limits(self) -> dict:
-        return self._data.get("model_limits", {})
+        return self._db_section("model_limits", self._data.get("model_limits", {}))
 
     @property
     def plugins(self) -> dict:
@@ -170,6 +197,24 @@ class Config:
         return self._data
 
     def save(self) -> None:
+        # 1. Seed runtime-tunable sections into the settings DB only when a
+        #    row is absent. The migrated sections are DB-owned at runtime (the
+        #    UI/routing toggle writes them straight to the settings table), so
+        #    we must NOT clobber an existing DB value with the (possibly
+        #    stale) YAML ``_data`` on unrelated config saves.
+        try:
+            from .cost_cache import get_settings
+            store = get_settings()
+            if store is not None:
+                for section in self._DB_SECTIONS:
+                    if store.get_config_section(section, None) is None:
+                        value = self._data.get(section)
+                        if isinstance(value, dict) and value:
+                            store.set_config_section(section, dict(value))
+        except Exception:  # noqa: BLE001 — DB write must not break YAML save
+            logger.warning("config_db_save_failed", error=True)
+        # 2. Keep writing YAML as a working seed/backup (and for the sections
+        #    that still live in YAML: server/profiles/providers/pricing/...).
         import tempfile, shutil
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=self._path.parent, delete=False)
         try:

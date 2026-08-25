@@ -88,6 +88,20 @@ def main():
     t0 = _startup_step("cost_cache_init", t0)
     logger.info("cost_cache_initialized", ttl_minutes=settings.get_ttl_minutes())
 
+    # Seed runtime-tunable config sections (dynamic_routing, retry,
+    # circuit_breaker, model_limits) into the settings DB from the YAML seed
+    # on first boot. Once a section exists in the DB it becomes the source of
+    # truth (gateway.yaml is only a seed), so UI edits persist across restarts.
+    try:
+        for _section in ("dynamic_routing", "retry", "circuit_breaker", "model_limits"):
+            if settings.get_config_section(_section, None) is None:
+                _val = getattr(config, _section, None)
+                if isinstance(_val, dict) and _val:
+                    settings.set_config_section(_section, dict(_val))
+        logger.info("gateway_config_seeded")
+    except Exception:  # noqa: BLE001 — never block boot
+        logger.warning("gateway_config_seed_failed", error=True)
+
     # The UI toggle (settings.routing_enabled) overrides the gateway.yaml
     # baseline — re-sync the router's enabled state so boot reflects it.
     try:

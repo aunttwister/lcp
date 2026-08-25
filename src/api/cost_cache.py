@@ -303,6 +303,43 @@ class SettingsStore:
                     out[prov] = self._ttl_from_raw(raw, _DEFAULT_TTL_MINUTES)
         return out
 
+    # ── DB-backed gateway config sections (gateway_config:<section>) ─────
+    # Runtime-tunable config sections (dynamic_routing, retry,
+    # circuit_breaker, model_limits) are stored here as JSON blobs so they no
+    # longer live in gateway.yaml. The Config adapter reads DB-first and falls
+    # back to the YAML seed when a row is absent.
+
+    GATEWAY_CONFIG_PREFIX = "gateway_config:"
+
+    @staticmethod
+    def _config_section_key(section: str) -> str:
+        return f"{SettingsStore.GATEWAY_CONFIG_PREFIX}{section}"
+
+    def get_config_section(self, section: str, default: Optional[dict] = None) -> Optional[dict]:
+        """Return a gateway-config section as a dict, or *default* if absent.
+
+        Stored as a JSON blob under ``gateway_config:<section>``.
+        """
+        raw = self.get(self._config_section_key(section), None)
+        if raw is None:
+            return default
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else default
+        except (TypeError, ValueError):
+            return default
+
+    def set_config_section(self, section: str, value: dict) -> None:
+        """Upsert a gateway-config section (JSON blob) into the settings table."""
+        self.set(self._config_section_key(section), json.dumps(value or {}))
+
+    def config_sections(self) -> list[str]:
+        """Return the names of all DB-backed gateway-config sections present."""
+        self._ensure_loaded()
+        prefix = self.GATEWAY_CONFIG_PREFIX
+        return [key[len(prefix):] for key in self._cache
+                if key.startswith(prefix) and len(key) > len(prefix)]
+
 
 _settings_store: Optional[SettingsStore] = None
 
