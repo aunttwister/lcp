@@ -452,6 +452,32 @@ def test_routing_status(registry_db, monkeypatch):
     init_router(enabled=False)  # restore
 
 
+def test_decisions_persist_across_restart(registry_db):
+    """Routing decisions survive a rebuild: a fresh router on the same DB reads
+    back the persisted routing_decisions rows."""
+    from src.api.models import Base, get_engine, RoutingDecision, get_session
+
+    # Ensure the routing_decisions table exists on the shared registry DB.
+    engine = get_engine(registry_db)
+    Base.metadata.create_all(engine)
+
+    r1 = CapabilityRouter(enabled=True, db_path=registry_db)
+    r1._record_decision({
+        "ts": "2026-08-25T20:59:15Z", "profile": "coder", "task": "planning",
+        "policy": "eager", "action": "prefer", "provider": "commandcode",
+        "model": "deepseek/deepseek-v4-flash", "score": 0.778,
+        "rules": ["prefer"], "note": "fired: prefer",
+    })
+
+    # Simulate a rebuild: a FRESH router instance on the SAME db_path.
+    r2 = CapabilityRouter(enabled=True, db_path=registry_db)
+    decs = r2.recent_decisions(25)
+    assert any(d["task"] == "planning" and d["action"] == "prefer" for d in decs)
+    # The row is actually in the DB table.
+    with get_session(engine) as s:
+        assert s.query(RoutingDecision).filter(RoutingDecision.task == "planning").count() >= 1
+
+
 # ── Routing rules (Phase: UI-defined overrides) ─────────────────────────
 
 def _rule_router(registry_db, monkeypatch, rules, config=None):

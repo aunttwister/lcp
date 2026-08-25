@@ -492,8 +492,61 @@ class CapabilityRouter:
         self._decisions.append(decision)
         if len(self._decisions) > 50:
             self._decisions = self._decisions[-50:]
+        # Persist to the DB so decisions survive restarts/rebuilds. Best-effort:
+        # a DB failure must never break routing.
+        try:
+            from .models import RoutingDecision, get_session
+            from .models import get_engine as _get_engine
+            import json as _json
+            with get_session(_get_engine(self.db_path)) as session:
+                session.add(RoutingDecision(
+                    ts=decision.get("ts"),
+                    profile=decision.get("profile") or "",
+                    task=decision.get("task") or "",
+                    policy=decision.get("policy") or "",
+                    action=decision.get("action") or "",
+                    provider=decision.get("provider"),
+                    model=decision.get("model"),
+                    score=decision.get("score"),
+                    rules_json=_json.dumps(decision.get("rules") or []),
+                    from_provider=decision.get("from_provider"),
+                    from_model=decision.get("from_model"),
+                    note=decision.get("note"),
+                ))
+                session.commit()
+        except Exception:  # noqa: BLE001 — persistence must never break routing
+            pass
 
     def recent_decisions(self, limit: int = 25) -> list[dict]:
+        """Return the most recent routing decisions, newest first.
+
+        Reads from the persisted ``routing_decisions`` table first (survives
+        restarts); falls back to the in-memory buffer when the DB isn't
+        available.
+        """
+        try:
+            from .models import RoutingDecision, get_session
+            from .models import get_engine as _get_engine
+            import json as _json
+            with get_session(_get_engine(self.db_path)) as session:
+                rows = (
+                    session.query(RoutingDecision)
+                    .order_by(RoutingDecision.id.desc())
+                    .limit(limit)
+                    .all()
+                )
+                if rows:
+                    return [{
+                        "ts": r.ts, "profile": r.profile, "task": r.task,
+                        "policy": r.policy, "action": r.action,
+                        "provider": r.provider, "model": r.model,
+                        "score": r.score,
+                        "rules": _json.loads(r.rules_json) if r.rules_json else [],
+                        "from_provider": r.from_provider, "from_model": r.from_model,
+                        "note": r.note,
+                    } for r in rows]
+        except Exception:  # noqa: BLE001 — fall back to in-memory
+            pass
         return list(self._decisions[-limit:])
 
     def get_model_score(self, model: str, task: str) -> float:

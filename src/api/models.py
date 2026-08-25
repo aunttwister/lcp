@@ -1,6 +1,7 @@
 """SQLAlchemy models for the LCP gateway."""
 
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import (
     Column,
@@ -346,10 +347,33 @@ class CostPluginCacheEntry(Base):
     stale_error = Column(Text, nullable=True)
 
 
+class RoutingDecision(Base):
+    """Persisted dynamic-routing decision (survives restarts/rebuilds).
+
+    One row per ``select_step`` decision so the Recent-routing-decisions view
+    on the Providers → Routing tab is auditable across restarts.
+    """
+    __tablename__ = "routing_decisions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ts = Column(String, nullable=False, default=lambda: datetime.now(timezone.utc).isoformat(), index=True)
+    profile = Column(String, nullable=False, index=True)
+    task = Column(String, nullable=False)
+    policy = Column(String, nullable=False)
+    action = Column(String, nullable=False)  # prefer | reorder | keep_default | explore | below_min_score
+    provider = Column(String, nullable=True)
+    model = Column(String, nullable=True)
+    score = Column(Float, nullable=True)
+    rules_json = Column(Text, nullable=True)   # JSON array of fired rule descriptions
+    from_provider = Column(String, nullable=True)
+    from_model = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+
+
 # ── Engine + session factory ───────────────────────────────────────────────
 
 def get_engine(db_path: str):
-    """Create SQLAlchemy engine with WAL mode for SQLite."""
+    """Create a SQLAlchemy engine with WAL mode for SQLite."""
     engine = create_engine(f"sqlite:///{db_path}", echo=False)
     # Enable WAL mode on connect
     from sqlalchemy import event

@@ -43,12 +43,16 @@ TASK_EXEMPLARS: dict[str, list[str]] = {
         "Add unit tests for the new module, including mocking the database.",
         "Create test cases for the API endpoint and assert the responses.",
         "Write a test for this bug to prevent regression.",
+        "Run the test suite and report which tests fail.",
     ],
     "code_generation": [
         "Write a Python function that parses this CSV file.",
         "Implement a REST endpoint in FastAPI that returns JSON.",
         "Create a bash script to deploy this service.",
         "Write a React component that renders a list of items.",
+        "Review this existing file and make the changes we discussed.",
+        "Refactor this function to be cleaner and update the callers.",
+        "Look at this code and fix the issue in this file.",
     ],
     "debugging": [
         "Why does this code throw a KeyError? Here is the traceback.",
@@ -106,7 +110,13 @@ class SemanticClassifier:
     keyword path.
     """
 
-    def __init__(self, embed=None, min_score: float = 0.15):
+    # Cosine-similarity floor for a semantic match to be trusted. A low value
+    # lets a generic coding message land on a broad centroid (e.g. unit_tests)
+    # even when the user's intent is clearly something else. High-confidence
+    # semantic matches only.
+    DEFAULT_MIN_SCORE = 0.35
+
+    def __init__(self, embed=None, min_score: float = DEFAULT_MIN_SCORE):
         self._embed = embed  # callable(texts: list[str]) -> list[list[float]]
         self._min_score = min_score
         self._centroids: Optional[dict[str, list[float]]] = None
@@ -226,7 +236,15 @@ def get_semantic_classifier() -> Optional[SemanticClassifier]:
         )
         if not _probe_embed(model.embed):
             return None
-        _classifier = SemanticClassifier(embed=model.embed)
+        # Gate the semantic path on a HIGH-confidence match so the deterministic
+        # keyword signals still win for clear intent; only genuinely ambiguous
+        # prompts fall through to meaning-based classification. Configurable via
+        # plugins.router.min_score.
+        min_score = float(
+            router_cfg.get("min_score", SemanticClassifier.DEFAULT_MIN_SCORE)
+            or SemanticClassifier.DEFAULT_MIN_SCORE
+        )
+        _classifier = SemanticClassifier(embed=model.embed, min_score=min_score)
     except Exception:
         _classifier = None
     return _classifier if (_classifier is not None and _classifier.available) else None
