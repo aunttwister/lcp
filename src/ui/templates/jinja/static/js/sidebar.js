@@ -1,51 +1,67 @@
-// ── Sidebar cache tools (refresh / clear) ──────────────────────────────
-function toggleSbCacheMenu(ev) {
+// ── Usage sidebar refresh (spin → check mark) ──────────────────────────
+// Clicking the ↻ on the Usage nav item re-scrapes the provider cache in the
+// background. The arrow spins while the request is in flight, then morphs
+// into a ✓ (or ! on failure) with a short fade/scale transition — never an
+// instant swap.
+var SB_REFRESH_MIN_SPIN = 700; // ms the ↻ keeps spinning before morphing
+var _sbUsageRefreshing = false;
+
+function sbUsageRefresh(ev) {
   ev.stopPropagation();
-  var menu = document.getElementById('sbCacheMenu');
-  if (!menu) return;
-  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
-}
+  var btn = document.getElementById('sbUsageRefreshBtn');
+  if (!btn || _sbUsageRefreshing) return;
+  _sbUsageRefreshing = true;
+  btn.classList.remove('is-done', 'is-error');
+  btn.classList.add('is-spinning');
 
-function closeSbCacheMenu() {
-  var menu = document.getElementById('sbCacheMenu');
-  if (menu) menu.style.display = 'none';
-}
+  var started = Date.now();
 
-document.addEventListener('click', function (ev) {
-  var wrap = document.getElementById('sbCacheWrap');
-  if (wrap && !wrap.contains(ev.target)) closeSbCacheMenu();
-});
+  function settle(ok) {
+    // Keep the arrow going around for at least SB_REFRESH_MIN_SPIN so the
+    // motion actually reads, then transition into the check mark.
+    var wait = Math.max(0, SB_REFRESH_MIN_SPIN - (Date.now() - started));
+    setTimeout(function () {
+      btn.classList.remove('is-spinning');
+      btn.classList.add('is-done');
+      btn.classList.toggle('is-error', !ok);
+      setSbRefreshIcon(btn, ok ? '✓' : '!');
+      setTimeout(function () {
+        btn.classList.remove('is-done', 'is-error');
+        setSbRefreshIcon(btn, '↻', false);
+        _sbUsageRefreshing = false;
+      }, 1400);
+    }, wait);
+  }
 
-function sbCacheFlash(msg) {
-  var btn = document.getElementById('sbCacheBtn');
-  if (!btn) return;
-  btn.textContent = msg;
-  setTimeout(function () { if (btn) btn.textContent = '↻'; }, 1200);
-}
-
-function sbCacheRefresh(ev) {
-  ev.stopPropagation();
-  closeSbCacheMenu();
   fetch('/api/settings/cache/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      sbCacheFlash(d.ok ? '✓' : '!');
+      settle(!!d.ok);
       if (!d.ok && d.error) alert('Refresh failed: ' + d.error);
     })
-    .catch(function (e) { sbCacheFlash('!'); });
+    .catch(function () { settle(false); });
 }
 
-function sbCacheClear(ev) {
-  ev.stopPropagation();
-  if (!confirm('Clear the cached provider data? The background worker will re-scrape shortly.')) return;
-  closeSbCacheMenu();
-  fetch('/api/settings/cache/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      sbCacheFlash(d.ok ? '✓' : '!');
-      if (!d.ok && d.error) alert('Clear failed: ' + d.error);
-    })
-    .catch(function (e) { sbCacheFlash('!'); });
+// Swap the icon glyph with a short fade/scale-in (animate) or instantly (not).
+function setSbRefreshIcon(btn, glyph, animate) {
+  var icon = btn.querySelector('.sb-usage-refresh-icon');
+  if (!icon) return;
+  icon.textContent = glyph;
+  if (animate === false) {
+    icon.style.transition = 'none';
+    icon.style.opacity = '1';
+    icon.style.transform = 'scale(1)';
+    return;
+  }
+  // Start hidden + small, force a reflow, then animate in so the check mark
+  // fades/scales in rather than appearing instantly.
+  icon.style.transition = 'none';
+  icon.style.opacity = '0';
+  icon.style.transform = 'scale(0.5)';
+  void icon.offsetWidth;
+  icon.style.transition = 'opacity 0.28s ease, transform 0.28s ease';
+  icon.style.opacity = '1';
+  icon.style.transform = 'scale(1)';
 }
 
 // Sidebar toggle — shared across all pages.

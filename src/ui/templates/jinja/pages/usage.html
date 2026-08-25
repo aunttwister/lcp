@@ -68,7 +68,6 @@
   <div style="display:flex;align-items:center;gap:0.5rem">
     <span class="muted" style="font-size:0.7rem" id="usageCacheStatus"></span>
     <button class="btn btn-outline btn-sm" onclick="usageCacheRefresh()" title="Re-scrape provider cache in the background">↻ Refresh now</button>
-    <button class="btn btn-outline btn-sm btn-danger" onclick="usageCacheClear()" title="Clear cached provider data (re-scrapes shortly)">Clear cache</button>
   </div>
 </div>
 
@@ -86,7 +85,7 @@
 {% block scripts %}
 <script>
 {% raw %}
-// ── Cache controls (refresh / clear on the Usage page) ───────────────────
+// ── Cache controls (refresh on the Usage page) ───────────────────────────
 function usageCacheStatus(msg) {
   var el = document.getElementById('usageCacheStatus');
   if (el) el.textContent = msg || '';
@@ -95,14 +94,6 @@ function usageCacheRefresh() {
   usageCacheStatus('Refreshing…');
   api('POST', '/api/settings/cache/refresh').then(function (d) {
     usageCacheStatus(d.ok ? 'Refreshing in background ✓' : ('Error: ' + (d.error || 'unknown')));
-    setTimeout(function () { usageCacheStatus(''); }, 4000);
-  }).catch(function (e) { usageCacheStatus('Error: ' + e.message); });
-}
-function usageCacheClear() {
-  if (!confirm('Clear the cached provider data? The background worker will re-scrape shortly.')) return;
-  usageCacheStatus('Clearing…');
-  api('POST', '/api/settings/cache/clear').then(function (d) {
-    usageCacheStatus(d.ok ? 'Cache cleared ✓' : ('Error: ' + (d.error || 'unknown')));
     setTimeout(function () { usageCacheStatus(''); }, 4000);
   }).catch(function (e) { usageCacheStatus('Error: ' + e.message); });
 }
