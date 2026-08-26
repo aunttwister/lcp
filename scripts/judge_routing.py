@@ -145,13 +145,14 @@ def cmd_replay(args) -> int:
     print("-" * 104)
     for d in decs:
         conv = json.loads(d["conversation_json"]) if d["conversation_json"] else None
-        re_task = re_path = None
+        re_task = re_path = re_intent = None
         if conv is None:
             flag = "NODATA"
         else:
             try:
                 detail = classify_task_detail(conv)
                 re_task, re_path = detail.task, detail.path
+                re_intent = (detail.intent_text or "").replace("\n", " ")[:60]
                 if not detail.intent_text:
                     flag = "NOINTENT"
                 else:
@@ -167,7 +168,11 @@ def cmd_replay(args) -> int:
             shown_task = d["task"]
         rec_path = d["path"] or "?"
         shown_path = f"{rec_path}→{re_path}" if (re_path and re_path != rec_path) else rec_path
+        # Show the RECORDED intent unless the row is flagged, in which case show
+        # the REPLAYED (current-code) intent so why-it-flagged is visible inline.
         intent = (d["intent_text"] or "").replace("\n", " ")[:52]
+        if flag in ("DRIFT", "NOINTENT") and re_intent:
+            intent = f"↳ {re_intent}"
         print(f"{d['id']:>5}  {d['ts'][:22]:<22} {shown_task:<14} {shown_path:<15} {flag:<8} {intent}")
     print("-" * 104)
     print("flags: " + ", ".join(f"{k}={v}" for k, v in flags.most_common()))
