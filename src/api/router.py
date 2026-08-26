@@ -164,7 +164,14 @@ _TOOL_RESULT_PREFIXES = (
 _CLIENT_CONTEXT_PREFIXES = (
     "<attachments", "<attachment", "<context", "<browser_pages",
     "<environment", "<todo", "<reminderinstructions",
+    # VS Code Copilot Chat artifacts sent as role="user" messages.
+    "[replying to:",  # reply-quote wrapper: [Replying to: "quoted"] real-request
+    "you just executed tool calls but returned an empty response",  # model feedback
 )
+
+# Username / participant prefix Copilot prepends to a message: "[alice] hi".
+# We STRIP the prefix (not skip the message) so the real instruction survives.
+_MENTION_PREFIX_RE = re.compile(r"^\[[^\]]+\]\s+", re.IGNORECASE)
 
 # System-prompt preambles that some clients mistakenly send as role="user"
 # messages (a schema violation). These carry no user intent — skip them like
@@ -282,11 +289,41 @@ def _matches_tool_result_patterns(text: str) -> bool:
 
 def _is_client_context(text: str) -> bool:
     """True when *text* is a client-injected context wrapper (attachments,
-    browser pages, env context) rather than a genuine user instruction."""
+    browser pages, env context, Copilot reply-quote / model-feedback) rather
+    than a genuine user instruction."""
     lower = (text or "").strip().lower()
     if not lower:
         return False
     return any(lower.startswith(p) for p in _CLIENT_CONTEXT_PREFIXES)
+
+
+def _context_tail(text: str) -> Optional[str]:
+    """When a ``[Replying to: "..."]`` wrapper is followed by a REAL instruction
+    on the next line, return that tail; the walk keeps it as the intent instead
+    of discarding the whole message.
+
+    Only the reply-quote wrapper can carry a following instruction — attachment /
+    browser-page / env wrappers are always skipped (their body is never intent).
+    """
+    if not _is_client_context(text):
+        return None
+    if not text.lower().lstrip().startswith("[replying to:"):
+        return None
+    raw = (text or "").strip()
+    nl = raw.find("\n")
+    if nl == -1:
+        return None
+    rest = raw[nl:].strip(" \n\t:-")
+    if not rest or rest.lower().lstrip() in _CONTINUATIONS:
+        return None
+    return rest
+
+
+def _strip_mention(text: str) -> str:
+    """Strip a leading ``[username]`` / ``[participant]`` prefix, keeping the
+    real instruction that follows (e.g. ``[aunttwister] can you set the SEO
+    job...`` -> ``can you set the SEO job...``)."""
+    return _MENTION_PREFIX_RE.sub("", text, count=1).strip()
 
 
 def _is_system_preamble(text: str) -> bool:
@@ -398,6 +435,11 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
             meta["skipped_tool"] += 1
             continue
         if _is_client_context(text):
+            tail = _context_tail(text)
+            if tail and tail.lower().lstrip() not in _CONTINUATIONS:
+                # A wrapper that appends a real instruction keeps the tail.
+                meta["source"] = "last_instruction"
+                return tail, meta
             # Attachments / browser pages / env context are not instructions —
             # keep walking back to the real user message.
             meta["skipped_context"] += 1
@@ -418,9 +460,11 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
             meta["skipped_cont"] += 1
             continue
         meta["source"] = "last_instruction"
-        return text.strip(), meta
+        stripped = _strip_mention(text)
+        return (stripped or text).strip(), meta
     meta["source"] = "first_user_fallback"
-    return first_user_text.strip(), meta
+    stripped = _strip_mention(first_user_text)
+    return (stripped or first_user_text).strip(), meta
 
 
 @dataclass

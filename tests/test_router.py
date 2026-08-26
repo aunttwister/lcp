@@ -294,6 +294,58 @@ def test_extract_intent_text_combined_preamble_keeps_tail():
     assert "plan the next feature" in text
     assert not text.startswith("You are an expert")
 
+def test_extract_intent_text_strips_mention_prefix():
+    """Copilot prefixes replies with [username] — the real request follows and
+    must be kept (with the prefix stripped)."""
+    from src.api.router import _extract_intent_text
+    msgs = [{"role": "user", "content":
+             "[aunttwister] can you set the SEO job that scans the blog for issues?"}]
+    text, meta = _extract_intent_text(msgs)
+    assert meta["source"] == "last_instruction"
+    assert text.startswith("can you set the SEO job")
+    assert not text.startswith("[")
+
+def test_extract_intent_text_skips_reply_quote_wrapper():
+    """Copilot's [Replying to: \"...\"] wrapper (sent as role=user) is not an
+    instruction — the walk skips it and finds the real user message."""
+    from src.api.router import _extract_intent_text
+    msgs = [
+        {"role": "user", "content": "can you help me bring up a qwen3.8 model locally?"},
+        {"role": "assistant", "content": "sure, here's how..."},
+        {"role": "user", "content": "[Replying to: \"can you help me bring up a qwen3.8 model locally?\"]"},
+    ]
+    text, meta = _extract_intent_text(msgs)
+    # The wrapper carries no new instruction → walk finds the real user msg.
+    assert meta["source"] == "last_instruction"
+    assert text == "can you help me bring up a qwen3.8 model locally?"
+
+def test_extract_intent_text_reply_quote_keeps_tail_instruction():
+    """A [Replying to: ...] wrapper that appends a NEW instruction on the next
+    line keeps that instruction as the intent."""
+    from src.api.router import _extract_intent_text
+    msgs = [
+        {"role": "user", "content": "can you help me bring up a qwen3.8 model locally?"},
+        {"role": "assistant", "content": "sure, here's how..."},
+        {"role": "user", "content": "[Replying to: \"can you help me bring up a qwen3.8 model locally?\"]\n\nand also configure the port"},
+    ]
+    text, meta = _extract_intent_text(msgs)
+    assert meta["source"] == "last_instruction"
+    assert "and also configure the port" in text
+
+def test_extract_intent_text_skips_empty_tool_response_feedback():
+    """Copilot's 'You just executed tool calls but returned an empty response.'
+    model-feedback message is not user intent."""
+    from src.api.router import _extract_intent_text
+    msgs = [
+        {"role": "user", "content": "write pytest tests for the router"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "run", "arguments": "{}"}}]},
+        {"role": "user", "content": "You just executed tool calls but returned an empty response."},
+    ]
+    text, meta = _extract_intent_text(msgs)
+    assert text == "write pytest tests for the router"
+    assert meta["source"] == "last_instruction"
+
 def test_classify_agentic_system_prompt_only_still_agentic():
     """With no concrete user task, the agentic system prompt still wins."""
     msgs = [{"role": "system", "content": "You are an AI agent with tools: read_file, write_file"}]
