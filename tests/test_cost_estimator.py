@@ -52,6 +52,18 @@ def test_count_tokens_vision_content():
     # "describe this image" = 3 tokens + overhead
     assert n >= 6
 
+def test_count_tokens_special_token_does_not_raise():
+    """Regression: text containing a special token like <|endoftext|> must not
+    crash token counting (tiktoken >=0.13 defaults disallowed_special='all')."""
+    n = count_tokens([{"role": "user", "content": "some code <|endoftext|> here"}])
+    assert n >= 5  # 4 overhead + at least 1 content token
+
+def test_count_tokens_special_token_in_tools():
+    """Special tokens inside tool payloads must not crash either."""
+    tools = [{"type": "function", "function": {"name": "run", "parameters": {"query": "<|endoftext|>"}}}]
+    n = count_tokens([{"role": "user", "content": "go"}], tools)
+    assert n >= 4
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # estimate_cost

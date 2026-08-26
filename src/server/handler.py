@@ -567,13 +567,23 @@ class LCPHandler(
             pricing = _resolve_pricing(
                 self.config, primary_step["provider"], primary_step["model"]
             )
-            estimation = estimate_from_request(
-                primary_step["model"],
-                body.get("messages", []),
-                body.get("tools"),
-                body.get("max_tokens", 1024),
-                pricing,
-            )
+            try:
+                estimation = estimate_from_request(
+                    primary_step["model"],
+                    body.get("messages", []),
+                    body.get("tools"),
+                    body.get("max_tokens", 1024),
+                    pricing,
+                )
+            except Exception:  # noqa: BLE001 — estimation must never break a request
+                estimation = {
+                    "input_tokens": 0,
+                    "estimated_output_tokens": 0,
+                    "estimated_input_cost": 0.0,
+                    "estimated_output_cost": 0.0,
+                    "estimated_total_cost": 0.0,
+                    "currency": "USD",
+                }
 
             # Prompt cache check (skip cache for streaming requests - cached JSON cannot satisfy SSE)
             cache = get_prompt_cache()

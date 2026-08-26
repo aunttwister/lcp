@@ -27,6 +27,24 @@ _DEFAULT_PRICING = {
 _ENCODING = tiktoken.get_encoding("cl100k_base")
 
 
+def _count_text(text: str) -> int:
+    """Token-count *text* without ever raising on special tokens.
+
+    tiktoken's ``encode`` defaults to ``disallowed_special='all'`` (since
+    ~0.13), which raises ``ValueError`` when the text literally contains a
+    special token such as ``<|endoftext|>`` (common in pasted code, model
+    echoes, or tokenizer-injected text). Token counting must never crash a
+    request, so special tokens are treated as ordinary text.
+    """
+    if not text:
+        return 0
+    try:
+        return len(_ENCODING.encode(text, disallowed_special=()))
+    except Exception:  # noqa: BLE001 — a count is never worth a 500
+        # Approximate fallback (1 token ≈ 4 chars) if the tokenizer is unhappy.
+        return max(len(text) // 4, 1)
+
+
 def count_tokens(messages: list[dict], tools: Optional[list[dict]] = None) -> int:
     """Count tokens using the cl100k_base BPE encoding.
 
@@ -39,15 +57,15 @@ def count_tokens(messages: list[dict], tools: Optional[list[dict]] = None) -> in
         token_count += 4  # approximate per-message overhead
         content = msg.get("content", "")
         if isinstance(content, str):
-            token_count += len(_ENCODING.encode(content))
+            token_count += _count_text(content)
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
-                    token_count += len(_ENCODING.encode(block.get("text", "")))
+                    token_count += _count_text(block.get("text", ""))
 
     if tools:
         for tool in tools:
-            token_count += len(_ENCODING.encode(str(tool)))
+            token_count += _count_text(str(tool))
 
     return token_count
 
