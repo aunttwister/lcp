@@ -66,6 +66,34 @@ def _session(db_path):
     return get_session(get_engine(db_path))
 
 
+def _require_decisions_table(db_path):
+    """Fail loudly (with the resolved path) when the target DB has no
+    ``routing_decisions`` table, instead of a confusing SQLAlchemy traceback.
+
+    Also runs create_all when the table is missing AND we can reach the gateway
+    DB the same way the app does — but only when the file clearly is the app DB
+    (i.e. the app's other tables exist). A truly empty file is almost always a
+    wrong path, so we report it rather than guess.
+    """
+    import os
+    from sqlalchemy import inspect
+    from src.api.models import get_engine
+    if not os.path.exists(db_path):
+        raise SystemExit(f"DB not found: {db_path!r}. Check COST_DB / --db.")
+    engine = get_engine(db_path)
+    tables = set(inspect(engine).get_table_names())
+    if "routing_decisions" in tables:
+        return
+    raise SystemExit(
+        f"DB {db_path!r} has no 'routing_decisions' table "
+        f"(tables: {sorted(tables)[:12]}...). "
+        "This is usually the wrong DB path. Inside the container use:\n"
+        "  docker compose exec lcp python3 scripts/judge_routing.py replay\n"
+        "(the container sets COST_DB=/app/data/costs.db for the gateway).\n"
+        "Or pass --db <path> explicitly."
+    )
+
+
 def _decisions(db_path, limit, since=None, profile=None):
     """Return the newest decisions as dicts (id desc), with filters."""
     from src.api.models import RoutingDecision
@@ -94,6 +122,7 @@ def _judged_ids(db_path):
 # ── replay ──────────────────────────────────────────────────────────────────
 
 def cmd_replay(args) -> int:
+    _require_decisions_table(args.db)
     decs = _decisions(args.db, args.limit, args.since, args.profile)
     if not decs:
         print("No routing decisions found.")
@@ -142,6 +171,7 @@ def cmd_replay(args) -> int:
 # ── pending ─────────────────────────────────────────────────────────────────
 
 def cmd_pending(args) -> int:
+    _require_decisions_table(args.db)
     from src.api.models import RoutingDecision
     with _session(args.db) as s:
         total = s.query(RoutingDecision).count()
@@ -159,6 +189,7 @@ def cmd_pending(args) -> int:
 # ── review ──────────────────────────────────────────────────────────────────
 
 def cmd_review(args) -> int:
+    _require_decisions_table(args.db)
     from src.api.models import RoutingJudgment
     decs = _decisions(args.db, args.limit, args.since, args.profile)
     judged = _judged_ids(args.db)
@@ -218,6 +249,7 @@ def _accuracy(c: Counter):
 
 
 def cmd_report(args) -> int:
+    _require_decisions_table(args.db)
     from src.api.models import RoutingDecision, RoutingJudgment
     with _session(args.db) as s:
         rows = s.query(RoutingJudgment).order_by(RoutingJudgment.id.asc()).all()
