@@ -126,6 +126,11 @@ class SemanticClassifier:
     def available(self) -> bool:
         return self._embed is not None
 
+    @property
+    def min_score(self) -> float:
+        """The effective cosine gate applied by ``classify()`` (read-only)."""
+        return self._min_score
+
     def _build_centroids(self) -> None:
         if self._centroids is not None or not self.available:
             return
@@ -152,6 +157,29 @@ class SemanticClassifier:
             centroids[task] = [x / norm for x in centroid]
         self._centroids = centroids if centroids else {}
 
+    def top_scores(self, text: str, k: int = 5) -> list[tuple[str, float]]:
+        """Return the top-k ``(task, cosine)`` pairs for *text*, sorted desc.
+
+        Returns ``[]`` when the embedder is unavailable or embedding fails.
+        Does NOT apply the ``min_score`` gate — the caller decides, so the
+        router can surface near-threshold scores for observability.
+        """
+        if not self.available or not text:
+            return []
+        self._build_centroids()
+        if not self._centroids:
+            return []
+        try:
+            vec = self._embed([text])[0]  # type: ignore[misc]
+        except Exception:
+            return []
+        scored = sorted(
+            ((task, _cosine(vec, centroid))
+             for task, centroid in self._centroids.items()),
+            key=lambda x: -x[1],
+        )
+        return scored[:k]
+
     def classify(self, text: str) -> Optional[str]:
         """Return the best task for *text*, or None when unavailable/uncertain.
 
@@ -164,18 +192,11 @@ class SemanticClassifier:
         self._build_centroids()
         if not self._centroids:
             return None
-        try:
-            vec = self._embed([text])[0]  # type: ignore[misc]
-        except Exception:
+        scores = self.top_scores(text, 1)
+        if not scores:
             return None
-        best_task: Optional[str] = None
-        best_score = 0.0
-        for task, centroid in self._centroids.items():
-            s = _cosine(vec, centroid)
-            if s > best_score:
-                best_score = s
-                best_task = task
-        if best_task is None or best_score < self._min_score:
+        best_task, best_score = scores[0]
+        if best_score < self._min_score:
             return None
         return best_task
 

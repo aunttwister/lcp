@@ -1132,3 +1132,134 @@ def test_init_router_warm_cache(registry_db):
     assert router_mod.get_dynamic_router().enabled is True
     # Restore for other tests.
     router_mod.init_router(db_path=registry_db, enabled=False)
+
+
+# ── Observability + judgment: classify_task_detail, summarize, rationale ────
+
+def test_classify_task_detail_keyword_path():
+    from src.api.router import classify_task_detail
+    msgs = [{"role": "user", "content": "debug why this returns a TypeError"}]
+    detail = classify_task_detail(msgs)
+    assert detail.task == "debugging"
+    assert detail.path == "keyword:debugging"
+    assert detail.keyword and detail.keyword in ("debug", "error", "exception")
+    assert "TypeError" in detail.intent_text
+    assert detail.intent_meta is not None
+
+
+def test_classify_task_detail_default_path(monkeypatch):
+    # Deterministic: disable the semantic path so we exercise the fallback
+    # chain (with the real embedder installed, semantics usually win).
+    from src.api.router import classify_task_detail
+    from src.api import task_classifier as tc
+    monkeypatch.setattr(tc, "get_semantic_classifier", lambda: None)
+    msgs = [{"role": "user", "content": "review the current state of things in this workspace"}]
+    detail = classify_task_detail(msgs)
+    assert detail.task == "code_generation"
+    assert detail.path == "default"
+    assert detail.semantic is None
+    assert detail.sem_available is False
+
+
+def test_classify_task_detail_agentic_prompt_path():
+    from src.api.router import classify_task_detail
+    msgs = [{"role": "system",
+             "content": "You are an AI agent with tools: read_file, write_file, terminal, patch, bash, curl"}]
+    detail = classify_task_detail(msgs)
+    assert detail.task == "agentic_multi_step"
+    assert detail.path == "agentic_prompt"
+
+
+def test_classify_task_detail_semantic_path(monkeypatch):
+    from src.api.router import classify_task_detail
+    from src.api import task_classifier as tc
+
+    class FakeClf:
+        min_score = 0.3
+        def top_scores(self, text, k=5):
+            return [("unit_tests", 0.9), ("code_generation", 0.4)]
+
+    monkeypatch.setattr(tc, "get_semantic_classifier", lambda: FakeClf())
+    detail = classify_task_detail([{"role": "user", "content": "zzz qqq some tests"}])
+    assert detail.task == "unit_tests"
+    assert detail.path == "semantic"
+    assert detail.sem_available is True
+    assert detail.min_score == 0.3
+    assert detail.semantic == [("unit_tests", 0.9), ("code_generation", 0.4)]
+
+
+def test_classify_task_is_thin_wrapper():
+    from src.api.router import classify_task_detail
+    msgs = [{"role": "user", "content": "debug this traceback please"}]
+    assert classify_task(msgs) == classify_task_detail(msgs).task
+
+
+def test_summarize_conversation_preserves_tool_shape():
+    from src.api.router import _summarize_conversation
+    msgs = [
+        {"role": "system", "content": "You are a coding agent. tools: terminal, patch"},
+        {"role": "user", "content": "debug this failing test"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "call_1", "type": "function",
+                         "function": {"name": "run_tests", "arguments": '{"cmd": "pytest"}'}}]},
+        {"role": "user", "content": "[tool result] Ran 12 tests, 3 failed. " + "x" * 500,
+         "tool_call_id": "call_1"},
+    ]
+    s = _summarize_conversation(msgs)
+    assert [m["role"] for m in s] == ["system", "user", "assistant", "user"]
+    assert s[2]["tool_calls"][0]["id"] == "call_1"
+    assert s[2]["tool_calls"][0]["function"]["name"] == "run_tests"
+    assert s[3]["tool_call_id"] == "call_1"
+    # Trimmed from the END keeps the leading tool-result marker.
+    assert s[3]["content"].startswith("[tool result]")
+    assert "… [" in s[3]["content"] and "chars omitted]" in s[3]["content"]
+
+
+def test_summarize_conversation_roundtrip_intent():
+    from src.api.router import _summarize_conversation, _extract_intent_text
+    msgs = [
+        {"role": "system", "content": "You are a coding agent. tools: terminal"},
+        {"role": "user", "content": "debug this error in the code"},
+        {"role": "assistant", "content": "Let me reproduce.",
+         "tool_calls": [{"id": "call_9", "type": "function", "function": {"name": "run", "arguments": "{}"}}]},
+        {"role": "user", "content": "[tool result] Ran 12 tests, 3 failed", "tool_call_id": "call_9"},
+    ]
+    summarized = _summarize_conversation(msgs)
+    assert _extract_intent_text(msgs) == _extract_intent_text(summarized)
+
+
+def test_summarize_conversation_drops_oldest_when_huge():
+    import json
+    from src.api.router import _summarize_conversation
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "y" * 2000},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "write pytest tests now"},
+    ]
+    s = _summarize_conversation(msgs, max_content=50, max_total=800)
+    blob = json.dumps(s)
+    assert "pytest tests" in blob  # newest intent survives
+    assert any(isinstance(m.get("content"), str) and "omitted" in m["content"] for m in s)
+
+
+def test_record_decision_persists_rationale_and_conversation(registry_db):
+    import json
+    from src.api.router import CapabilityRouter, classify_task_detail, _extract_intent_text
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    msgs = [{"role": "user", "content": "debug this traceback"}]
+    detail = classify_task_detail(msgs)
+    router._record_decision({
+        **router._decision_base(detail, msgs, "l2", "eager", "note here", ["prefer"]),
+        "action": "prefer", "model": "deepseek-v4-pro", "provider": "commandcode",
+        "score": 0.85,
+    })
+    decs = router.recent_decisions(5)
+    assert decs and decs[0]["task"] == "debugging"
+    assert decs[0]["path"] == "keyword:debugging"
+    assert decs[0]["keyword"] and decs[0]["intent_text"]
+    assert decs[0]["note"] == "note here"
+    assert decs[0]["profile"] == "l2"
+    assert decs[0]["conversation_json"]
+    conv = json.loads(decs[0]["conversation_json"])
+    assert _extract_intent_text(conv)[0] == "debug this traceback"

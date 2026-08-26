@@ -12,7 +12,9 @@ the best fit.
 
 from __future__ import annotations
 
+import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -330,6 +332,155 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
     return first_user_text.strip(), meta
 
 
+@dataclass
+class ClassifyResult:
+    """Full rationale for a routing classification decision.
+
+    ``task`` is the final task string (the only thing the old ``classify_task``
+    returned); the rest explains WHY, so a decision can be replayed and judged
+    later.
+    """
+    task: str
+    path: str                     # keyword:<task> | semantic | agentic_prompt |
+                                  #   tool_count | token_count | casual | default
+    keyword: Optional[str] = None  # exact TASK_SIGNALS keyword matched (or None)
+    intent_text: str = ""          # the "newest genuine user instruction" classified
+    intent_meta: Optional[dict] = None  # {source, skipped_tool, skipped_cont}
+    semantic: Optional[list] = None     # top-N (task, score) or None
+    min_score: Optional[float] = None   # semantic gate applied (or None)
+    sem_available: bool = False         # embedder was up
+    tool_count: int = 0
+    token_count: int = 0
+
+
+def classify_task_detail(
+    messages: list[dict],
+    tools: Optional[list[dict]] = None,
+    max_tokens: int = 1024,
+) -> ClassifyResult:
+    """Classify a request into a task type, returning the FULL rationale.
+
+    Same decision order as ``classify_task`` (task strings are identical) but
+    also records which stage won (``path``), the matched keyword, the intent
+    message, and the semantic scores. See ``classify_task`` for the strategy
+    details.
+    """
+    # Gather USER text and the FULL conversation text (user + assistant + tool)
+    # for casual detection. Neither includes the system prompt.
+    user_text = ""
+    combined = ""
+    for msg in messages or []:
+        if msg.get("role") == "system":
+            continue
+        chunk = _content_text(msg).lower() + " "
+        combined += chunk
+        if msg.get("role") == "user":
+            user_text += chunk
+
+    system_text = ""
+    if messages and messages[0].get("role") == "system":
+        content = messages[0].get("content", "")
+        if isinstance(content, str):
+            system_text = content.lower()
+
+    # 1. The CURRENT intent: the newest GENUINE user instruction. We walk the
+    #    conversation backward, skipping assistant/system/tool messages, tool
+    #    results that some clients send with role="user" (a schema violation —
+    #    their "[tool result] Ran 12 tests" echoes hijack intent), and
+    #    continuation acknowledgements ("continue", "yes", …) which carry no
+    #    new intent. A mid-session "let's plan the next feature" therefore
+    #    reclassifies instead of inheriting the first message's task forever.
+    intent_text_raw, intent_meta = _extract_intent_text(messages or [])
+    intent_lc = intent_text_raw.strip().lower() or user_text.strip()
+    intent_text = intent_text_raw.strip() or user_text.strip()
+
+    tool_count = len(tools) if tools else 0
+
+    # 1. Keyword signals over the CURRENT intent.
+    for task in _SPECIFIC_TASKS:
+        for kw in TASK_SIGNALS[task]:
+            if kw in intent_lc:
+                return ClassifyResult(
+                    task=task, path=f"keyword:{task}", keyword=kw,
+                    intent_text=intent_text, intent_meta=intent_meta,
+                    tool_count=tool_count,
+                )
+
+    # 1b. Semantic classification (embedding-based) — runs when no keyword
+    #     matched, so meaning (not exact keywords) drives the task type. The
+    #     top-N scores are exposed regardless of whether the gate passes.
+    semantic: Optional[list] = None
+    min_score: Optional[float] = None
+    sem_available = False
+    try:
+        from .task_classifier import get_semantic_classifier
+        clf = get_semantic_classifier()
+        if clf is not None and intent_lc.strip():
+            sem_available = True
+            min_score = clf.min_score
+            scores = clf.top_scores(intent_lc.strip(), 5)
+            if scores:
+                semantic = [(t, round(s, 4)) for t, s in scores]
+                if scores[0][1] >= clf.min_score:
+                    return ClassifyResult(
+                        task=scores[0][0], path="semantic",
+                        intent_text=intent_text, intent_meta=intent_meta,
+                        semantic=semantic, min_score=min_score,
+                        sem_available=True, tool_count=tool_count,
+                    )
+    except Exception:  # noqa: BLE001 — never let classification break routing
+        pass
+
+    # 2. Agentic system prompt — the generic agent preamble.
+    for kw in TASK_SIGNALS["agentic_multi_step"]:
+        if kw in system_text:
+            return ClassifyResult(
+                task="agentic_multi_step", path="agentic_prompt", keyword=kw,
+                intent_text=intent_text, intent_meta=intent_meta,
+                semantic=semantic, min_score=min_score,
+                sem_available=sem_available, tool_count=tool_count,
+            )
+
+    # Tool count signal — many tools = agentic
+    if tool_count > 5:
+        return ClassifyResult(
+            task="agentic_multi_step", path="tool_count",
+            intent_text=intent_text, intent_meta=intent_meta,
+            semantic=semantic, min_score=min_score,
+            sem_available=sem_available, tool_count=tool_count,
+        )
+
+    # Token count signal — very long prompt = research_deep
+    token_count = count_tokens(messages, tools)
+    if token_count > 8000:
+        return ClassifyResult(
+            task="research_deep", path="token_count",
+            intent_text=intent_text, intent_meta=intent_meta,
+            semantic=semantic, min_score=min_score,
+            sem_available=sem_available, tool_count=tool_count,
+            token_count=token_count,
+        )
+
+    # Check casual signals over the full conversation (casual is harmless and
+    # the user may have greeted before the assistant/tool context).
+    for kw in CASUAL_SIGNALS:
+        if kw in combined:
+            return ClassifyResult(
+                task="casual_chat", path="casual", keyword=kw,
+                intent_text=intent_text, intent_meta=intent_meta,
+                semantic=semantic, min_score=min_score,
+                sem_available=sem_available, tool_count=tool_count,
+            )
+
+    # Default: the most common LCP use case is agentic coding
+    return ClassifyResult(
+        task="code_generation", path="default",
+        intent_text=intent_text, intent_meta=intent_meta,
+        semantic=semantic, min_score=min_score,
+        sem_available=sem_available, tool_count=tool_count,
+    )
+
+
 def classify_task(
     messages: list[dict],
     tools: Optional[list[dict]] = None,
@@ -360,75 +511,92 @@ def classify_task(
     meaningful markers there. Likewise, a long ``max_tokens`` no longer forces
     ``planning`` (an agent implementing code often requests a large output
     budget, which is not a planning signal).
+
+    Returns only the task string; use ``classify_task_detail`` for the full
+    rationale.
     """
-    # Gather USER text and the FULL conversation text (user + assistant + tool)
-    # for casual detection. Neither includes the system prompt.
-    user_text = ""
-    combined = ""
-    for msg in messages or []:
-        if msg.get("role") == "system":
-            continue
-        chunk = _content_text(msg).lower() + " "
-        combined += chunk
-        if msg.get("role") == "user":
-            user_text += chunk
+    return classify_task_detail(messages, tools, max_tokens).task
 
-    system_text = ""
-    if messages and messages[0].get("role") == "system":
-        content = messages[0].get("content", "")
+
+def _summarize_conversation(
+    messages: list[dict],
+    max_content: int = 200,
+    max_total: int = 4000,
+) -> list[dict]:
+    """Return a shape-preserving, content-trimmed copy of *messages*.
+
+    Keeps ``role``, ``tool_calls`` (id + name + trimmed args) and
+    ``tool_call_id`` so the structural checks in ``_extract_intent_text``
+    behave identically when the summary is replayed. Content is trimmed from
+    the END so leading tool-result markers (``[tool result]``, ``<tool_result``,
+    ...) survive the trim. If the serialized size still exceeds ``max_total``,
+    the OLDEST messages are dropped (the intent walk is newest-first) and a
+    placeholder system message records how many were dropped.
+    """
+
+    def _trim(text, limit):
+        if not text:
+            return ""
+        text = str(text)
+        if len(text) <= limit:
+            return text
+        return text[:limit] + f"… [{len(text) - limit} chars omitted]"
+
+    def _one(msg):
+        out = {}
+        if msg.get("role") is not None:
+            out["role"] = msg["role"]
+        content = msg.get("content")
         if isinstance(content, str):
-            system_text = content.lower()
+            if content.strip():
+                out["content"] = _trim(content, max_content)
+        elif isinstance(content, list):
+            blocks = []
+            for b in content[:8]:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "tool_result":
+                    blocks.append({"type": "tool_result",
+                                   "content": _trim(_content_text(b), 120)})
+                elif b.get("type") == "text" and b.get("text"):
+                    blocks.append({"type": "text", "text": _trim(b["text"], max_content)})
+                elif b.get("type") == "image_url":
+                    blocks.append({"type": "image_url"})
+                else:
+                    blocks.append({"type": b.get("type", "unknown")})
+            if blocks:
+                out["content"] = blocks
+        if msg.get("tool_call_id"):
+            out["tool_call_id"] = msg["tool_call_id"]
+        tcs = msg.get("tool_calls")
+        if isinstance(tcs, list) and tcs:
+            kept = []
+            for tc in tcs[:8]:
+                if not isinstance(tc, dict):
+                    continue
+                item = {"id": tc.get("id", "")}
+                if tc.get("type"):
+                    item["type"] = tc["type"]
+                fn = tc.get("function") or {}
+                if fn:
+                    item["function"] = {"name": fn.get("name", "")}
+                    if fn.get("arguments"):
+                        item["function"]["arguments"] = _trim(str(fn["arguments"]), max_content)
+                kept.append(item)
+            if kept:
+                out["tool_calls"] = kept
+        return out
 
-    # 1. The CURRENT intent: the newest GENUINE user instruction. We walk the
-    #    conversation backward, skipping assistant/system/tool messages, tool
-    #    results that some clients send with role="user" (a schema violation —
-    #    their "[tool result] Ran 12 tests" echoes hijack intent), and
-    #    continuation acknowledgements ("continue", "yes", …) which carry no
-    #    new intent. A mid-session "let's plan the next feature" therefore
-    #    reclassifies instead of inheriting the first message's task forever.
-    intent_text, _intent_meta = _extract_intent_text(messages or [])
-    intent_text = intent_text.strip().lower() or user_text.strip()
-    for task in _SPECIFIC_TASKS:
-        for kw in TASK_SIGNALS[task]:
-            if kw in intent_text:
-                return task
-
-    # 1b. Semantic classification (embedding-based) — runs FIRST for
-    #     conversational intent when the embedder is available, so meaning (not
-    #     exact keywords) drives the task type. Classifies the FIRST user turn.
-    try:
-        from .task_classifier import get_semantic_classifier
-        clf = get_semantic_classifier()
-        if clf is not None and intent_text.strip():
-            task = clf.classify(intent_text.strip())
-            if task is not None:
-                return task
-    except Exception:  # noqa: BLE001 — never let classification break routing
-        pass
-
-    # 2. Agentic system prompt — the generic agent preamble.
-    for kw in TASK_SIGNALS["agentic_multi_step"]:
-        if kw in system_text:
-            return "agentic_multi_step"
-
-    # Tool count signal — many tools = agentic
-    tool_count = len(tools) if tools else 0
-    if tool_count > 5:
-        return "agentic_multi_step"
-
-    # Token count signal — very long prompt = long_document
-    token_count = count_tokens(messages, tools)
-    if token_count > 8000:
-        return "research_deep"
-
-    # Check casual signals over the full conversation (casual is harmless and
-    # the user may have greeted before the assistant/tool context).
-    for kw in CASUAL_SIGNALS:
-        if kw in combined:
-            return "casual_chat"
-
-    # Default: the most common LCP use case is agentic coding
-    return "code_generation"
+    summarized = [_one(m) for m in (messages or [])]
+    if not summarized:
+        return []
+    dropped = 0
+    while len(summarized) > 1 and len(json.dumps(summarized, ensure_ascii=False)) > max_total:
+        summarized = summarized[1:]
+        dropped += 1
+    if dropped:
+        summarized.insert(0, {"role": "system", "content": f"[{dropped} older messages omitted]"})
+    return summarized
 
 
 # ── CapabilityRouter — DB-backed, task-classifying, N-model scorer ────────────
@@ -685,6 +853,31 @@ class CapabilityRouter:
             pass
         return self.enabled
 
+    def _decision_base(self, detail, messages, profile, policy, note, fired_desc) -> dict:
+        """Shared decision fields for every ``_record_decision`` site.
+
+        Carries the routing rationale (path, keyword, intent text, semantic
+        top-N, semantic gate) plus a shape-preserving summary of the classified
+        conversation so a decision can be replayed and judged later. All six
+        ``select_step`` record sites merge this base with their action-specific
+        fields, keeping the decision log consistent as the routing logic evolves.
+        """
+        return {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "profile": profile or "",
+            "task": detail.task,
+            "policy": policy,
+            "rules": fired_desc,
+            "note": note,
+            "path": detail.path,
+            "keyword": detail.keyword,
+            "intent_text": (detail.intent_text or "")[:500],
+            "semantic_json": json.dumps(detail.semantic) if detail.semantic else None,
+            "min_score": detail.min_score,
+            "sem_available": detail.sem_available,
+            "conversation_json": json.dumps(_summarize_conversation(messages), ensure_ascii=False),
+        }
+
     def _record_decision(self, decision: dict) -> None:
         self._decisions.append(decision)
         if len(self._decisions) > 50:
@@ -709,6 +902,13 @@ class CapabilityRouter:
                     from_provider=decision.get("from_provider"),
                     from_model=decision.get("from_model"),
                     note=decision.get("note"),
+                    path=decision.get("path"),
+                    keyword=decision.get("keyword"),
+                    intent_text=decision.get("intent_text"),
+                    semantic_json=decision.get("semantic_json"),
+                    min_score=decision.get("min_score"),
+                    sem_available=decision.get("sem_available"),
+                    conversation_json=decision.get("conversation_json"),
                 ))
                 session.commit()
         except Exception:  # noqa: BLE001 — persistence must never break routing
@@ -741,6 +941,11 @@ class CapabilityRouter:
                         "rules": _json.loads(r.rules_json) if r.rules_json else [],
                         "from_provider": r.from_provider, "from_model": r.from_model,
                         "note": r.note,
+                        "path": r.path, "keyword": r.keyword,
+                        "intent_text": r.intent_text,
+                        "semantic_json": r.semantic_json,
+                        "min_score": r.min_score, "sem_available": r.sem_available,
+                        "conversation_json": r.conversation_json,
                     } for r in rows]
         except Exception:  # noqa: BLE001 — fall back to in-memory
             pass
@@ -1108,7 +1313,8 @@ class CapabilityRouter:
             policy, min_score = self._effective_policy(config, profile)
         except TypeError:
             policy, min_score = self._effective_policy(config)
-        task = classify_task(messages, tools, max_tokens)
+        detail = classify_task_detail(messages, tools, max_tokens)
+        task = detail.task
 
         # The circuit breaker only GATES PROVIDERS; the router owns model
         # selection and ordering. Drop steps whose provider is currently
@@ -1162,12 +1368,10 @@ class CapabilityRouter:
         if "prefer" in fired_desc:
             pinned = chain[0]
             self._record_decision({
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "profile": profile or "", "task": task, "policy": policy,
+                **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
                 "action": "prefer", "model": pinned["model"],
                 "provider": pinned["provider"],
                 "score": round(self.score_step(pinned, task, profile, config), 3),
-                "rules": fired_desc, "note": note,
             })
             return chain
 
@@ -1185,11 +1389,9 @@ class CapabilityRouter:
         default_score = next((s for s, i, _ in scored if i == 0), best_score)
         if best_score < min_score:
             self._record_decision({
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "profile": profile or "", "task": task, "policy": policy,
+                **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
                 "action": "below_min_score", "model": best["model"],
                 "provider": best["provider"], "score": round(best_score, 3),
-                "rules": fired_desc, "note": note,
             })
             return None
 
@@ -1204,29 +1406,23 @@ class CapabilityRouter:
                 if pick_idx != 0:
                     rest = [st for i, st in enumerate(chain) if i != pick_idx]
                     self._record_decision({
-                        "ts": datetime.now(timezone.utc).isoformat(),
-                        "profile": profile or "", "task": task, "policy": policy,
+                        **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
                         "action": "explore", "model": pick["model"],
                         "provider": pick["provider"], "score": round(picked_score, 3),
-                        "rules": fired_desc, "note": note,
                     })
                     return [pick, *rest]
                 self._record_decision({
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                    "profile": profile or "", "task": task, "policy": policy,
+                    **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
                     "action": "keep_default", "model": chain[0]["model"],
                     "provider": chain[0]["provider"], "score": round(best_score, 3),
-                    "rules": fired_desc, "note": note,
                 })
                 return None
 
         if best_idx == 0 or best_score <= default_score + _HYSTERESIS:
             self._record_decision({
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "profile": profile or "", "task": task, "policy": policy,
+                **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
                 "action": "keep_default", "model": chain[0]["model"],
                 "provider": chain[0]["provider"], "score": round(default_score, 3),
-                "rules": fired_desc, "note": note,
             })
             return None
 
@@ -1240,12 +1436,10 @@ class CapabilityRouter:
             recommended_score=round(best_score, 3),
         )
         self._record_decision({
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "profile": profile or "", "task": task, "policy": policy,
+            **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
             "action": "reorder", "model": best["model"],
             "provider": best["provider"], "score": round(best_score, 3),
             "from_model": chain[0]["model"], "from_provider": chain[0]["provider"],
-            "rules": fired_desc, "note": note,
         })
         return [best, *rest]
 

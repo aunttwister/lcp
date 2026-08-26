@@ -118,6 +118,33 @@ class TestGetClassifier:
         assert get_semantic_classifier() is None
         invalidate_semantic_classifier()
 
+
+class TestTopScores:
+    def test_sorted_desc_and_capped(self, classifier):
+        scores = classifier.top_scores("write a unit test with pytest", 3)
+        assert scores[0][0] == "unit_tests"
+        assert scores == sorted(scores, key=lambda x: -x[1])
+        assert len(scores) <= 3
+
+    def test_min_score_not_applied(self, classifier):
+        # A high gate makes classify() return None, but top_scores still
+        # surfaces the scores (near-threshold visibility for observability).
+        clf = SemanticClassifier(embed=fake_embed, min_score=0.99)
+        assert clf.classify("zzz qqq unknown") is None
+        assert clf.top_scores("zzz qqq unknown", 2)
+
+    def test_empty_when_unavailable(self):
+        assert SemanticClassifier(embed=None).top_scores("hello") == []
+
+    def test_classify_delegates_to_top_scores(self, classifier):
+        assert classifier.classify("write a unit test with pytest") == \
+            classifier.top_scores("write a unit test with pytest", 1)[0][0]
+
+    def test_exposes_effective_min_score(self, classifier):
+        assert classifier.min_score == 0.05
+        clf = SemanticClassifier(embed=fake_embed, min_score=0.5)
+        assert clf.min_score == 0.5
+
     def test_probe_rejects_noop_embed(self, monkeypatch):
         invalidate_semantic_classifier()
         _M = type("M", (), {"embed": lambda texts: [[0.0] * 384 for _ in texts]})

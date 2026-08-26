@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Float,
     ForeignKey,
@@ -368,6 +369,41 @@ class RoutingDecision(Base):
     from_provider = Column(String, nullable=True)
     from_model = Column(String, nullable=True)
     note = Column(Text, nullable=True)
+
+    # ── Classification rationale (routing observability) ────────────────────
+    path = Column(String, nullable=True)   # which stage won: keyword:<task> | semantic |
+                                           #   agentic_prompt | tool_count | token_count |
+                                           #   casual | default
+    keyword = Column(String, nullable=True)   # exact TASK_SIGNALS keyword that matched
+    intent_text = Column(Text, nullable=True)   # the "newest genuine user instruction" classified
+    semantic_json = Column(Text, nullable=True)  # top-5 (task, score) JSON, or None
+    min_score = Column(Float, nullable=True)  # semantic gate applied (plugins.router.min_score)
+    sem_available = Column(Boolean, nullable=True)  # embedder was up when classified
+
+    # ── Input capture (routing judgment) ────────────────────────────────────
+    conversation_json = Column(Text, nullable=True)  # shape-preserving trimmed messages
+
+
+class RoutingJudgment(Base):
+    """Human judgment on a recorded routing decision.
+
+    One row per review of a ``routing_decisions`` row (verdict + expected task).
+    Accumulates into a labeled real-traffic dataset that can later seed
+    regression tests / classifier tuning.
+    """
+    __tablename__ = "routing_judgments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    decision_id = Column(Integer, nullable=True, index=True)
+    profile = Column(String, nullable=False, default="")
+    task = Column(String, nullable=False, default="")
+    path = Column(String, nullable=True)
+    verdict = Column(String, nullable=False)  # correct | wrong | ambiguous
+    expected_task = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+    judged_at = Column(String, nullable=False,
+                       default=lambda: datetime.now(timezone.utc).isoformat(),
+                       index=True)
 
 
 # ── Engine + session factory ───────────────────────────────────────────────
