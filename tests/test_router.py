@@ -204,6 +204,55 @@ def test_extract_intent_text_pure_tool_conversation_falls_back():
     assert meta["source"] == "first_user_fallback"
     assert "Ran 12 tests" in text
 
+def test_extract_intent_text_skips_attachment_context():
+    """A trailing client-injected <attachments> wrapper must not become the
+    intent — the real user instruction behind it wins."""
+    from src.api.router import _extract_intent_text
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "write pytest tests for the router"},
+        {"role": "assistant", "content": "on it"},
+        {"role": "user", "content":
+         "<attachments>\n<attachment id=\"Browser Pages\">\nNo browser pages "
+         "are currently shared with you.\n</attachment>"},
+    ]
+    text, meta = _extract_intent_text(msgs)
+    assert text == "write pytest tests for the router"
+    assert meta["source"] == "last_instruction"
+    assert meta["skipped_context"] == 1
+
+def test_extract_intent_text_skips_context_and_tool_echoes():
+    """Client-context wrappers and tool echoes both skipped; the walk finds
+    the last genuine instruction."""
+    from src.api.router import _extract_intent_text
+    msgs = [
+        {"role": "system", "content": "You are a coding agent. tools: terminal"},
+        {"role": "user", "content": "debug this traceback"},
+        {"role": "assistant", "content": "running",
+         "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "run", "arguments": "{}"}}]},
+        {"role": "user", "content": "[tool result] Ran 12 tests, 3 failed", "tool_call_id": "c1"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "<attachments> <attachment id='X'> no pages"},
+    ]
+    text, meta = _extract_intent_text(msgs)
+    assert text == "debug this traceback"
+    assert meta["source"] == "last_instruction"
+    assert meta["skipped_tool"] == 1
+    assert meta["skipped_context"] == 1
+
+def test_summarize_preserves_attachment_skip():
+    """End-trimmed summary keeps the <attachments> prefix so replay skips it
+    and the round-trip intent is unchanged."""
+    from src.api.router import _summarize_conversation, _extract_intent_text
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "debug this traceback"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "<attachments> <attachment id='X'> " + "z" * 300},
+    ]
+    s = _summarize_conversation(msgs)
+    assert _extract_intent_text(s)[0] == "debug this traceback"
+
 def test_classify_agentic_system_prompt_only_still_agentic():
     """With no concrete user task, the agentic system prompt still wins."""
     msgs = [{"role": "system", "content": "You are an AI agent with tools: read_file, write_file"}]

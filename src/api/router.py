@@ -157,6 +157,15 @@ _TOOL_RESULT_PREFIXES = (
     "tool call:", "[tool_call", "tool output:", "tool response:",
 )
 
+# Client-injected context wrappers some agents prepend as role="user" messages
+# (attachments / browser pages / environment context). They are NOT user
+# instructions and must be skipped like tool results — otherwise the newest
+# "genuine instruction" becomes "<attachments> <attachment id=...> No bro...".
+_CLIENT_CONTEXT_PREFIXES = (
+    "<attachments", "<attachment", "<context", "<browser_pages",
+    "<environment", "<todo", "<reminderinstructions",
+)
+
 # Regex shapes that mark tool/test-run output rather than an instruction.
 _TOOL_RESULT_PATTERNS = (
     r"ran \d+ tests?", r"\d+/\d+ tests?",
@@ -253,6 +262,15 @@ def _matches_tool_result_patterns(text: str) -> bool:
     return False
 
 
+def _is_client_context(text: str) -> bool:
+    """True when *text* is a client-injected context wrapper (attachments,
+    browser pages, env context) rather than a genuine user instruction."""
+    lower = (text or "").strip().lower()
+    if not lower:
+        return False
+    return any(lower.startswith(p) for p in _CLIENT_CONTEXT_PREFIXES)
+
+
 def _is_tool_result(msg: dict, msgs: list[dict], i: int) -> bool:
     """True when a user-role message is really a tool result (schema violation).
 
@@ -299,7 +317,8 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
     continuation acknowledgements. The first survivor is the current intent.
     Falls back to the first user message when nothing genuine survives.
     """
-    meta = {"source": "none", "skipped_tool": 0, "skipped_cont": 0}
+    meta = {"source": "none", "skipped_tool": 0, "skipped_cont": 0,
+            "skipped_context": 0}
     msgs = messages or []
     if not msgs:
         return "", meta
@@ -316,10 +335,15 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
             meta["skipped_tool"] += 1
             continue
         # role == "user"
-        if text.strip():
+        if text.strip() and not _is_client_context(text):
             first_user_text = text  # overwrite → ends as the earliest user msg
         if _is_tool_result(msg, msgs, i):
             meta["skipped_tool"] += 1
+            continue
+        if _is_client_context(text):
+            # Attachments / browser pages / env context are not instructions —
+            # keep walking back to the real user message.
+            meta["skipped_context"] += 1
             continue
         if _is_continuation(text):
             # The backward walk keeps looking for the last real instruction; the

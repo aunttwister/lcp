@@ -306,22 +306,74 @@ def cmd_report(args) -> int:
     return 0
 
 
+# ── inspect ─────────────────────────────────────────────────────────────────
+
+def cmd_inspect(args) -> int:
+    """Dump decision #id: recorded rationale + captured conversation + replay
+    of the CURRENT classifier over it (why it was flagged SAME/DRIFT/NODATA)."""
+    _require_decisions_table(args.db)
+    if not args.id:
+        print("Usage: judge_routing.py inspect <decision_id>")
+        return 1
+    import json as _json
+    from src.api.models import RoutingDecision
+    from src.api.router import classify_task_detail
+    with _session(args.db) as s:
+        r = s.query(RoutingDecision).filter_by(id=args.id).first()
+    if r is None:
+        print(f"No decision #{args.id}.")
+        return 1
+    print(f"decision #{r.id}  {r.ts}  profile={r.profile!r}")
+    print(f"  recorded: task={r.task!r} path={r.path or '?'} action={r.action} "
+          f"provider={r.provider} model={r.model} score={r.score}")
+    print(f"  note    : {r.note}")
+    print(f"  intent  : {(r.intent_text or '')[:300]!r}")
+    if r.semantic_json:
+        print(f"  semantic: {r.semantic_json}")
+    conv = _json.loads(r.conversation_json) if r.conversation_json else None
+    if not conv:
+        print("  conversation_json: (none — pre-migration row)")
+        return 0
+    print("  messages:")
+    for i, m in enumerate(conv):
+        print(f"    [{i}] {m.get('role')}: {_json.dumps(m, ensure_ascii=False)[:220]}")
+    detail = classify_task_detail(conv)
+    flag = "SAME" if detail.task == r.task else "DRIFT"
+    print(f"  replay   : task={detail.task!r} path={detail.path!r} flag={flag}")
+    print(f"  re-intent: {(detail.intent_text or '')[:120]!r}")
+    return 0
+
+
 # ── main ────────────────────────────────────────────────────────────────────
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Judge dynamic routing decisions.")
-    p.add_argument("mode", nargs="?", default="replay",
-                   choices=["replay", "review", "pending", "report"],
-                   help="what to do (default: replay)")
-    p.add_argument("--db", help="SQLite DB path (default: $COST_DB or seed default)")
-    p.add_argument("--limit", type=int, default=50, help="max decisions to consider")
-    p.add_argument("--since", help="only decisions with ts >= this ISO string")
-    p.add_argument("--profile", help="only decisions for this profile")
-    p.add_argument("--out", help="write the report to this file")
+    sub = p.add_subparsers(dest="mode")
+
+    def add_common(sp):
+        sp.add_argument("--db", help="SQLite DB path (default: $COST_DB or seed default)")
+        sp.add_argument("--limit", type=int, default=50, help="max decisions to consider")
+        sp.add_argument("--since", help="only decisions with ts >= this ISO string")
+        sp.add_argument("--profile", help="only decisions for this profile")
+
+    for name in ("replay", "review", "pending"):
+        sp = sub.add_parser(name, help=f"{name} mode")
+        add_common(sp)
+    rep = sub.add_parser("report", help="aggregate judged decisions")
+    add_common(rep)
+    rep.add_argument("--out", help="write the report to this file")
+    insp = sub.add_parser("inspect", help="dump decision #id + replay")
+    add_common(insp)
+    insp.add_argument("id", type=int, help="decision id")
+
     args = p.parse_args(argv)
     cmds = {"replay": cmd_replay, "review": cmd_review,
-            "pending": cmd_pending, "report": cmd_report}
-    return cmds[args.mode](args)
+            "pending": cmd_pending, "report": cmd_report, "inspect": cmd_inspect}
+    if args.mode:
+        return cmds[args.mode](args)
+    # No mode → default to replay with defaults.
+    args.limit, args.since, args.profile, args.db = 50, None, None, None
+    return cmd_replay(args)
 
 
 if __name__ == "__main__":
