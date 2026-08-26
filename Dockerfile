@@ -62,6 +62,9 @@ COPY src/ ./src/
 COPY config/ ./config/
 COPY alembic.ini .
 COPY alembic/ ./alembic/
+# Dev/ops helper scripts (judge_routing, probe_intent, seed_data, ...) so they
+# can be run inside the container: docker compose exec lcp python3 scripts/...
+COPY scripts/ ./scripts/
 
 RUN mkdir -p /app/data
 
