@@ -81,17 +81,28 @@ def _require_decisions_table(db_path):
     if not os.path.exists(db_path):
         raise SystemExit(f"DB not found: {db_path!r}. Check COST_DB / --db.")
     engine = get_engine(db_path)
-    tables = set(inspect(engine).get_table_names())
-    if "routing_decisions" in tables:
-        return
-    raise SystemExit(
-        f"DB {db_path!r} has no 'routing_decisions' table "
-        f"(tables: {sorted(tables)[:12]}...). "
-        "This is usually the wrong DB path. Inside the container use:\n"
-        "  docker compose exec lcp python3 scripts/judge_routing.py replay\n"
-        "(the container sets COST_DB=/app/data/costs.db for the gateway).\n"
-        "Or pass --db <path> explicitly."
-    )
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
+    if "routing_decisions" not in tables:
+        raise SystemExit(
+            f"DB {db_path!r} has no 'routing_decisions' table "
+            f"(tables: {sorted(tables)[:12]}...). "
+            "This is usually the wrong DB path. Inside the container use:\n"
+            "  docker compose exec lcp python3 scripts/judge_routing.py replay\n"
+            "(the container sets COST_DB=/app/data/costs.db for the gateway).\n"
+            "Or pass --db <path> explicitly."
+        )
+    # A pre-migration routing_decisions (no path column) can't be replayed —
+    # fail clearly rather than a raw 'no such column' traceback.
+    cols = {c["name"] for c in insp.get_columns("routing_decisions")}
+    missing = {"path", "conversation_json"} - cols
+    if missing:
+        raise SystemExit(
+            f"DB {db_path!r} has routing_decisions but is missing "
+            f"columns {sorted(missing)} — it predates the observability "
+            "migration (020/021). Run `alembic upgrade head` (the container "
+            "does this on boot) or point --db at the gateway DB."
+        )
 
 
 def _decisions(db_path, limit, since=None, profile=None):
@@ -369,11 +380,14 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
     cmds = {"replay": cmd_replay, "review": cmd_review,
             "pending": cmd_pending, "report": cmd_report, "inspect": cmd_inspect}
-    if args.mode:
-        return cmds[args.mode](args)
-    # No mode → default to replay with defaults.
-    args.limit, args.since, args.profile, args.db = 50, None, None, None
-    return cmd_replay(args)
+    if not args.mode:
+        # No mode → default to replay with defaults.
+        args.limit, args.since, args.profile = 50, None, None
+        args.mode = "replay"
+    # Resolve the DB path ONCE so commands never see None (the container
+    # requires $COST_DB, which points at the gateway's /app/data/costs.db).
+    args.db = _resolve_db(args)
+    return cmds[args.mode](args)
 
 
 if __name__ == "__main__":
