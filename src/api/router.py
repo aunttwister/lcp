@@ -1116,6 +1116,144 @@ class CapabilityRouter:
         score += self._credit_bonus(step["provider"])
         return score
 
+    # ── Deterministic model selection (unified rule & scoring) ─────────────
+    #
+    # The rule (``prefer``) path and the scoring (``reorder``) path MUST agree
+    # on the same (provider, model). Today they diverge: the prefer rule
+    # expands a model across providers (chain order), while scoring scores
+    # literal chain steps — so ``deepseek-v4-flash`` resolved to
+    # commandcode/…flash under a rule but deepseek/…flash under reorder.
+    #
+    # The unified algorithm: choose the target LOGICAL MODEL (provider-
+    # agnostic), then resolve the provider ONCE in ``_build_chain_for_model`` —
+    # the single chain-builder both paths funnel through.
+
+    def _score_model(self, logical_model: str, task: str,
+                     bias: Optional[float] = None) -> float:
+        """Score a LOGICAL MODEL (provider-agnostic) for a task.
+
+        capability + cost-bias boost. Deliberately NO health/credit — those are
+        provider-level and belong to chain ordering, not model selection, so the
+        rule path and the scoring path agree on the same model. Delegates to
+        ``score_step`` with an empty provider (no health/credit tiebreakers).
+        """
+        return self.score_step(
+            {"provider": "", "model": logical_model},
+            task, bias=bias,
+        )
+
+    def _candidate_models(self, chain: list, blocked_models: set,
+                          config: Optional[object] = None) -> set:
+        """All logical models choosable from the (available, unblocked) chain.
+
+        Enumerates the models on the chain steps plus each provider's declared
+        ``models`` list, minus blocked models. Provider-agnostic — the same
+        candidate set regardless of how the provider is eventually resolved.
+        """
+        cand: set[str] = set()
+        try:
+            providers = (config.providers or {}) if config is not None else {}
+        except Exception:  # noqa: BLE001
+            providers = {}
+        for step in chain:
+            logical = logical_model_name(step["model"], self.db_path)
+            cand.add(logical)
+            if providers:
+                pcfg = providers.get(step["provider"]) or {}
+                for m in pcfg.get("models") or []:
+                    cand.add(logical_model_name(m, self.db_path))
+        return cand - blocked_models
+
+    def _choose_target_model(self, candidates: set, task: str, policy: str,
+                             min_score: float, bias: Optional[float],
+                             default_logical: str) -> Optional[str]:
+        """Pick the target logical model from *candidates* (provider-agnostic).
+
+        - ``eager`` / ``cost_first``: the highest-scoring model, unless it only
+          beats the chain default within hysteresis (avoid flapping).
+        - ``explore``: weighted random among models within hysteresis of the
+          best (spread traffic / A/B over MODELS).
+        Returns None when the best model is below ``min_score`` (static chain).
+        """
+        scored = sorted(
+            ((self._score_model(m, task, bias), m) for m in candidates),
+            key=lambda x: -x[0],
+        )
+        if not scored:
+            return None
+        best_score, best_model = scored[0]
+        if best_score < min_score:
+            return None
+        if policy == "explore" and len(scored) > 1:
+            import random
+            cutoff = best_score - _HYSTERESIS
+            pool = [m for s, m in scored if s >= cutoff]
+            if len(pool) > 1:
+                weights = [max(self._score_model(m, task, bias), 0.0) + 0.05
+                           for m in pool]
+                return random.choices(pool, weights=weights, k=1)[0]
+        # eager / cost_first: don't flap away from the default within hysteresis.
+        default_score = self._score_model(default_logical, task, bias)
+        if best_model != default_logical and best_score <= default_score + _HYSTERESIS:
+            return default_logical
+        return best_model
+
+    def _provider_health_rank(self, step: dict, profile: Optional[str] = None,
+                              config: Optional[object] = None) -> int:
+        """0=healthy, 1=degraded, 2=dead (dead is normally pre-filtered)."""
+        try:
+            from .circuit_breaker import get_circuit_breaker
+            provider = step["provider"]
+            base_url = step.get("base_url") or ""
+            if config is not None and not base_url:
+                base_url = (config.providers or {}).get(provider, {}).get("api_base", "")
+            cb = get_circuit_breaker()
+            status = cb.status_of(provider, base_url, profile or "")
+            return {"healthy": 0, "degraded": 1, "dead": 2}.get(status, 0)
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def _build_chain_for_model(self, chain: list, target_model: str,
+                               preferred_provider: Optional[str] = None,
+                               profile: Optional[str] = None,
+                               config: Optional[object] = None) -> list:
+        """Build the DETERMINISTIC chain for *target_model*.
+
+        Walks the ORIGINAL chain in order, emitting one step per provider that
+        serves the target (provider-model form via the registry), then the
+        original non-target steps as fallbacks (tuple-deduped). Target
+        providers are ordered: ``preferred_provider`` first, then healthy
+        before degraded (stable by chain order within a band).
+
+        This is the SINGLE resolver shared by the prefer path and the scoring
+        path — so both yield the same provider for the same target model.
+        """
+        target_steps: list[dict] = []
+        seen_providers: set[str] = set()
+        for step in chain:
+            p = step["provider"]
+            if p in seen_providers:
+                continue
+            logical = logical_model_name(step["model"], self.db_path)
+            if logical == target_model or self._provider_serves_model(p, target_model, config):
+                seen_providers.add(p)
+                s = {"provider": p,
+                     "model": provider_model_name(target_model, p, self.db_path)}
+                if step.get("base_url"):
+                    s["base_url"] = step["base_url"]
+                target_steps.append(s)
+        target_tuples = {(s["provider"], s["model"]) for s in target_steps}
+        fallbacks = [dict(s) for s in chain
+                     if (s["provider"], s["model"]) not in target_tuples]
+
+        def _key(s):
+            return (
+                0 if (preferred_provider and s["provider"] == preferred_provider) else 1,
+                self._provider_health_rank(s, profile, config),
+            )
+        target_steps.sort(key=_key)
+        return target_steps + fallbacks
+
     # ── Routing rules (UI-defined overrides) ─────────────────────────────
 
     def _rules(self, config: Optional[object] = None,
@@ -1186,6 +1324,104 @@ class CapabilityRouter:
         has_provider = bool(provider and provider not in ("*", ""))
         has_model = bool(model and model not in ("*", ""))
         return has_provider or has_model
+
+    def _apply_blocks(self, chain: list, task: str, profile: str,
+                      config: Optional[object] = None
+                      ) -> tuple[list, list, set, set]:
+        """Apply ``block`` rules to a COPY of the chain.
+
+        Returns ``(candidates, fired, blocked_providers, blocked_models)``.
+        The blocked-model set feeds ``_candidate_models`` so a model-only block
+        removes the model from consideration everywhere, not just the chain
+        steps that already carry it.
+        """
+        rules = self._rules(config, profile)
+        if not rules:
+            return list(chain), [], set(), set()
+        candidates = [dict(step) for step in chain]
+        fired: list[dict] = []
+        blocked_providers: set[str] = set()
+        blocked_models: set[str] = set()
+        for rule in rules:
+            if rule.get("action") != "block" or not self._rule_matches(rule, task, profile):
+                continue
+            if not rule.get("provider") and not rule.get("model"):
+                continue
+            before = len(candidates)
+            candidates = [s for s in candidates if not self._rule_target(rule, s)]
+            if len(candidates) < before:
+                if rule.get("provider") and not rule.get("model"):
+                    blocked_providers.add(rule["provider"])
+                elif rule.get("model") and not rule.get("provider"):
+                    blocked_models.add(logical_model_name(rule["model"], self.db_path))
+                fired.append({
+                    "action": "block",
+                    "provider": rule.get("provider") or "*",
+                    "model": rule.get("model") or "*",
+                    "profile": rule.get("profile", "*"),
+                    "task": rule.get("task", "*"),
+                })
+        return candidates, fired, blocked_providers, blocked_models
+
+    def _resolve_prefer(self, chain: list, task: str, profile: str,
+                        config: Optional[object] = None
+                        ) -> tuple[Optional[str], Optional[str], list]:
+        """Resolve ``prefer`` rules to ``(target_model, preferred_provider, fired)``.
+
+        - A model prefer (provider wildcard or specific) that passes its
+          ``min_score`` gate and has >= 1 chain provider serving it returns the
+          preferred logical model as ``target_model`` — the chain is then built
+          for it by ``_build_chain_for_model`` (the SAME resolver the scoring
+          path uses, so the provider is deterministic).
+        - A provider-only prefer is a PROVIDER TIEBREAK, not a model mandate:
+          the model is still chosen by scoring, and the provider goes first in
+          the built chain only if it serves the chosen model.
+        - A prefer whose model no provider serves falls through to scoring.
+        """
+        rules = self._rules(config, profile)
+        fired: list[dict] = []
+        for rule in rules:
+            if rule.get("action") != "prefer" or not self._rule_matches(rule, task, profile):
+                continue
+            if not rule.get("provider") and not rule.get("model"):
+                continue
+            rp = rule.get("provider") or "*"
+            rm = rule.get("model") or "*"
+            gate = rule.get("min_score")
+            pref_logical = None if rm in ("*", "") else logical_model_name(rm, self.db_path)
+
+            if pref_logical is not None:
+                if gate is not None:
+                    cap = self.get_model_score(pref_logical, task)
+                    if cap < float(gate):
+                        fired.append({
+                            "action": "prefer_skipped_low_score",
+                            "provider": rp, "model": rm,
+                            "score": round(cap, 3), "min_score": float(gate),
+                        })
+                        continue
+                serving = [
+                    s["provider"] for s in chain
+                    if (rp in ("*", "") or s["provider"] == rp)
+                    and self._provider_serves_model(s["provider"], pref_logical, config)
+                ]
+                if serving:
+                    fired.append({
+                        "action": "prefer", "provider": rp, "model": rm,
+                        "steps": len(set(serving)),
+                    })
+                    return pref_logical, (None if rp in ("*", "") else rp), fired
+                # Preferred model served by no provider → fall through to scoring.
+                fired.append({"action": "prefer_unserved", "provider": rp, "model": rm})
+                continue
+
+            # Provider-only prefer → provider tiebreak (model still scored).
+            if not any(self._rule_target(rule, s) for s in chain):
+                continue
+            fired.append({"action": "prefer", "provider": rp, "model": rm,
+                          "provider_only": True})
+            return None, (None if rp in ("*", "") else rp), fired
+        return None, None, fired
 
     def _apply_rules(self, chain: list, task: str, profile: str,
                      config: Optional[object] = None) -> tuple[list, list]:
@@ -1312,18 +1548,28 @@ class CapabilityRouter:
                     profile: Optional[str] = None, config: Optional[object] = None,
                     ) -> Optional[list[dict]]:
         """Provider-aware selection: reorder a COPY of the chain so the best
-        (provider, model) step is tried first.
+        (provider, model) step is tried first — DETERMINISTICALLY.
 
-        Policy (from runtime settings, falling back to config):
-          - ``eager``     : deterministic — reorder when the best step beats the
-                            current first step by more than the hysteresis.
-          - ``cost_first``: same, but with a stronger cost-bias boost.
-          - ``explore``   : weighted random pick among the steps within the
-                            hysteresis of the best (spread traffic + A/B).
+        Routing ON follows the CIRCUIT BREAKER PROVIDER CHAIN order, but the
+        MODEL is chosen by classification + scoring/rules:
+          1. classify -> task
+          2. drop dead/tripped providers (breaker hard gate)
+          3. apply ``block`` rules
+          4. choose the target LOGICAL MODEL: a fired ``prefer`` rule wins;
+             otherwise score candidate models (provider-agnostic) under the
+             policy (``eager``/``cost_first``/``explore``), ``min_score`` floor
+          5. build the chain for that model ONCE via ``_build_chain_for_model``
+             (preferred provider first, healthy before degraded, original order
+             otherwise; non-target steps as fallbacks)
 
-        ``min_score`` is a floor: no reorder unless the best step's score is
-        >= it. Returns None to keep the chain's existing order. The caller
-        applies it to its own copy — this never mutates the profile config.
+        Because the prefer path and the scoring path share that single
+        chain-builder, they ALWAYS agree on the (provider, model) — the rule
+        path can no longer pick commandcode/…flash while reorder picks
+        deepseek/…flash for the same target model.
+
+        Returns None only when routing is off / the chain is empty / the best
+        model is below ``min_score`` (static chain) / the built head equals the
+        original head (keep_default). The caller applies the returned copy.
         """
         # Attempt the profile-scoped enabled check + policy; tolerate
         # duck-typed/monkeypatched implementations that only accept ``config``.
@@ -1343,15 +1589,12 @@ class CapabilityRouter:
         # The circuit breaker only GATES PROVIDERS; the router owns model
         # selection and ordering. Drop steps whose provider is currently
         # unavailable (dead / hard-tripped) so the ordering never proposes a
-        # provider the breaker would skip, and so a degraded provider serving
-        # the preferred model falls to the NEXT provider of the same model
-        # instead of a cheaper model. (When routing is off, try_chain uses the
-        # static chain + breaker as before.)
+        # provider the breaker would skip. (When routing is off, try_chain uses
+        # the static chain + breaker as before.)
         chain = [s for s in chain if self._provider_available(s, profile, config)]
         if not chain:
             return None
 
-        # Apply UI-defined rules: blocks filter candidates; prefers pin a step;
         # policy rules override the policy for this scope.
         for rule in self._rules(config, profile):
             if rule.get("action") == "policy" and self._rule_matches(rule, task, profile or ""):
@@ -1359,12 +1602,16 @@ class CapabilityRouter:
                 if p in ("eager", "cost_first", "explore"):
                     policy = p
 
-        candidates, fired_rules = self._apply_rules(
+        # 3. blocks.
+        chain, fired_blocks, blocked_providers, blocked_models = self._apply_blocks(
             chain, task, profile or "", config)
-        if not candidates:
+        if not chain:
             return None
-        chain = candidates
-        fired_desc = [f["action"] for f in fired_rules]
+
+        # 4. prefer -> target model / provider tiebreak.
+        target_model, preferred_provider, fired_prefer = self._resolve_prefer(
+            chain, task, profile or "", config)
+        fired_desc = [f["action"] for f in fired_blocks] + [f["action"] for f in fired_prefer]
 
         # Audit: why didn't a rule fire? Surfaces silent rule misses in the
         # decision log (e.g. "rules exist for planning but task=agentic…").
@@ -1384,88 +1631,72 @@ class CapabilityRouter:
                     f"{', '.join(fired_desc) or 'none'}"
                 )
 
-        # A fired `prefer` rule is MANDATORY: the preferred step is pinned
-        # first and the router must NOT reorder away from it. Eager/cost_first/
-        # explore scoring and the min_score floor are bypassed for this request.
-        # Chain fallback still applies at call time (try_chain skips the pinned
-        # step if its provider is dead or vision-incompatible).
-        if "prefer" in fired_desc:
-            pinned = chain[0]
-            self._record_decision({
-                **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
-                "action": "prefer", "model": pinned["model"],
-                "provider": pinned["provider"],
-                "score": round(self.score_step(pinned, task, profile, config), 3),
-            })
-            return chain
+        bias = min(self.cost_bias + 0.15, 0.5) if policy == "cost_first" else None
+        prefer_fired = "prefer" in fired_desc
 
-        # cost_first: boost the cost component of the score.
-        bias = None
-        if policy == "cost_first":
-            bias = min(self.cost_bias + 0.15, 0.5)
-
-        scored = sorted(
-            ((self.score_step(step, task, profile, config, bias=bias), i, step)
-             for i, step in enumerate(chain)),
-            key=lambda x: -x[0],
-        )
-        best_score, best_idx, best = scored[0]
-        default_score = next((s for s, i, _ in scored if i == 0), best_score)
-        if best_score < min_score:
-            self._record_decision({
-                **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
-                "action": "below_min_score", "model": best["model"],
-                "provider": best["provider"], "score": round(best_score, 3),
-            })
-            return None
-
-        # explore: weighted random among steps within hysteresis of the best.
-        if policy == "explore" and len(scored) > 1:
-            import random
-            cutoff = best_score - _HYSTERESIS
-            pool = [s for s in scored if s[0] >= cutoff]
-            if len(pool) > 1:
-                weights = [max(s[0], 0.0) + 0.05 for s in pool]
-                picked_score, pick_idx, pick = random.choices(pool, weights=weights, k=1)[0]
-                if pick_idx != 0:
-                    rest = [st for i, st in enumerate(chain) if i != pick_idx]
-                    self._record_decision({
-                        **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
-                        "action": "explore", "model": pick["model"],
-                        "provider": pick["provider"], "score": round(picked_score, 3),
-                    })
-                    return [pick, *rest]
+        # 4b. No prefer mandate -> score candidate MODELS (provider-agnostic).
+        if target_model is None:
+            default_logical = logical_model_name(chain[0]["model"], self.db_path)
+            candidates = self._candidate_models(chain, blocked_models, config)
+            target_model = self._choose_target_model(
+                candidates, task, policy, min_score, bias, default_logical)
+            if target_model is None:
+                # Best model below min_score -> keep the static chain.
+                head_score = self._score_model(default_logical, task, bias)
                 self._record_decision({
                     **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
-                    "action": "keep_default", "model": chain[0]["model"],
-                    "provider": chain[0]["provider"], "score": round(best_score, 3),
+                    "action": "below_min_score", "model": chain[0]["model"],
+                    "provider": chain[0]["provider"],
+                    "score": round(head_score, 3),
                 })
                 return None
 
-        if best_idx == 0 or best_score <= default_score + _HYSTERESIS:
+        # 5. resolve the provider ONCE (rule path == scoring path).
+        result = self._build_chain_for_model(
+            chain, target_model, preferred_provider, profile, config)
+        if not result:
+            return None
+        head = result[0]
+        head_score = self._score_model(target_model, task, bias)
+        head_unchanged = (head["provider"] == chain[0]["provider"]
+                          and head["model"] == chain[0]["model"])
+
+        if prefer_fired:
+            action = "prefer"
+        elif policy == "explore" and head_unchanged:
+            action = "keep_default"
+        elif policy == "explore":
+            action = "explore"
+        elif head_unchanged:
+            action = "keep_default"
+        else:
+            action = "reorder"
+
+        if head_unchanged and not prefer_fired:
             self._record_decision({
                 **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
-                "action": "keep_default", "model": chain[0]["model"],
-                "provider": chain[0]["provider"], "score": round(default_score, 3),
+                "action": "keep_default", "model": head["model"],
+                "provider": head["provider"], "score": round(head_score, 3),
             })
             return None
 
-        rest = [step for i, step in enumerate(chain) if i != best_idx]
-        logger.info(
-            "router_step_override",
-            task=task, profile=profile or "",
-            from_provider=chain[0]["provider"], from_model=chain[0]["model"],
-            to_provider=best["provider"], to_model=best["model"],
-            default_score=round(default_score, 3),
-            recommended_score=round(best_score, 3),
-        )
+        if action == "reorder":
+            logger.info(
+                "router_step_override",
+                task=task, profile=profile or "",
+                from_provider=chain[0]["provider"], from_model=chain[0]["model"],
+                to_provider=head["provider"], to_model=head["model"],
+                default_score=round(self._score_model(
+                    logical_model_name(chain[0]["model"], self.db_path), task, bias), 3),
+                recommended_score=round(head_score, 3),
+            )
         self._record_decision({
             **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
-            "action": "reorder", "model": best["model"],
-            "provider": best["provider"], "score": round(best_score, 3),
+            "action": action, "model": head["model"], "provider": head["provider"],
+            "score": round(head_score, 3),
             "from_model": chain[0]["model"], "from_provider": chain[0]["provider"],
         })
-        return [best, *rest]
+        return result
 
 
 # ── Global instances ──────────────────────────────────────────────────────────

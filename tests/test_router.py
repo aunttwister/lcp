@@ -1312,3 +1312,146 @@ def test_record_decision_persists_rationale_and_conversation(registry_db):
     assert decs[0]["conversation_json"]
     conv = json.loads(decs[0]["conversation_json"])
     assert _extract_intent_text(conv)[0] == "debug this traceback"
+
+
+# ── Deterministic routing: rule path == scoring path (unified resolver) ─────
+
+def test_flash_prefer_and_scoring_agree(registry_db, monkeypatch):
+    """HEADLINE: the prefer (rule) path and the scoring (reorder) path must
+    resolve the SAME provider for the same target model. Regression for the
+    live divergence: prefer picked commandcode/…flash while reorder picked
+    deepseek/…flash."""
+    chain = [
+        {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"},
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        {"provider": "opencode", "model": "deepseek-v4-pro"},
+        {"provider": "opencode", "model": "ox-alpha-free"},
+    ]
+    cfg = _prov_config(REAL_PROVIDERS)
+
+    # Rule path: a prefer-flash rule fires for code_generation.
+    rule_router = _rule_router(
+        registry_db, monkeypatch,
+        [{"task": "code_generation", "profile": "*", "action": "prefer",
+          "provider": "*", "model": "deepseek-v4-flash"}])
+    rule_router._effective_policy = lambda config: ("eager", 0.0)
+    rule_out = rule_router.select_step(
+        [{"role": "user", "content": "write a helper script in python"}],
+        chain=chain, profile="coder", config=cfg)
+    assert rule_out is not None
+
+    # Scoring path: no prefer rule; flash out-scores pro so scoring picks flash.
+    score_router = _rule_router(registry_db, monkeypatch, [])
+    score_router._effective_policy = lambda config: ("eager", 0.0)
+    score_router.score_step = (
+        lambda step, task, profile=None, config=None, bias=None:
+        0.9 if step["model"] == "deepseek-v4-flash" else
+        0.7 if step["model"] == "deepseek-v4-pro" else 0.4)
+    score_out = score_router.select_step(
+        [{"role": "user", "content": "this endpoint returns a 500"}],
+        chain=chain, profile="coder", config=cfg)
+    assert score_out is not None
+
+    # BOTH must resolve the target model on the SAME first provider (chain order).
+    assert (rule_out[0]["provider"], rule_out[0]["model"]) == \
+           (score_out[0]["provider"], score_out[0]["model"])
+    assert rule_out[0]["provider"] == "commandcode"
+    assert rule_out[0]["model"] == "deepseek/deepseek-v4-flash"
+
+
+def test_degraded_target_provider_falls_to_healthy_same_model(registry_db, monkeypatch):
+    """Among providers serving the target model, healthy providers lead a
+    degraded one — but the model stays the same (no cheaper-model fallback)."""
+    from src.api.circuit_breaker import get_circuit_breaker
+    get_circuit_breaker({"failures_dead": 5, "dead_cooldown_seconds": 60,
+                         "failures_degraded": 3, "degraded_cooldown_seconds": 60})
+    get_circuit_breaker().get_health("commandcode", "https://cmd.example/v1", "l2")["status"] = "degraded"
+    rules = [{"task": "*", "action": "prefer", "provider": "*", "model": "deepseek-v4-flash"}]
+    router = _rule_router(registry_db, monkeypatch, rules)
+    router._effective_policy = lambda config: ("eager", 0.0)
+    chain = [
+        {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro",
+         "base_url": "https://cmd.example/v1"},
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        {"provider": "opencode", "model": "deepseek-v4-pro"},
+    ]
+    out = router.select_step([{"role": "user", "content": "design the architecture"}],
+                             chain=chain, profile="l2", config=_prov_config(REAL_PROVIDERS))
+    assert out is not None
+    # Flash target expanded across providers; healthy deepseek/opencode lead
+    # the degraded commandcode.
+    assert [s["provider"] for s in out[:3]] == ["deepseek", "opencode", "commandcode"]
+    assert out[0]["model"] == "deepseek-v4-flash"
+
+
+def test_provider_only_prefer_is_tiebreak_not_mandate(registry_db, monkeypatch):
+    """A provider-only prefer does NOT force a model — it is a provider
+    tiebreak: the model is still chosen by scoring, and the provider leads only
+    because it serves the chosen model."""
+    rules = [{"task": "*", "action": "prefer", "provider": "opencode"}]
+    router = _rule_router(registry_db, monkeypatch, rules)
+    router._effective_policy = lambda config: ("eager", 0.0)
+    router.score_step = (
+        lambda step, task, profile=None, config=None, bias=None:
+        0.9 if step["model"] == "deepseek-v4-flash" else 0.7)
+    chain = [
+        {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"},
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        {"provider": "opencode", "model": "deepseek-v4-pro"},
+    ]
+    out = router.select_step([{"role": "user", "content": "hi"}], chain=chain,
+                             config=_prov_config(REAL_PROVIDERS))
+    assert out is not None
+    # Model still chosen by scoring = flash; opencode serves flash so it leads.
+    assert out[0]["model"] == "deepseek-v4-flash"
+    assert out[0]["provider"] == "opencode"
+    assert router.recent_decisions()[-1]["action"] == "prefer"
+
+
+def test_prefer_model_served_by_no_provider_falls_through(registry_db, monkeypatch):
+    """A prefer whose model no provider serves must fall through to scoring
+    (no provider is force-picked), with an audit trail."""
+    rules = [{"task": "*", "action": "prefer", "provider": "*",
+              "model": "does-not-exist-9000"}]
+    router = _rule_router(registry_db, monkeypatch, rules)
+    router._effective_policy = lambda config: ("eager", 0.0)
+    router.score_step = (
+        lambda step, task, profile=None, config=None, bias=None:
+        0.9 if step["model"] == "deepseek-v4-flash" else 0.7)
+    chain = [
+        {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"},
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        {"provider": "opencode", "model": "deepseek-v4-pro"},
+    ]
+    out = router.select_step([{"role": "user", "content": "hi"}], chain=chain,
+                             config=_prov_config(REAL_PROVIDERS))
+    assert out is not None
+    # Scoring picks flash (no prefer mandate) on the first serving provider.
+    from src.api.router import logical_model_name
+    assert logical_model_name(out[0]["model"], registry_db) == "deepseek-v4-flash"
+    dec = router.recent_decisions()[-1]
+    assert dec["action"] == "reorder"
+    assert "prefer_unserved" in dec["rules"]
+
+
+def test_build_chain_for_model_deterministic_order(registry_db):
+    """The shared chain-builder emits one target-model step per serving
+    provider (chain order), then non-target steps as fallbacks."""
+    from src.api.router import CapabilityRouter, provider_model_name
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    chain = [
+        {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"},
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        {"provider": "opencode", "model": "deepseek-v4-pro"},
+        {"provider": "opencode", "model": "ox-alpha-free"},
+    ]
+    out = router._build_chain_for_model(chain, "deepseek-v4-flash",
+                                        config=_prov_config(REAL_PROVIDERS))
+    heads = out[:3]
+    assert [(s["provider"], s["model"]) for s in heads] == [
+        ("commandcode", provider_model_name("deepseek-v4-flash", "commandcode", registry_db)),
+        ("deepseek", "deepseek-v4-flash"),
+        ("opencode", "deepseek-v4-flash"),
+    ]
+    # Non-target original steps remain as fallbacks.
+    assert any(s["model"] == "ox-alpha-free" for s in out[3:])
