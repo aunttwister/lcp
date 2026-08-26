@@ -166,6 +166,24 @@ _CLIENT_CONTEXT_PREFIXES = (
     "<environment", "<todo", "<reminderinstructions",
 )
 
+# System-prompt preambles that some clients mistakenly send as role="user"
+# messages (a schema violation). These carry no user intent — skip them like
+# tool results so the walk finds the real instruction. Conservative prefixes
+# only (we never skip generic "you are" text mid-message).
+_SYSTEM_PREAMBLE_PREFIXES = (
+    "you are an expert ai programming assistant",
+    "you are an ai programming assistant",
+    "you are an expert",
+    "you are a coding agent",
+    "you are an ai agent",
+    "you are a helpful",
+    "you are claude",
+    "you are gpt",
+    "you are deepseek",
+    "you are an autonomous ai agent",
+    "you are a sophisticated automated coding agent",
+)
+
 # Regex shapes that mark tool/test-run output rather than an instruction.
 _TOOL_RESULT_PATTERNS = (
     r"ran \d+ tests?", r"\d+/\d+ tests?",
@@ -271,6 +289,45 @@ def _is_client_context(text: str) -> bool:
     return any(lower.startswith(p) for p in _CLIENT_CONTEXT_PREFIXES)
 
 
+def _is_system_preamble(text: str) -> bool:
+    """True when *text* opens with a system-prompt preamble (sent as role="user").
+
+    Matches the opening phrase only (startswith on the first ~200 chars) so a
+    real instruction that merely *mentions* the system prompt is never skipped.
+    A message that is ONLY the preamble is a schema violation (no intent); a
+    message that appends a real instruction after the preamble should keep the
+    tail — the walk handles that via ``_preamble_tail``.
+    """
+    lower = (text or "").strip().lower()
+    if not lower:
+        return False
+    head = lower[:200]
+    return any(head.startswith(p) for p in _SYSTEM_PREAMBLE_PREFIXES)
+
+
+def _preamble_tail(text: str) -> Optional[str]:
+    """When *text* is ``<preamble line>\\n\\n<real instruction>``, return the
+    tail (the real instruction); otherwise return ``None`` (preamble-only, or
+    not a preamble at all).
+
+    Requires a NEWLINE to delimit the preamble from the instruction — a
+    preamble that runs to the end of the line (no newline) is preamble-only.
+    A short tail that is just a continuation word is not a real instruction.
+    """
+    if not _is_system_preamble(text):
+        return None
+    raw = (text or "").strip()
+    nl = raw.find("\n")
+    if nl == -1:
+        return None  # preamble runs to end of line → no separate instruction
+    rest = raw[nl:]
+    rest = rest.strip(" \n\t:-")
+    norm = rest.lower().lstrip()
+    if not rest or norm in _CONTINUATIONS:
+        return None
+    return rest
+
+
 def _is_tool_result(msg: dict, msgs: list[dict], i: int) -> bool:
     """True when a user-role message is really a tool result (schema violation).
 
@@ -318,7 +375,7 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
     Falls back to the first user message when nothing genuine survives.
     """
     meta = {"source": "none", "skipped_tool": 0, "skipped_cont": 0,
-            "skipped_context": 0}
+            "skipped_context": 0, "skipped_preamble": 0}
     msgs = messages or []
     if not msgs:
         return "", meta
@@ -335,7 +392,7 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
             meta["skipped_tool"] += 1
             continue
         # role == "user"
-        if text.strip() and not _is_client_context(text):
+        if text.strip() and not _is_client_context(text) and not _is_system_preamble(text):
             first_user_text = text  # overwrite → ends as the earliest user msg
         if _is_tool_result(msg, msgs, i):
             meta["skipped_tool"] += 1
@@ -344,6 +401,16 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
             # Attachments / browser pages / env context are not instructions —
             # keep walking back to the real user message.
             meta["skipped_context"] += 1
+            continue
+        preamble_tail = _preamble_tail(text)
+        if _is_system_preamble(text):
+            if preamble_tail and preamble_tail not in _CONTINUATIONS:
+                # The message appends a real instruction after the preamble —
+                # keep the tail as the intent (don't lose the request).
+                meta["source"] = "last_instruction"
+                return preamble_tail, meta
+            # Preamble-only user message → not an instruction, keep walking.
+            meta["skipped_preamble"] += 1
             continue
         if _is_continuation(text):
             # The backward walk keeps looking for the last real instruction; the

@@ -253,6 +253,47 @@ def test_summarize_preserves_attachment_skip():
     s = _summarize_conversation(msgs)
     assert _extract_intent_text(s)[0] == "debug this traceback"
 
+def test_extract_intent_text_skips_system_preamble_as_user():
+    """A system prompt sent as role='user' is not an instruction — the walk
+    must skip it and find the real user message."""
+    from src.api.router import _extract_intent_text
+    msgs = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "debug this traceback please"},
+        {"role": "assistant", "content": "on it"},
+        {"role": "user", "content":
+         "You are an expert AI programming assistant, working in a VS Code "
+         "workspace. Follow the user's requirements carefully."},
+    ]
+    text, meta = _extract_intent_text(msgs)
+    assert text == "debug this traceback please"
+    assert meta["source"] == "last_instruction"
+    assert meta["skipped_preamble"] == 1
+
+def test_extract_intent_text_preamble_not_mid_message():
+    """A real instruction that merely MENTIONS the system prompt (not at the
+    start) must NOT be skipped."""
+    from src.api.router import _extract_intent_text
+    msgs = [{"role": "user", "content":
+             "can you check whether 'You are an expert AI programming assistant' "
+             "appears in the system prompt?"}]
+    text, meta = _extract_intent_text(msgs)
+    assert meta["source"] == "last_instruction"
+    assert text.startswith("can you check")
+
+def test_extract_intent_text_combined_preamble_keeps_tail():
+    """When VS Code appends the real instruction AFTER the system preamble in
+    the SAME user message, the tail (the request) is kept as intent."""
+    from src.api.router import _extract_intent_text
+    msgs = [{"role": "user", "content":
+             "You are an expert AI programming assistant, working in a VS Code "
+             "workspace. Follow the user's requirements carefully & to the "
+             "letter.\n\n\ncan we plan the next feature in the features folder?"}]
+    text, meta = _extract_intent_text(msgs)
+    assert meta["source"] == "last_instruction"
+    assert "plan the next feature" in text
+    assert not text.startswith("You are an expert")
+
 def test_classify_agentic_system_prompt_only_still_agentic():
     """With no concrete user task, the agentic system prompt still wins."""
     msgs = [{"role": "system", "content": "You are an AI agent with tools: read_file, write_file"}]
