@@ -173,19 +173,17 @@ _CLIENT_CONTEXT_PREFIXES = (
 # We STRIP the prefix (not skip the message) so the real instruction survives.
 _MENTION_PREFIX_RE = re.compile(r"^\[[^\]]+\]\s+", re.IGNORECASE)
 
-# ── System-prompt-echo detection ─────────────────────────────────────────────
-# Some clients (VS Code Copilot Chat) send the conversation's system prompt as
-# a role="user" message (a schema violation). We do NOT maintain a phrase list
-# — we detect it DATA-DRIVEN: compare the user-role text against the
-# conversation's actual system prompt and skip it when it's a copy (opening
-# prefix or a substring block). This generalizes to any system prompt, no
-# matter how it changes, and never skips a real instruction that merely
-# mentions those words.
+# ── Harness-agnostic system-prompt preamble detection ────────────────────────
+# Some harnesses (VS Code Copilot Chat, OpenCode, ...) send their system prompt
+# as a role="user" message because their chat API has no System role (VS Code's
+# LanguageModelChatMessageRole is only User/Assistant). We do NOT hardcode any
+# harness's prompt text — the signal is STRUCTURAL: a preamble is long + generic
+# (no concrete task instruction). This handles any harness, now or future.
+# (Standard APIs — OpenAI developer/system, Anthropic system field — already
+# arrive as role=system and are skipped by the walk.)
 
-# Minimum length (chars) before we treat a user message as a "system echo" —
-# guards against skipping a short real message that coincidentally matches a
-# short system phrase.
-_SYSTEM_ECHO_MIN = 24
+# A user message longer than this with no concrete task signal is preamble-like.
+_PREAMBLE_MIN_LEN = 120
 
 # Regex shapes that mark tool/test-run output rather than an instruction.
 _TOOL_RESULT_PATTERNS = (
@@ -322,41 +320,66 @@ def _strip_mention(text: str) -> str:
     return _MENTION_PREFIX_RE.sub("", text, count=1).strip()
 
 
-def _is_system_echo(text: str, system_text: str) -> bool:
-    """True when *text* (a role=user message) echoes part of the conversation's
-    system prompt (``system_text``).
+# ── Harness-agnostic system-prompt preamble detection ────────────────────────
+# A system prompt sent as role=user (VS Code-style harness) has NO harness-
+# specific text we can rely on (each harness words it differently, and the
+# model name may be interpolated). But it is STRUCTURALLY distinct from a real
+# user message: it is LONG and GENERIC (a multi-sentence block with no concrete
+# task instruction). We detect it by those properties only — position (first
+# user message) + length + genericity. Deterministic, harness-agnostic.
 
-    Three shapes, all matched on the normalized text:
-    - whole echo:   the message IS the system prompt (or a substring block of
-      it, e.g. 'When asked for your name, ...')
-    - opening echo: the message OPENS with the system prompt and then appends a
-      real instruction (``<system>\\n\\n<request>``) — the leading segment
-      matches the system prompt
-    Requires a meaningful length to avoid false positives on short messages.
+# Minimum length (chars) before we treat a user message as a "system prompt"
+# candidate — a real first user message ("debug this", "hi", "write tests") is
+# short; a system prompt is a long block.
+_PREAMBLE_MIN_LEN = 120
+
+
+def _preamble_head(text: str) -> str:
+    """Return the text BEFORE the first blank line (the preamble block), so a
+    preamble with an appended instruction is still recognized as preamble-like
+    on its own head."""
+    raw = (text or "").strip()
+    parts = re.split(r"\n\s*\n", raw, maxsplit=1)
+    return parts[0].strip()
+
+
+def _is_preamble_like(text: str) -> bool:
+    """True when *text* (or its leading block, if it appends an instruction) is
+    a system-prompt preamble (any harness).
+
+    Structural: long + generic (no CONCRETE task keyword). A short message or a
+    real instruction that merely mentions a task word is not preamble-like.
     """
-    norm = re.sub(r"\s+", " ", (text or "").strip().lower())
-    sys_norm = re.sub(r"\s+", " ", (system_text or "").strip().lower())
-    if len(norm) < _SYSTEM_ECHO_MIN or not sys_norm:
+    head = _preamble_head(text)
+    if not head:
         return False
-    if sys_norm.startswith(norm) or norm in sys_norm:
-        return True
-    # Opening echo: the message starts with the (normalized) system prompt.
-    if len(sys_norm) >= _SYSTEM_ECHO_MIN and norm.startswith(sys_norm):
-        return True
-    return False
+    norm = re.sub(r"\s+", " ", head.lower())
+    if len(norm) < _PREAMBLE_MIN_LEN:
+        return False
+    if _is_continuation(head):
+        return False
+    # Generic => no concrete task signal. Single-word task keywords ("debug",
+    # "error", "bug", "explain", ...) appear INCIDENTALLY in any preamble's
+    # boilerplate, so only strong multi-word / specific phrases count.
+    for task in _SPECIFIC_TASKS:
+        for kw in TASK_SIGNALS[task]:
+            if " " not in kw and len(kw) <= 6:
+                continue
+            if kw in norm:
+                return False
+    return True
 
 
-def _system_echo_tail(text: str, system_text: str) -> Optional[str]:
-    """When *text* is a system-echo that appends a REAL instruction on the next
-    line (``<echo>\\n\\n<real request>``), return the tail; else None (echo-only,
-    or not an echo)."""
-    if not _is_system_echo(text, system_text):
+def _preamble_tail(text: str) -> Optional[str]:
+    """When a preamble-like message appends a REAL instruction after a blank
+    line (``<preamble>\\n\\n<real request>``), return the tail; else None."""
+    if not _is_preamble_like(text):
         return None
     raw = (text or "").strip()
-    nl = raw.find("\n")
-    if nl == -1:
+    parts = re.split(r"\n\s*\n", raw, maxsplit=1)
+    if len(parts) < 2:
         return None
-    rest = raw[nl:].strip(" \n\t:-")
+    rest = parts[1].strip(" \n\t:-")
     norm = rest.lower().lstrip()
     if not rest or norm in _CONTINUATIONS:
         return None
@@ -406,26 +429,23 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
 
     Walks the conversation backward (most recent first), skipping system /
     assistant / tool-role messages, tool results sent as role="user", client
-    context wrappers (attachments / reply-quotes / model-feedback), echoes of
-    the conversation's system prompt sent as role="user", and continuation
-    acknowledgements. The first survivor is the current intent. Falls back to
-    the first user message when nothing genuine survives.
+    context wrappers (attachments / reply-quotes / model-feedback), system-
+    prompt preambles sent as role="user" (VS Code-style harnesses), and
+    continuation acknowledgements. The first survivor is the current intent.
+    Falls back to the first user message when nothing genuine survives.
 
-    The system-prompt echo is detected DATA-DRIVEN (compare against the
-    conversation's real system message) rather than a phrase list.
+    A preamble that appends a real instruction after a blank line keeps the tail
+    as the intent. When the ONLY candidate is a preamble, it is returned with
+    ``meta["preamble"] = True`` so the classifier can neutralize it (route to a
+    neutral default) instead of keyword-matching the boilerplate.
     """
     meta = {"source": "none", "skipped_tool": 0, "skipped_cont": 0,
-            "skipped_context": 0, "skipped_preamble": 0}
+            "skipped_context": 0, "skipped_preamble": 0, "preamble": False}
     msgs = messages or []
     if not msgs:
         return "", meta
-    # The conversation's system prompt (for system-echo detection).
-    system_text = ""
-    for m in msgs:
-        if m.get("role") == "system":
-            system_text = _content_text(m)
-            break
     first_user_text = ""
+    last_preamble_text = ""
     for i in range(len(msgs) - 1, -1, -1):
         msg = msgs[i]
         role = msg.get("role")
@@ -438,7 +458,7 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
             meta["skipped_tool"] += 1
             continue
         # role == "user"
-        if text.strip() and not _is_client_context(text) and not _is_system_echo(text, system_text):
+        if text.strip() and not _is_client_context(text) and not _is_preamble_like(text):
             first_user_text = text  # overwrite → ends as the earliest user msg
         if _is_tool_result(msg, msgs, i):
             meta["skipped_tool"] += 1
@@ -453,15 +473,17 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
             # keep walking back to the real user message.
             meta["skipped_context"] += 1
             continue
-        echo_tail = _system_echo_tail(text, system_text)
-        if _is_system_echo(text, system_text):
-            if echo_tail and echo_tail not in _CONTINUATIONS:
-                # The message appends a real instruction after the system echo —
-                # keep the tail as the intent (don't lose the request).
+        if _is_preamble_like(text):
+            tail = _preamble_tail(text)
+            if tail and tail.lower().lstrip() not in _CONTINUATIONS:
+                # A preamble that appends a real instruction keeps the tail.
                 meta["source"] = "last_instruction"
-                return echo_tail, meta
-            # Echo-only user message → not an instruction, keep walking.
+                return tail, meta
+            # Preamble-only user message → not an instruction. Remember it so
+            # the classifier can neutralize it if nothing genuine survives.
+            last_preamble_text = text
             meta["skipped_preamble"] += 1
+            meta["preamble"] = True
             continue
         if _is_continuation(text):
             # The backward walk keeps looking for the last real instruction; the
@@ -471,6 +493,11 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
         meta["source"] = "last_instruction"
         stripped = _strip_mention(text)
         return (stripped or text).strip(), meta
+    # Nothing genuine survived: if we saw a preamble, return it flagged so the
+    # classifier can route to a neutral default (path=preamble).
+    if last_preamble_text:
+        meta["source"] = "preamble"
+        return last_preamble_text.strip(), meta
     meta["source"] = "first_user_fallback"
     stripped = _strip_mention(first_user_text)
     return (stripped or first_user_text).strip(), meta
@@ -539,6 +566,18 @@ def classify_task_detail(
     intent_text = intent_text_raw.strip() or user_text.strip()
 
     tool_count = len(tools) if tools else 0
+
+    # 1.0 Preamble neutralization: the only candidate intent is a system-prompt
+    #     preamble (VS Code-style harness sent its system prompt as role=user).
+    #     A system prompt is NEVER a task — keyword-matching it would misroute
+    #     (e.g. the preamble's incidental "debugging" -> debugging). Route to a
+    #     neutral agentic default and record path="preamble" so it's visible.
+    if intent_meta and intent_meta.get("preamble"):
+        return ClassifyResult(
+            task="agentic_multi_step", path="preamble",
+            intent_text=intent_text, intent_meta=intent_meta,
+            tool_count=tool_count,
+        )
 
     # 1. Keyword signals over the CURRENT intent.
     for task in _SPECIFIC_TASKS:

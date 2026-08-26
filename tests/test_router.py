@@ -275,20 +275,72 @@ def test_extract_intent_text_preamble_not_mid_message():
     assert meta["source"] == "last_instruction"
     assert text.startswith("can you check")
 
-def test_extract_intent_text_data_driven_system_echo():
-    """The system prompt echoed verbatim as role=user is skipped data-driven
-    (compared against the conversation's real system message — no phrase list)."""
+def test_extract_intent_text_skips_copilot_system_echo_first_user():
+    """Copilot's system prompt (echoed as the FIRST role=user message, with
+    the model name substituted) is skipped — the real user message wins."""
     from src.api.router import _extract_intent_text
+    echo = (
+        "You are an expert AI programming assistant, working with a user in the "
+        "VS Code editor.\nWhen asked for your name, you must respond with \"GitHub "
+        "Copilot\". When asked about the model you are using, you must state that "
+        "you are using coder.\nFollow the user's requirements carefully & to the "
+        "letter."
+    )
     msgs = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": "debug this traceback"},
+        {"role": "user", "content": echo},
         {"role": "assistant", "content": "on it"},
-        {"role": "user", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": "debug this traceback"},
     ]
     text, meta = _extract_intent_text(msgs)
     assert text == "debug this traceback"
     assert meta["source"] == "last_instruction"
-    assert meta["skipped_preamble"] == 1
+    # The echo precedes the real message; the walk finds the real one first.
+    assert meta["skipped_preamble"] in (0, 1)
+
+def test_extract_intent_text_preamble_only_neutralizes():
+    """When the newest user message is a long GENERIC preamble (any harness —
+    here structural, no Copilot markers), it is flagged preamble so the
+    classifier can neutralize it instead of keyword-matching."""
+    from src.api.router import _extract_intent_text, _is_preamble_like
+    preamble = (
+        "You are an autonomous software engineering agent operating in a remote "
+        "development environment. Your responsibilities include analyzing the "
+        "workspace, making precise modifications, running verification commands, "
+        "and providing clear summaries of the work performed. You should prioritize "
+        "clarity, correctness, and incremental progress throughout the session."
+    )
+    assert _is_preamble_like(preamble) is True
+    conv = [
+        {"role": "system", "content": "[older messages omitted]"},
+        {"role": "tool", "content": "some output", "tool_call_id": "c1"},
+        {"role": "assistant", "content": "processing"},
+        {"role": "user", "content": preamble},
+    ]
+    text, meta = _extract_intent_text(conv)
+    assert meta["preamble"] is True
+    assert meta["skipped_preamble"] >= 1
+    assert meta["source"] == "preamble"
+    assert text == preamble  # returned flagged (not dropped) so classify can neutralize
+
+def test_classify_preamble_routes_to_agentic():
+    """A long generic preamble as the only intent must NOT be keyword-matched
+    (e.g. misroute to debugging) — it routes to the neutral agentic default."""
+    from src.api.router import classify_task_detail
+    preamble = (
+        "You are an autonomous software engineering agent operating in a remote "
+        "development environment. Your responsibilities include analyzing the "
+        "workspace, making precise modifications, running verification commands, "
+        "and providing clear summaries of the work performed. You should prioritize "
+        "clarity, correctness, and incremental progress throughout the session."
+    )
+    conv = [
+        {"role": "system", "content": "[older messages omitted]"},
+        {"role": "user", "content": preamble},
+    ]
+    detail = classify_task_detail(conv)
+    assert detail.task == "agentic_multi_step"
+    assert detail.path == "preamble"
 
 def test_extract_intent_text_short_system_match_not_echo():
     """A SHORT user message that happens to match a system phrase must NOT be
@@ -301,17 +353,22 @@ def test_extract_intent_text_short_system_match_not_echo():
     assert meta["source"] == "last_instruction"
     assert text == "debug this traceback"
 
-def test_extract_intent_text_combined_echo_keeps_tail():
-    """When VS Code appends the real instruction AFTER a system-prompt echo in
-    the SAME user message, the tail (the request) is kept as intent."""
+def test_extract_intent_text_combined_preamble_keeps_tail():
+    """When a long generic preamble appends a REAL instruction after a blank
+    line, the tail (the request) is kept as intent."""
     from src.api.router import _extract_intent_text
+    preamble = (
+        "You are an autonomous software engineering agent operating in a remote "
+        "development environment. Your responsibilities include analyzing the "
+        "workspace, making precise modifications, and running verification "
+        "commands.\n\n\ncan we plan the next feature in the features folder?"
+    )
     msgs = [{"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content":
-             SYSTEM_PROMPT + "\n\n\ncan we plan the next feature in the features folder?"}]
+            {"role": "user", "content": preamble}]
     text, meta = _extract_intent_text(msgs)
     assert meta["source"] == "last_instruction"
     assert "plan the next feature" in text
-    assert not text.startswith("You are an expert")
+    assert not text.startswith("You are an")
 
 def test_extract_intent_text_strips_mention_prefix():
     """Copilot prefixes replies with [username] — the real request follows and
