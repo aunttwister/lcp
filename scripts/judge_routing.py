@@ -44,18 +44,21 @@ from src.api.router import classify_task_detail  # noqa: E402
 def _resolve_db(args) -> str:
     if getattr(args, "db", None):
         return args.db
+    # Match the gateway: $COST_DB wins exactly (the container sets it to
+    # /app/data/costs.db). Never silently create a fresh empty DB.
     env = os.environ.get("COST_DB")
     if env:
         return env
-    default = "/app/data/costs.db"
-    if os.path.exists(default):
-        return default
-    # Common local-dev spots when the container default doesn't exist.
+    # Local dev: fall back to the repo's data dir only if a real DB exists.
     for cand in ("data/costs.db", "data/lcp.db", "lcp.db", "costs.db"):
         p = os.path.join(ROOT, cand)
         if os.path.exists(p):
             return p
-    return default
+    raise SystemExit(
+        "No routing DB found. Run with --db PATH, or set COST_DB. "
+        "Inside the container: docker compose exec -e COST_DB=/app/data/costs.db "
+        "lcp python3 scripts/judge_routing.py replay"
+    )
 
 
 def _session(db_path):
