@@ -173,23 +173,19 @@ _CLIENT_CONTEXT_PREFIXES = (
 # We STRIP the prefix (not skip the message) so the real instruction survives.
 _MENTION_PREFIX_RE = re.compile(r"^\[[^\]]+\]\s+", re.IGNORECASE)
 
-# System-prompt preambles that some clients mistakenly send as role="user"
-# messages (a schema violation). These carry no user intent — skip them like
-# tool results so the walk finds the real instruction. Conservative prefixes
-# only (we never skip generic "you are" text mid-message).
-_SYSTEM_PREAMBLE_PREFIXES = (
-    "you are an expert ai programming assistant",
-    "you are an ai programming assistant",
-    "you are an expert",
-    "you are a coding agent",
-    "you are an ai agent",
-    "you are a helpful",
-    "you are claude",
-    "you are gpt",
-    "you are deepseek",
-    "you are an autonomous ai agent",
-    "you are a sophisticated automated coding agent",
-)
+# ── System-prompt-echo detection ─────────────────────────────────────────────
+# Some clients (VS Code Copilot Chat) send the conversation's system prompt as
+# a role="user" message (a schema violation). We do NOT maintain a phrase list
+# — we detect it DATA-DRIVEN: compare the user-role text against the
+# conversation's actual system prompt and skip it when it's a copy (opening
+# prefix or a substring block). This generalizes to any system prompt, no
+# matter how it changes, and never skips a real instruction that merely
+# mentions those words.
+
+# Minimum length (chars) before we treat a user message as a "system echo" —
+# guards against skipping a short real message that coincidentally matches a
+# short system phrase.
+_SYSTEM_ECHO_MIN = 24
 
 # Regex shapes that mark tool/test-run output rather than an instruction.
 _TOOL_RESULT_PATTERNS = (
@@ -326,39 +322,41 @@ def _strip_mention(text: str) -> str:
     return _MENTION_PREFIX_RE.sub("", text, count=1).strip()
 
 
-def _is_system_preamble(text: str) -> bool:
-    """True when *text* opens with a system-prompt preamble (sent as role="user").
+def _is_system_echo(text: str, system_text: str) -> bool:
+    """True when *text* (a role=user message) echoes part of the conversation's
+    system prompt (``system_text``).
 
-    Matches the opening phrase only (startswith on the first ~200 chars) so a
-    real instruction that merely *mentions* the system prompt is never skipped.
-    A message that is ONLY the preamble is a schema violation (no intent); a
-    message that appends a real instruction after the preamble should keep the
-    tail — the walk handles that via ``_preamble_tail``.
+    Three shapes, all matched on the normalized text:
+    - whole echo:   the message IS the system prompt (or a substring block of
+      it, e.g. 'When asked for your name, ...')
+    - opening echo: the message OPENS with the system prompt and then appends a
+      real instruction (``<system>\\n\\n<request>``) — the leading segment
+      matches the system prompt
+    Requires a meaningful length to avoid false positives on short messages.
     """
-    lower = (text or "").strip().lower()
-    if not lower:
+    norm = re.sub(r"\s+", " ", (text or "").strip().lower())
+    sys_norm = re.sub(r"\s+", " ", (system_text or "").strip().lower())
+    if len(norm) < _SYSTEM_ECHO_MIN or not sys_norm:
         return False
-    head = lower[:200]
-    return any(head.startswith(p) for p in _SYSTEM_PREAMBLE_PREFIXES)
+    if sys_norm.startswith(norm) or norm in sys_norm:
+        return True
+    # Opening echo: the message starts with the (normalized) system prompt.
+    if len(sys_norm) >= _SYSTEM_ECHO_MIN and norm.startswith(sys_norm):
+        return True
+    return False
 
 
-def _preamble_tail(text: str) -> Optional[str]:
-    """When *text* is ``<preamble line>\\n\\n<real instruction>``, return the
-    tail (the real instruction); otherwise return ``None`` (preamble-only, or
-    not a preamble at all).
-
-    Requires a NEWLINE to delimit the preamble from the instruction — a
-    preamble that runs to the end of the line (no newline) is preamble-only.
-    A short tail that is just a continuation word is not a real instruction.
-    """
-    if not _is_system_preamble(text):
+def _system_echo_tail(text: str, system_text: str) -> Optional[str]:
+    """When *text* is a system-echo that appends a REAL instruction on the next
+    line (``<echo>\\n\\n<real request>``), return the tail; else None (echo-only,
+    or not an echo)."""
+    if not _is_system_echo(text, system_text):
         return None
     raw = (text or "").strip()
     nl = raw.find("\n")
     if nl == -1:
-        return None  # preamble runs to end of line → no separate instruction
-    rest = raw[nl:]
-    rest = rest.strip(" \n\t:-")
+        return None
+    rest = raw[nl:].strip(" \n\t:-")
     norm = rest.lower().lstrip()
     if not rest or norm in _CONTINUATIONS:
         return None
@@ -407,15 +405,26 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
     """Return (intent_text, meta) — the NEWEST genuine user instruction.
 
     Walks the conversation backward (most recent first), skipping system /
-    assistant / tool-role messages, tool results sent as role="user", and
-    continuation acknowledgements. The first survivor is the current intent.
-    Falls back to the first user message when nothing genuine survives.
+    assistant / tool-role messages, tool results sent as role="user", client
+    context wrappers (attachments / reply-quotes / model-feedback), echoes of
+    the conversation's system prompt sent as role="user", and continuation
+    acknowledgements. The first survivor is the current intent. Falls back to
+    the first user message when nothing genuine survives.
+
+    The system-prompt echo is detected DATA-DRIVEN (compare against the
+    conversation's real system message) rather than a phrase list.
     """
     meta = {"source": "none", "skipped_tool": 0, "skipped_cont": 0,
             "skipped_context": 0, "skipped_preamble": 0}
     msgs = messages or []
     if not msgs:
         return "", meta
+    # The conversation's system prompt (for system-echo detection).
+    system_text = ""
+    for m in msgs:
+        if m.get("role") == "system":
+            system_text = _content_text(m)
+            break
     first_user_text = ""
     for i in range(len(msgs) - 1, -1, -1):
         msg = msgs[i]
@@ -429,7 +438,7 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
             meta["skipped_tool"] += 1
             continue
         # role == "user"
-        if text.strip() and not _is_client_context(text) and not _is_system_preamble(text):
+        if text.strip() and not _is_client_context(text) and not _is_system_echo(text, system_text):
             first_user_text = text  # overwrite → ends as the earliest user msg
         if _is_tool_result(msg, msgs, i):
             meta["skipped_tool"] += 1
@@ -444,14 +453,14 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
             # keep walking back to the real user message.
             meta["skipped_context"] += 1
             continue
-        preamble_tail = _preamble_tail(text)
-        if _is_system_preamble(text):
-            if preamble_tail and preamble_tail not in _CONTINUATIONS:
-                # The message appends a real instruction after the preamble —
+        echo_tail = _system_echo_tail(text, system_text)
+        if _is_system_echo(text, system_text):
+            if echo_tail and echo_tail not in _CONTINUATIONS:
+                # The message appends a real instruction after the system echo —
                 # keep the tail as the intent (don't lose the request).
                 meta["source"] = "last_instruction"
-                return preamble_tail, meta
-            # Preamble-only user message → not an instruction, keep walking.
+                return echo_tail, meta
+            # Echo-only user message → not an instruction, keep walking.
             meta["skipped_preamble"] += 1
             continue
         if _is_continuation(text):

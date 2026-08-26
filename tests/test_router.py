@@ -10,6 +10,15 @@ from src.api.router import (
 )
 from src.api.seed_capabilities import DEFAULT_MODEL_REGISTRY
 
+# A realistic VS Code Copilot system prompt (the exact text the client sends as
+# role="system" — some of which is echoed as role="user").
+SYSTEM_PROMPT = (
+    "You are an expert AI programming assistant, working in a VS Code workspace. "
+    "Follow the user's requirements carefully & to the letter. When asked for "
+    "your name, you must respond with \"GitHub Copilot\". When asked about the "
+    "model you are using, you must state that you are using coder."
+)
+
 
 @pytest.fixture
 def registry_db():
@@ -253,22 +262,7 @@ def test_summarize_preserves_attachment_skip():
     s = _summarize_conversation(msgs)
     assert _extract_intent_text(s)[0] == "debug this traceback"
 
-def test_extract_intent_text_skips_system_preamble_as_user():
-    """A system prompt sent as role='user' is not an instruction — the walk
-    must skip it and find the real user message."""
-    from src.api.router import _extract_intent_text
-    msgs = [
-        {"role": "system", "content": "You are a coding agent."},
-        {"role": "user", "content": "debug this traceback please"},
-        {"role": "assistant", "content": "on it"},
-        {"role": "user", "content":
-         "You are an expert AI programming assistant, working in a VS Code "
-         "workspace. Follow the user's requirements carefully."},
-    ]
-    text, meta = _extract_intent_text(msgs)
-    assert text == "debug this traceback please"
-    assert meta["source"] == "last_instruction"
-    assert meta["skipped_preamble"] == 1
+
 
 def test_extract_intent_text_preamble_not_mid_message():
     """A real instruction that merely MENTIONS the system prompt (not at the
@@ -281,14 +275,39 @@ def test_extract_intent_text_preamble_not_mid_message():
     assert meta["source"] == "last_instruction"
     assert text.startswith("can you check")
 
-def test_extract_intent_text_combined_preamble_keeps_tail():
-    """When VS Code appends the real instruction AFTER the system preamble in
+def test_extract_intent_text_data_driven_system_echo():
+    """The system prompt echoed verbatim as role=user is skipped data-driven
+    (compared against the conversation's real system message — no phrase list)."""
+    from src.api.router import _extract_intent_text
+    msgs = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": "debug this traceback"},
+        {"role": "assistant", "content": "on it"},
+        {"role": "user", "content": SYSTEM_PROMPT},
+    ]
+    text, meta = _extract_intent_text(msgs)
+    assert text == "debug this traceback"
+    assert meta["source"] == "last_instruction"
+    assert meta["skipped_preamble"] == 1
+
+def test_extract_intent_text_short_system_match_not_echo():
+    """A SHORT user message that happens to match a system phrase must NOT be
+    skipped (length guard) — e.g. 'follow the user's requirements' is a real
+    short request, not an echo."""
+    from src.api.router import _extract_intent_text
+    msgs = [{"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": "debug this traceback"}]
+    text, meta = _extract_intent_text(msgs)
+    assert meta["source"] == "last_instruction"
+    assert text == "debug this traceback"
+
+def test_extract_intent_text_combined_echo_keeps_tail():
+    """When VS Code appends the real instruction AFTER a system-prompt echo in
     the SAME user message, the tail (the request) is kept as intent."""
     from src.api.router import _extract_intent_text
-    msgs = [{"role": "user", "content":
-             "You are an expert AI programming assistant, working in a VS Code "
-             "workspace. Follow the user's requirements carefully & to the "
-             "letter.\n\n\ncan we plan the next feature in the features folder?"}]
+    msgs = [{"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content":
+             SYSTEM_PROMPT + "\n\n\ncan we plan the next feature in the features folder?"}]
     text, meta = _extract_intent_text(msgs)
     assert meta["source"] == "last_instruction"
     assert "plan the next feature" in text
@@ -331,6 +350,26 @@ def test_extract_intent_text_reply_quote_keeps_tail_instruction():
     text, meta = _extract_intent_text(msgs)
     assert meta["source"] == "last_instruction"
     assert "and also configure the port" in text
+
+def test_extract_intent_text_skips_copilot_agent_instructions():
+    """The agent-customization block (When asked for your name...) is detected
+    as a system-prompt substring echo — no phrase list needed."""
+    from src.api.router import _extract_intent_text
+    mid_block = (
+        "When asked for your name, you must respond with \"GitHub Copilot\". "
+        "When asked about the model you are using, you must state that you are "
+        "using coder."
+    )
+    msgs = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": "debug this traceback"},
+        {"role": "assistant", "content": "on it"},
+        {"role": "user", "content": mid_block},
+    ]
+    text, meta = _extract_intent_text(msgs)
+    assert text == "debug this traceback"
+    assert meta["source"] == "last_instruction"
+    assert meta["skipped_preamble"] == 1
 
 def test_extract_intent_text_skips_empty_tool_response_feedback():
     """Copilot's 'You just executed tool calls but returned an empty response.'
