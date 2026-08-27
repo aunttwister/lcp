@@ -1644,3 +1644,67 @@ def test_build_chain_for_model_deterministic_order(registry_db):
     ]
     # Non-target original steps remain as fallbacks.
     assert any(s["model"] == "ox-alpha-free" for s in out[3:])
+
+
+def test_build_chain_for_model_orders_funded_provider_first(registry_db, monkeypatch):
+    """Regression (L2): commandcode drained ($0.12) must NOT be ordered ahead
+    of opencode for the same target model. This models the REAL L2 state where
+    opencode is at 100% monthly BUT holds $7.81 available credits — the
+    balance-first credit rank must treat it as funded (not the monthly_pct
+    heuristic), so the request goes to opencode first instead of 400ing on
+    'insufficient credits'."""
+    from src.api.router import CapabilityRouter, provider_model_name
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    chain = [
+        {"provider": "commandcode", "model": "deepseek/deepseek-v4-flash"},
+        {"provider": "opencode", "model": "deepseek-v4-flash"},
+    ]
+    cfg = _prov_config({"commandcode": {"models": ["deepseek-v4-flash"]},
+                        "opencode": {"models": ["deepseek-v4-flash"]}})
+
+    class FakeCache:
+        def get(self, provider, kind):
+            if kind == "subscription" and provider == "commandcode":
+                return {"payload": {"monthly_credits_remaining": 0.12}}
+            if kind == "subscription" and provider == "opencode":
+                # 100% monthly would trip the _credit_bonus heuristic, BUT the
+                # explicit balance below says opencode still has real credits.
+                return {"payload": {"monthly_pct": 100}}
+            if kind == "balance" and provider == "opencode":
+                return {"payload": {"available_credits": 7.81, "balance": 7.81}}
+            return None
+    monkeypatch.setattr("src.api.cost_cache.get_cost_cache", lambda: FakeCache())
+
+    out = router._build_chain_for_model(chain, "deepseek-v4-flash", config=cfg)
+    # Same health band (both healthy) → credits decide: funded opencode first.
+    assert out[0]["provider"] == "opencode"
+    assert out[1]["provider"] == "commandcode"
+    # Both still serve the target model.
+    assert provider_model_name("deepseek-v4-flash", "opencode", registry_db) in out[0]["model"]
+    assert provider_model_name("deepseek-v4-flash", "commandcode", registry_db) in out[1]["model"]
+
+
+def test_build_chain_for_model_all_drained_keeps_chain_order(registry_db, monkeypatch):
+    """When every serving provider is drained, credit rank ties (all 1) and the
+    chain order is preserved — never drops providers or breaks determinism."""
+    from src.api.router import CapabilityRouter
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    chain = [
+        {"provider": "commandcode", "model": "deepseek/deepseek-v4-flash"},
+        {"provider": "opencode", "model": "deepseek-v4-flash"},
+    ]
+    cfg = _prov_config({"commandcode": {"models": ["deepseek-v4-flash"]},
+                        "opencode": {"models": ["deepseek-v4-flash"]}})
+
+    class DrainedCache:
+        def get(self, provider, kind):
+            if kind == "subscription":
+                return {"payload": {"monthly_credits_remaining": 0.12}}
+            if kind == "balance" and provider == "opencode":
+                return {"payload": {"available_credits": 0.30, "balance": 0.30}}
+            return None
+    monkeypatch.setattr("src.api.cost_cache.get_cost_cache", lambda: DrainedCache())
+
+    out = router._build_chain_for_model(chain, "deepseek-v4-flash", config=cfg)
+    # Ties preserve original chain order (deterministic, no providers dropped).
+    assert [s["provider"] for s in out[:2]] == ["commandcode", "opencode"]

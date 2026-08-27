@@ -1372,6 +1372,65 @@ class CapabilityRouter:
         except Exception:  # noqa: BLE001
             return 0
 
+    def _provider_credit_rank(self, provider: str) -> int:
+        """0=has credits, 1=low/zero credits (drained account).
+
+        Used for CHAIN ORDERING so the router prefers a funded provider over a
+        drained one when both serve the target model (a drained provider 400s
+        with "insufficient credits" and wastes the attempt).
+
+        Unlike ``_credit_bonus`` (scoring penalty) this is BALANCE-FIRST: an
+        explicit available-credit balance overrides the ``monthly_pct >= 95``
+        heuristic. That matters for opencode, which can be at 100% monthly yet
+        still hold real dollars (e.g. $7.81 available) — it must rank as funded.
+        """
+        try:
+            from .cost_cache import get_cost_cache
+            cache = get_cost_cache()
+            if cache is None:
+                return 0
+            # Strongest signal: explicit available balance → funded.
+            bal = cache.get(provider, "balance")
+            if bal:
+                p = bal["payload"] or {}
+                avail = p.get("available_credits")
+                if avail is not None and avail > 1.0:
+                    return 0
+                b = p.get("balance")
+                if isinstance(b, dict):
+                    a = b.get("available")
+                    if a is not None and a > 1.0:
+                        return 0
+            # Fall back to subscription heuristics (mirrors _credit_bonus).
+            sub = cache.get(provider, "subscription")
+            if sub:
+                p = sub["payload"] or {}
+                if p.get("_error"):
+                    return 1
+                if provider == "opencode":
+                    mpct = p.get("monthly_pct")
+                    if mpct is not None and mpct >= 95:
+                        return 1
+                elif provider == "commandcode":
+                    rem = p.get("monthly_credits_remaining")
+                    if rem is not None and rem <= 5.0:
+                        return 1
+            # Balance present but drained (<= $1) → drained.
+            bal = cache.get(provider, "balance")
+            if bal:
+                p = bal["payload"] or {}
+                b = p.get("balance")
+                if isinstance(b, dict):
+                    a = b.get("available")
+                    if a is not None and a <= 1.0:
+                        return 1
+                avail = p.get("available_credits")
+                if avail is not None and avail <= 1.0:
+                    return 1
+            return 0
+        except Exception:  # noqa: BLE001 — ordering must never break routing
+            return 0
+
     def _build_chain_for_model(self, chain: list, target_model: str,
                                preferred_provider: Optional[str] = None,
                                profile: Optional[str] = None,
@@ -1382,7 +1441,8 @@ class CapabilityRouter:
         serves the target (provider-model form via the registry), then the
         original non-target steps as fallbacks (tuple-deduped). Target
         providers are ordered: ``preferred_provider`` first, then healthy
-        before degraded (stable by chain order within a band).
+        before degraded, then funded before drained (credits) — stable by chain
+        order within each band.
 
         This is the SINGLE resolver shared by the prefer path and the scoring
         path — so both yield the same provider for the same target model.
@@ -1409,6 +1469,7 @@ class CapabilityRouter:
             return (
                 0 if (preferred_provider and s["provider"] == preferred_provider) else 1,
                 self._provider_health_rank(s, profile, config),
+                self._provider_credit_rank(s["provider"]),
             )
         target_steps.sort(key=_key)
         return target_steps + fallbacks
