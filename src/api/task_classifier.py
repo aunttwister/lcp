@@ -53,6 +53,11 @@ TASK_EXEMPLARS: dict[str, list[str]] = {
         "Review this existing file and make the changes we discussed.",
         "Refactor this function to be cleaner and update the callers.",
         "Look at this code and fix the issue in this file.",
+        # "algorithm" in isolation reads like reasoning; pin the implement-a-
+        # function/algorithm-in-code sense to code_generation, not reasoning.
+        "Implement a sorting algorithm in Python.",
+        "Write a function that implements this algorithm.",
+        "Implement the binary search algorithm in code.",
     ],
     "debugging": [
         "Why does this code throw a KeyError? Here is the traceback.",
@@ -77,6 +82,10 @@ TASK_EXEMPLARS: dict[str, list[str]] = {
         "How should I structure this microservice codebase?",
         "Create a roadmap and data model for this new feature.",
         "Plan the tech stack and schema for this application.",
+        # "make a plan to implement X" / "plan for X" is planning, not codegen.
+        "Make a plan for implementing this feature.",
+        "Plan out the steps to build this component.",
+        "Let's plan how to implement this change.",
     ],
     "casual_chat": [
         "hello",

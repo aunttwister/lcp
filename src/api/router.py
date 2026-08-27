@@ -629,9 +629,9 @@ class ClassifyResult:
     later.
     """
     task: str
-    path: str                     # keyword:<task> | semantic | agentic_prompt |
+    path: str                     # semantic | agentic_prompt | preamble |
                                   #   tool_count | token_count | casual | default
-    keyword: Optional[str] = None  # exact TASK_SIGNALS keyword matched (or None)
+    keyword: Optional[str] = None  # matched signal keyword (agentic/casual) or None
     intent_text: str = ""          # the "newest genuine user instruction" classified
     intent_meta: Optional[dict] = None  # {source, skipped_tool, skipped_cont}
     semantic: Optional[list] = None     # top-N (task, score) or None
@@ -709,19 +709,14 @@ def classify_task_detail(
             tool_count=tool_count,
         )
 
-    # 1. Keyword signals over the CURRENT intent.
-    for task in _SPECIFIC_TASKS:
-        for kw in TASK_SIGNALS[task]:
-            if kw in intent_lc:
-                return ClassifyResult(
-                    task=task, path=f"keyword:{task}", keyword=kw,
-                    intent_text=intent_text, intent_meta=intent_meta,
-                    tool_count=tool_count,
-                )
-
-    # 1b. Semantic classification (embedding-based) — runs when no keyword
-    #     matched, so meaning (not exact keywords) drives the task type. The
-    #     top-N scores are exposed regardless of whether the gate passes.
+    # 1. SEMANTIC classification — the SOLE task classifier. Meaning
+    #    (embedding similarity to per-task exemplar centroids) determines the
+    #    task type. There is deliberately NO keyword fallback: keyword lists
+    #    are brittle, hardcode vocabulary, and drift across harnesses and
+    #    phrasings (a typo like "ake a plan" misses every planning keyword).
+    #    When the embedder is unavailable or the top score is below the
+    #    confidence gate, we fall through to the structural degraded-mode
+    #    heuristics below (agentic prompt / tool count / token count / casual).
     semantic: Optional[list] = None
     min_score: Optional[float] = None
     sem_available = False
@@ -803,29 +798,20 @@ def classify_task(
 ) -> str:
     """Classify a request into a task type.
 
-    Examines conversation content, tool usage, and metadata.
+    The CURRENT intent — the newest GENUINE user instruction — is walked
+    backward from the most recent message, skipping assistant/tool messages,
+    tool results sent with role="user" (a schema violation), client context
+    wrappers (attachments / env / editor / reminders), system-prompt
+    preambles, and continuation acknowledgements.
 
     Priority (first match wins):
-      1. The CURRENT intent — the newest GENUINE user instruction — for SPECIFIC
-         task signals (planning, debugging, unit_tests, code_generation,
-         reasoning_chain, research_deep). We walk the conversation backward
-         from the most recent message and skip assistant/tool messages, tool
-         results that some clients send with role="user" (a schema violation —
-         "[tool result] Ran 12 tests" echoes hijack intent), and continuation
-         acknowledgements ("continue", "yes", …) that carry no new intent.
-      2. Semantic classification (embedding-based) of the intent message.
-      3. Agentic system prompt ("you are an AI agent", "tools:", …).
-      4. Tool-count / token-count heuristics, then casual (over the full
-         conversation), then the code_generation default.
-
-    The system prompt is deliberately NOT scanned for specific task keywords:
-    it's a fixed preamble that contains incidental words ("plan", "strategy",
-    "recommend", "suggest", "best practice", …) on EVERY request, so scanning
-    it would classify everything as ``planning``. Agentic detection still uses
-    the system prompt because "tools:" / "you are an AI agent" are genuinely
-    meaningful markers there. Likewise, a long ``max_tokens`` no longer forces
-    ``planning`` (an agent implementing code often requests a large output
-    budget, which is not a planning signal).
+      1. Semantic classification (embedding similarity to per-task exemplar
+         centroids) of the intent message — the SOLE task classifier. No
+         keyword fallback: meaning drives the task, not exact strings.
+      2. Agentic system prompt ("you are an AI agent", "tools:", …).
+      3. Tool-count / token-count heuristics, then casual (over the full
+         conversation), then the code_generation default — degraded-mode
+         fallbacks when the embedder is unavailable or below its gate.
 
     Returns only the task string; use ``classify_task_detail`` for the full
     rationale.

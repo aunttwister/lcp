@@ -163,12 +163,13 @@ def test_classify_continuation_keeps_earlier_intent():
 
 def test_classify_short_instruction_not_treated_as_continuation():
     """Short genuine instructions ('fix it', 'make it work') are intent, not
-    continuations."""
+    continuations. (Semantic-only: 'fix this' lands on code_generation; the
+    point is that it is NOT skipped as a continuation.)"""
     msgs = [
         {"role": "system", "content": "You are a coding agent."},
         {"role": "user", "content": "fix this"},
     ]
-    assert classify_task(msgs) == "debugging"
+    assert classify_task(msgs) == "code_generation"
 
 def test_classify_structural_tool_result_after_assistant_tool_calls():
     """OpenAI-style: assistant.tool_calls followed by a bare user message is a
@@ -1374,13 +1375,13 @@ def test_init_router_warm_cache(registry_db):
 
 # ── Observability + judgment: classify_task_detail, summarize, rationale ────
 
-def test_classify_task_detail_keyword_path():
+def test_classify_task_detail_semantic_debugging():
     from src.api.router import classify_task_detail
     msgs = [{"role": "user", "content": "debug why this returns a TypeError"}]
     detail = classify_task_detail(msgs)
     assert detail.task == "debugging"
-    assert detail.path == "keyword:debugging"
-    assert detail.keyword and detail.keyword in ("debug", "error", "exception")
+    assert detail.path == "semantic"
+    assert detail.keyword is None
     assert "TypeError" in detail.intent_text
     assert detail.intent_meta is not None
 
@@ -1464,10 +1465,9 @@ def test_classify_attachment_hijack_uses_real_instruction():
     ]
     detail = classify_task_detail(msgs)
     # Not hijacked by the attachment's "error"/"pytest": the genuine instruction
-    # ("...implement...") drives the keyword path instead.
-    assert detail.task == "code_generation"
-    assert detail.path == "keyword:code_generation"
-    assert detail.keyword == "implement"
+    # ("let's plan to implement...") drives the SEMANTIC path to planning.
+    assert detail.task == "planning"
+    assert detail.path == "semantic"
     assert "implement" in detail.intent_text
     assert "error" not in detail.intent_text.lower()
 
@@ -1631,8 +1631,8 @@ def test_record_decision_persists_rationale_and_conversation(registry_db):
     })
     decs = router.recent_decisions(5)
     assert decs and decs[0]["task"] == "debugging"
-    assert decs[0]["path"] == "keyword:debugging"
-    assert decs[0]["keyword"] and decs[0]["intent_text"]
+    assert decs[0]["path"] == "semantic"
+    assert decs[0]["intent_text"]
     assert decs[0]["note"] == "note here"
     assert decs[0]["profile"] == "l2"
     assert decs[0]["conversation_json"]
