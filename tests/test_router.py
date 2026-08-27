@@ -1432,6 +1432,119 @@ def test_classify_task_is_thin_wrapper():
     assert classify_task(msgs) == classify_task_detail(msgs).task
 
 
+# ── Attachment / client-context must not hijack routing ─────────────────────
+# Regression (L2): a message wrapped in <attachments>/<context>/<userRequest>
+# (VS Code sends these as role=user) used to be discarded as "client context",
+# then the keyword stage fell back to the ENTIRE raw user text — so incidental
+# words inside the attached document ("error", "pytest") hijacked routing.
+
+def _attachment_doc():
+    """A plausible attached doc containing the debugging/unit_tests trigger
+    words that previously hijacked classification via the user_text fallback."""
+    return ("# Component Runtime\n\nThis proposal covers the gateway lifecycle. "
+            "A collision on name or provides-key is an error. We run pytest "
+            "for the suite.\n" * 5)
+
+
+def test_classify_attachment_hijack_uses_real_instruction():
+    """A planning request with an attached document must be routed by the REAL
+    instruction, not by incidental words in the attachment."""
+    from src.api.router import classify_task_detail
+    msgs = [
+        {"role": "system", "content": "You are an expert AI programming assistant."},
+        {"role": "user", "content": (
+            "<attachments>\n<attachment id=\"component-runtime.md\" "
+            "filePath=\"/x/component-runtime.md\">\n" + _attachment_doc() +
+            "\n</attachment>\n</attachments>\n"
+            "<context>The current date is 2026-08-27.</context>\n"
+            "<editorContext>the user's current file is ...</editorContext>\n"
+            "<reminderInstructions>...</reminderInstructions>\n"
+            "<userRequest>let's plan to implement component runtime feature</userRequest>"
+        )},
+    ]
+    detail = classify_task_detail(msgs)
+    # Not hijacked by the attachment's "error"/"pytest": the genuine instruction
+    # ("...implement...") drives the keyword path instead.
+    assert detail.task == "code_generation"
+    assert detail.path == "keyword:code_generation"
+    assert detail.keyword == "implement"
+    assert "implement" in detail.intent_text
+    assert "error" not in detail.intent_text.lower()
+
+
+def test_classify_attachment_only_does_not_hijack():
+    """An attachment-only user message (no instruction) must not leak its content
+    into routing; a separate real instruction is what gets classified."""
+    from src.api.router import classify_task_detail
+    msgs = [
+        {"role": "system", "content": "You are an expert AI programming assistant."},
+        {"role": "user", "content": (
+            "<attachments><attachment id=\"x.md\" filePath=\"/x/x.md\">"
+            + _attachment_doc() + "</attachment></attachments>"
+        )},
+        {"role": "user", "content": "write a function to parse csv"},
+    ]
+    detail = classify_task_detail(msgs)
+    assert detail.task == "code_generation"
+    assert detail.intent_text == "write a function to parse csv"
+
+
+def test_classify_attachment_casual_words_do_not_route_casual(monkeypatch):
+    """Casual words inside an attached document must not trigger casual_chat;
+    only genuine user text is scanned. Semantic disabled for determinism."""
+    from src.api.router import classify_task_detail
+    from src.api import task_classifier as tc
+    monkeypatch.setattr(tc, "get_semantic_classifier", lambda: None)
+    msgs = [
+        {"role": "system", "content": "You are an expert AI programming assistant."},
+        {"role": "user", "content": (
+            "<attachments><attachment id=\"x.md\" filePath=\"/x/x.md\">"
+            "hey hello how are you thanks for the great doc\n" * 5 +
+            "</attachment></attachments>"
+            "<userRequest>update the dashboard</userRequest>"
+        )},
+    ]
+    detail = classify_task_detail(msgs)
+    assert detail.task != "casual_chat"
+    assert detail.path != "casual"
+    assert detail.intent_text == "update the dashboard"
+
+
+def test_context_tail_extracts_real_instruction_from_wrapper():
+    """_context_tail unwraps the genuine instruction out of an attachments/
+    userRequest wrapper (and returns None for wrapper-only messages)."""
+    from src.api.router import _context_tail
+    assert _context_tail(
+        "<attachments><attachment id=\"x\" filePath=\"/x\">body</attachment>"
+        "</attachments><userRequest>debug the failing test</userRequest>"
+    ) == "debug the failing test"
+    # Attachment-only (no instruction) → None, so the walk keeps going back.
+    assert _context_tail(
+        "<attachments><attachment id=\"x\" filePath=\"/x\">body</attachment></attachments>"
+    ) is None
+    # Reply-quote wrapper keeps working.
+    assert _context_tail(
+        '[Replying to: "quoted text"]\nnow do the real thing'
+    ) == "now do the real thing"
+
+
+def test_extract_intent_text_attachment_with_real_instruction():
+    """The intent walk returns the real instruction from a client-context
+    wrapper instead of discarding the whole message."""
+    from src.api.router import _extract_intent_text
+    msgs = [
+        {"role": "system", "content": "You are an expert AI programming assistant."},
+        {"role": "user", "content": (
+            "<attachments><attachment id=\"x.md\" filePath=\"/x/x.md\">"
+            + _attachment_doc() + "</attachment></attachments>"
+            "<userRequest>implement the sorting module</userRequest>"
+        )},
+    ]
+    intent, meta = _extract_intent_text(msgs)
+    assert intent == "implement the sorting module"
+    assert meta["source"] == "last_instruction"
+
+
 def test_summarize_conversation_preserves_tool_shape():
     from src.api.router import _summarize_conversation
     msgs = [

@@ -164,6 +164,7 @@ _TOOL_RESULT_PREFIXES = (
 _CLIENT_CONTEXT_PREFIXES = (
     "<attachments", "<attachment", "<context", "<browser_pages",
     "<environment", "<todo", "<reminderinstructions",
+    "<editorcontext", "<userrequest",
     # VS Code Copilot Chat artifacts sent as role="user" messages.
     "[replying to:",  # reply-quote wrapper: [Replying to: "quoted"] real-request
     "you just executed tool calls but returned an empty response",  # model feedback
@@ -291,26 +292,90 @@ def _is_client_context(text: str) -> bool:
     return any(lower.startswith(p) for p in _CLIENT_CONTEXT_PREFIXES)
 
 
-def _context_tail(text: str) -> Optional[str]:
-    """When a ``[Replying to: "..."]`` wrapper is followed by a REAL instruction
-    on the next line, return that tail; the walk keeps it as the intent instead
-    of discarding the whole message.
+# Client-injected context BLOCKS (XML-style tags VS Code / Copilot wrap around
+# attachments, environment info, editor state, reminders). These are NOT user
+# intent — they are stripped position-independently from a wrapper message so
+# the remaining text is the genuine user request.
+_CLIENT_BLOCK_RE = re.compile(
+    r"<\s*(attachments?|context|environment[\w-]*|browser_pages|todo|"
+    r"reminderinstructions|editorcontext)\b.*?<\s*/\s*\1\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
 
-    Only the reply-quote wrapper can carry a following instruction — attachment /
-    browser-page / env wrappers are always skipped (their body is never intent).
+
+def _context_tail(text: str) -> Optional[str]:
+    """When a client-injected wrapper carries a REAL instruction, return it.
+
+    Handles two shapes:
+      * ``[Replying to: "..."]`` quote wrapper — the instruction follows the
+        quoted block on the next line.
+      * XML context blocks (``<attachments>`` / ``<context>`` / ``<environment_info>``
+        / ``<editorContext>`` / ``<reminderInstructions>``), possibly with a
+        trailing ``<userRequest>...</userRequest>``. The blocks are stripped
+        position-independently and whatever remains (unwrapped from
+        ``<userRequest>``) is the real instruction.
+
+    Returns None when there is no genuine instruction (e.g. an attachment-only
+    message) so the walk keeps going back to a real user message.
     """
     if not _is_client_context(text):
         return None
-    if not text.lower().lstrip().startswith("[replying to:"):
-        return None
     raw = (text or "").strip()
-    nl = raw.find("\n")
-    if nl == -1:
-        return None
-    rest = raw[nl:].strip(" \n\t:-")
+    # Reply-quote wrapper: instruction follows the quoted block on a new line.
+    if raw.lower().lstrip().startswith("[replying to:"):
+        nl = raw.find("\n")
+        if nl == -1:
+            return None
+        rest = raw[nl:].strip(" \n\t:-")
+        if not rest or rest.lower().lstrip() in _CONTINUATIONS:
+            return None
+        return rest
+    # XML context blocks: strip them; unwrap <userRequest>; the rest is intent —
+    # but ONLY when a recognized block was actually removed (or a <userRequest>
+    # was present). Otherwise the message is attachment-only content (possibly
+    # truncated, e.g. no closing tag) and must be skipped, not treated as an
+    # instruction.
+    had_user_request = "<userrequest" in raw.lower()
+    stripped = _CLIENT_BLOCK_RE.sub("", raw)
+    stripped = re.sub(r"<\s*/\s*userrequest\s*>", "", stripped, flags=re.IGNORECASE)
+    stripped = re.sub(r"<\s*userrequest\s*>", "", stripped, flags=re.IGNORECASE)
+    if not had_user_request and stripped == raw:
+        return None  # nothing recognized was removed → attachment-only content
+    rest = stripped.strip(" \n\t:-")
+    # Strip leftover unclosed opening tags (a truncated wrapper like a bare
+    # "<attachments>" with no closing tag) so they can't masquerade as the
+    # instruction tail.
+    while rest:
+        m = re.match(r"<\s*/?\s*[a-z_][\w-]*\b[^>]*>", rest)
+        if not m:
+            break
+        rest = rest[m.end():].strip(" \n\t:-")
     if not rest or rest.lower().lstrip() in _CONTINUATIONS:
         return None
     return rest
+
+
+def _strip_client_context_from_messages(messages: list[dict]) -> list[dict]:
+    """Return a copy of *messages* with client-injected context content removed.
+
+    Attachments / context / env / editor / reminder blocks are not user intent,
+    so they must not feed any routing heuristic (token count, casual scan). A
+    real instruction trailing a wrapper is preserved as that message's content;
+    wrapper-only messages are dropped.
+    """
+    out: list[dict] = []
+    for msg in messages or []:
+        text = _content_text(msg)
+        if _is_client_context(text):
+            tail = _context_tail(text)
+            if not tail or tail.lower().lstrip() in _CONTINUATIONS:
+                continue  # wrapper-only → no intent, drop
+            m = dict(msg)
+            m["content"] = tail
+            out.append(m)
+        else:
+            out.append(msg)
+    return out
 
 
 def _strip_mention(text: str) -> str:
@@ -537,13 +602,26 @@ def classify_task_detail(
     details.
     """
     # Gather USER text and the FULL conversation text (user + assistant + tool)
-    # for casual detection. Neither includes the system prompt.
+    # for casual detection. Neither includes the system prompt. Client-injected
+    # context (attachments / env / editor / reminders) is NOT user intent, so it
+    # is excluded from BOTH inputs — otherwise incidental words inside an
+    # attached document ("error", "pytest", ...) hijack keyword/casual routing.
+    # A real instruction trailing a wrapper is preserved via _context_tail.
     user_text = ""
     combined = ""
     for msg in messages or []:
         if msg.get("role") == "system":
             continue
-        chunk = _content_text(msg).lower() + " "
+        text = _content_text(msg)
+        if _is_client_context(text):
+            tail = _context_tail(text)
+            if tail and tail.lower().lstrip() not in _CONTINUATIONS:
+                chunk = tail.lower() + " "
+                combined += chunk
+                if msg.get("role") == "user":
+                    user_text += chunk
+            continue
+        chunk = text.lower() + " "
         combined += chunk
         if msg.get("role") == "user":
             user_text += chunk
@@ -633,8 +711,10 @@ def classify_task_detail(
             sem_available=sem_available, tool_count=tool_count,
         )
 
-    # Token count signal — very long prompt = research_deep
-    token_count = count_tokens(messages, tools)
+    # Token count signal — very long prompt = research_deep. Count WITHOUT
+    # client-injected context so a large attachment can't push a short request
+    # over the threshold.
+    token_count = count_tokens(_strip_client_context_from_messages(messages), tools)
     if token_count > 8000:
         return ClassifyResult(
             task="research_deep", path="token_count",
