@@ -74,6 +74,17 @@ class TestInitMemory:
         assert mem.init_memory(cfg) is False
         assert mem.get_memory() is None
 
+    def test_init_mock_config_creates_no_dirs(self, tmp_path, monkeypatch):
+        """A MagicMock config (plugins.get().get().strip() resolving to the
+        storage path) must NOT create a 'MagicMock/...' junk directory tree.
+        Regresses the accidental-junk bug where os.makedirs accepted the
+        mock's __fspath__ and silently created real dirs."""
+        from unittest.mock import MagicMock
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("COST_DB", raising=False)
+        assert mem.init_memory(MagicMock()) is False
+        assert not (tmp_path / "MagicMock").exists()
+
     def test_shutdown_clears_backend(self, tmp_path, monkeypatch):
         monkeypatch.setattr("src.api.memory.embedder_from_config", lambda cfg: None)
         cfg = _Cfg(_mem_config(str(tmp_path / "mem"))["plugins"])

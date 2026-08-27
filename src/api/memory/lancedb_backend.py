@@ -50,6 +50,13 @@ class LanceDBMemoryBackend(MemoryBackend):
 
     def __init__(self, db_path: str, embed: EmbedFn, dim: int = 384,
                  index_threshold: int = 10_000):
+        # The path feeds os.makedirs below — a non-string (e.g. a MagicMock)
+        # would silently create a directory tree named after the mock instead
+        # of raising. Fail loudly so callers never create junk storage dirs.
+        if not isinstance(db_path, str):
+            raise MemoryError(
+                f"memory storage path must be a string, got {type(db_path).__name__}"
+            )
         try:
             import importlib.util
             if importlib.util.find_spec("lancedb") is None:

@@ -89,7 +89,21 @@ def init_memory(config=None) -> bool:
             _backend = None
             return False
 
-        storage = (mem_cfg.get("storage_path") or "").strip()
+        # A non-string storage_path (e.g. a MagicMock from a test or a dubious
+        # config) must NEVER reach a path API — os.makedirs would silently
+        # create a directory tree named after the mock (MagicMock/<chain>/<id>)
+        # instead of raising. Treat "configured but not a string" as a
+        # misconfiguration: disable memory rather than guess; the default path
+        # is only used when storage_path is absent/empty (init_memory(None)).
+        raw_storage = mem_cfg.get("storage_path")
+        if raw_storage is not None and not isinstance(raw_storage, str):
+            logger.warning(
+                "memory_storage_path_invalid",
+                detail=f"storage_path must be a string, got {type(raw_storage).__name__}",
+            )
+            _backend = None
+            return False
+        storage = raw_storage.strip() if isinstance(raw_storage, str) else ""
         if not storage:
             data_dir = None
             try:

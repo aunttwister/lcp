@@ -34,6 +34,18 @@ def backend(tmp_path):
     return LanceDBMemoryBackend(str(tmp_path / "mem"), fake_embed, dim=32)
 
 
+class TestNonStringPath:
+    def test_non_string_db_path_raises_and_creates_no_dirs(self, tmp_path, monkeypatch):
+        """A non-string storage path must raise MemoryError and create no
+        directory tree — MagicMock.__fspath__ would otherwise make os.makedirs
+        create 'MagicMock/<chain>/<id>' junk dirs."""
+        from unittest.mock import MagicMock
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(MemoryError):
+            LanceDBMemoryBackend(MagicMock(), fake_embed, dim=32)
+        assert not (tmp_path / "MagicMock").exists()
+
+
 # ── retain ──────────────────────────────────────────────────────────────────
 
 class TestRetain:
