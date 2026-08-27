@@ -161,13 +161,16 @@ _TOOL_RESULT_PREFIXES = (
 # (attachments / browser pages / environment context). They are NOT user
 # instructions and must be skipped like tool results — otherwise the newest
 # "genuine instruction" becomes "<attachments> <attachment id=...> No bro...".
-_CLIENT_CONTEXT_PREFIXES = (
-    "<attachments", "<attachment", "<context", "<browser_pages",
-    "<environment", "<todo", "<reminderinstructions",
-    "<editorcontext", "<userrequest",
-    # VS Code Copilot Chat artifacts sent as role="user" messages.
-    "[replying to:",  # reply-quote wrapper: [Replying to: "quoted"] real-request
-    "you just executed tool calls but returned an empty response",  # model feedback
+# Client-injected wrappers arrive as role="user" messages. We deliberately do
+# NOT enumerate client tag names (<attachments>, <context>, ...) — a new client
+# could add a new wrapper tomorrow and a list breaks. The signal is STRUCTURAL:
+# a wrapper is DELIMITED (starts with an angle bracket "<tag" or a square
+# bracket "[label]"). Genuine user text starts with neither, so a client that
+# adds a brand-new wrapper tag is still caught. The only named shapes kept here
+# are non-delimited phrases that are unmistakably client-generated.
+_CLIENT_CONTEXT_PHRASES = (
+    # VS Code Copilot Chat model-feedback echo.
+    "you just executed tool calls but returned an empty response",
 )
 
 # Username / participant prefix Copilot prepends to a message: "[alice] hi".
@@ -283,76 +286,125 @@ def _matches_tool_result_patterns(text: str) -> bool:
 
 
 def _is_client_context(text: str) -> bool:
-    """True when *text* is a client-injected context wrapper (attachments,
-    browser pages, env context, Copilot reply-quote / model-feedback) rather
-    than a genuine user instruction."""
+    """True when *text* is a client-injected wrapper rather than a genuine user
+    instruction.
+
+    Harness-agnostic: no tag/bracket NAMES are enumerated. A wrapper is
+    DELIMITED — it begins with an angle bracket (XML-style tag) or a square
+    bracket (mention / reply-quote / harness notice). Genuine user text starts
+    with neither, so a client that adds a brand-new wrapper tag is still caught.
+    """
     lower = (text or "").strip().lower()
     if not lower:
         return False
-    return any(lower.startswith(p) for p in _CLIENT_CONTEXT_PREFIXES)
+    if lower[0] == "<":
+        return True
+    if lower[0] == "[":
+        # Bracket-wrapped: a mention / reply-quote / harness notice. But tool
+        # echoes also arrive as "[tool result] …" / "[tool] …" — those are tool
+        # output, not client context, so leave them for the tool-result path.
+        return not _matches_tool_result_patterns(text)
+    return any(lower.startswith(p) for p in _CLIENT_CONTEXT_PHRASES)
 
 
-# Client-injected context BLOCKS (XML-style tags VS Code / Copilot wrap around
-# attachments, environment info, editor state, reminders). These are NOT user
-# intent — they are stripped position-independently from a wrapper message so
-# the remaining text is the genuine user request.
-_CLIENT_BLOCK_RE = re.compile(
-    r"<\s*(attachments?|context|environment[\w-]*|browser_pages|todo|"
-    r"reminderinstructions|editorcontext)\b.*?<\s*/\s*\1\s*>",
+# The client's EXPLICIT user-message container. When a harness wraps the real
+# request in <userRequest>...</userRequest> (VS Code Copilot Chat does), that
+# content IS the user instruction — the single most reliable signal we have.
+# Allowed spellings: userRequest / user_request / user-request / user request.
+_USER_REQUEST_RE = re.compile(
+    r"<\s*user[\s_-]*request\b[^>]*>(.*?)<\s*/\s*user[\s_-]*request\s*>",
     re.DOTALL | re.IGNORECASE,
 )
 
+# Innermost paired XML-style tag (ANY name) together with its content. Metadata
+# wrappers (attachments, context, editorContext, ...) are stripped INCLUDING
+# their content — no names are enumerated; any tag that is not the user-request
+# container is metadata.
+_INNER_TAG_PAIR_RE = re.compile(
+    r"<\s*[a-zA-Z_][\w.-]*\b[^>]*>[^<]*<\s*/\s*[a-zA-Z_][\w.-]*\s*>",
+    re.DOTALL,
+)
+
+# A self-closing tag (``<tag …/>``) — metadata with no separate close.
+_SELF_CLOSING_TAG_RE = re.compile(r"<\s*[a-zA-Z_][\w.-]*\b[^>]*/\s*>")
+
+# An opening tag (``<tag …>``), used to detect UNCLOSED wrappers: if one remains
+# after stripping complete pairs, the wrapper was truncated and the text after
+# it is wrapper body, not an instruction.
+_OPENING_TAG_RE = re.compile(r"<\s*[a-zA-Z_][\w.-]*\b[^>]*>")
+
+
+def _strip_complete_pairs(raw: str) -> str:
+    """Remove complete ``<tag>…</tag>`` pairs (INCLUDING their content) and
+    self-closing ``<tag …/>`` tags, innermost-first.
+
+    Metadata wrappers (attachments, context, editorContext, …) are stripped
+    regardless of name — no client tag names are enumerated. Unclosed opening
+    tags and genuine free text are left in place.
+    """
+    prev = None
+    while prev != raw:
+        prev = raw
+        raw = _INNER_TAG_PAIR_RE.sub("", raw)
+        raw = _SELF_CLOSING_TAG_RE.sub("", raw)
+    return raw
+
+
+def _strip_bracket_segments(raw: str) -> str:
+    """Strip LEADING ``[...]`` segments (mention / reply-quote / harness notice
+    prefix). Interior brackets in real text are preserved. Returns the tail."""
+    while raw.startswith("["):
+        end = raw.find("]")
+        if end == -1:
+            return raw  # unclosed — not a segment we can strip
+        raw = raw[end + 1:]
+    return raw
+
 
 def _context_tail(text: str) -> Optional[str]:
-    """When a client-injected wrapper carries a REAL instruction, return it.
+    """Return the genuine user instruction out of a client-injected wrapper.
 
-    Handles two shapes:
-      * ``[Replying to: "..."]`` quote wrapper — the instruction follows the
-        quoted block on the next line.
-      * XML context blocks (``<attachments>`` / ``<context>`` / ``<environment_info>``
-        / ``<editorContext>`` / ``<reminderInstructions>``), possibly with a
-        trailing ``<userRequest>...</userRequest>``. The blocks are stripped
-        position-independently and whatever remains (unwrapped from
-        ``<userRequest>``) is the real instruction.
+    Harness-agnostic (no tag-name enumeration):
+      1. ``<userRequest>…</userRequest>`` — the client's own "this is the user
+         message" container wins outright (its content is the instruction).
+      2. A leading ``[…]`` segment (mention, ``[Replying to: "…"]`` quote,
+         harness notice) is stripped; the remainder is the instruction.
+      3. Any other delimited tags are stripped as metadata (INCLUDING their
+         content); the remaining free text is the instruction.
 
-    Returns None when there is no genuine instruction (e.g. an attachment-only
-    message) so the walk keeps going back to a real user message.
+    Returns None when no genuine instruction remains (attachment-only or
+    truncated wrappers), so the walk keeps going back to a real user message.
     """
     if not _is_client_context(text):
         return None
     raw = (text or "").strip()
-    # Reply-quote wrapper: instruction follows the quoted block on a new line.
-    if raw.lower().lstrip().startswith("[replying to:"):
-        nl = raw.find("\n")
-        if nl == -1:
-            return None
-        rest = raw[nl:].strip(" \n\t:-")
-        if not rest or rest.lower().lstrip() in _CONTINUATIONS:
-            return None
-        return rest
-    # XML context blocks: strip them; unwrap <userRequest>; the rest is intent —
-    # but ONLY when a recognized block was actually removed (or a <userRequest>
-    # was present). Otherwise the message is attachment-only content (possibly
-    # truncated, e.g. no closing tag) and must be skipped, not treated as an
-    # instruction.
-    had_user_request = "<userrequest" in raw.lower()
-    stripped = _CLIENT_BLOCK_RE.sub("", raw)
-    stripped = re.sub(r"<\s*/\s*userrequest\s*>", "", stripped, flags=re.IGNORECASE)
-    stripped = re.sub(r"<\s*userrequest\s*>", "", stripped, flags=re.IGNORECASE)
-    if not had_user_request and stripped == raw:
-        return None  # nothing recognized was removed → attachment-only content
-    rest = stripped.strip(" \n\t:-")
-    # Strip leftover unclosed opening tags (a truncated wrapper like a bare
-    # "<attachments>" with no closing tag) so they can't masquerade as the
-    # instruction tail.
-    while rest:
-        m = re.match(r"<\s*/?\s*[a-z_][\w-]*\b[^>]*>", rest)
-        if not m:
-            break
-        rest = rest[m.end():].strip(" \n\t:-")
-    if not rest or rest.lower().lstrip() in _CONTINUATIONS:
-        return None
-    return rest
+
+    # 1. The client's explicit user-message container.
+    m = _USER_REQUEST_RE.search(raw)
+    if m:
+        content = m.group(1).strip(" \n\t:-")
+        content = _strip_mention(content)
+        return content if content and content.lower().lstrip() not in _CONTINUATIONS else None
+
+    # 2. Bracketed prefix (mention / reply-quote / notice).
+    if raw.startswith("["):
+        stripped = _strip_bracket_segments(raw)
+        if stripped == raw:
+            return None  # unclosed bracket — truncated/unknown notice, not intent
+        rest = stripped.strip(" \n\t:-")
+        return rest if rest and rest.lower().lstrip() not in _CONTINUATIONS else None
+
+    # 3. XML-style wrapper without an explicit user-request container.
+    #    Remove complete tag pairs (incl. content). If an UNCLOSED opening tag
+    #    remains, the wrapper was truncated — the text after it is wrapper body,
+    #    not an instruction — so only text BEFORE it can be intent (usually
+    #    none, so the walk continues back to a real user message).
+    rest = _strip_complete_pairs(raw)
+    m = _OPENING_TAG_RE.search(rest)
+    if m:
+        rest = rest[:m.start()]
+    rest = rest.strip(" \n\t:-")
+    return rest if rest and rest.lower().lstrip() not in _CONTINUATIONS else None
 
 
 def _strip_client_context_from_messages(messages: list[dict]) -> list[dict]:

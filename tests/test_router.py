@@ -1545,6 +1545,30 @@ def test_extract_intent_text_attachment_with_real_instruction():
     assert meta["source"] == "last_instruction"
 
 
+def test_context_tail_unknown_client_tag_still_stripped():
+    """Wrapper detection is STRUCTURAL — a brand-new client tag that is NOT in
+    any name list must still be recognized and stripped (no hardcoding)."""
+    from src.api.router import _context_tail, _is_client_context
+    # A hypothetical new client wraps metadata in <fooBar> and the real request
+    # in <userRequest>. Neither name is enumerated anywhere in the code.
+    wrapper = (
+        "<fooBar>some injected metadata we've never seen before</fooBar>"
+        "<userRequest>fix the login bug</userRequest>"
+    )
+    assert _is_client_context(wrapper)
+    assert _context_tail(wrapper) == "fix the login bug"
+    # Unknown tag WITHOUT a userRequest container, followed by free text.
+    tail = "<fooBar>metadata</fooBar> please refactor the router"
+    assert _context_tail(tail) == "please refactor the router"
+
+
+def test_context_tail_truncated_wrapper_body_is_not_intent():
+    """A truncated wrapper (unclosed tag) must not leak its body as the
+    instruction — the walk continues back to a real user message."""
+    from src.api.router import _context_tail
+    assert _context_tail("<attachments> <attachment id='X'> zzzzzzzzzzz") is None
+
+
 def test_summarize_conversation_preserves_tool_shape():
     from src.api.router import _summarize_conversation
     msgs = [
