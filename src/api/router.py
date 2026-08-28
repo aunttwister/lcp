@@ -155,6 +155,10 @@ _TOOL_RESULT_PREFIXES = (
     "[tool", "[tool result", "[function result", "[file result",
     "<tool_result", "<result>", "tool result", "tool ran without output",
     "tool call:", "[tool_call", "tool output:", "tool response:",
+    # VS Code Copilot Chat sends terminal output as a user-role echo
+    # ("Terminal output: bash: warning: ..."). It is command output, not user
+    # intent — skipping it lets the walk continue to the real instruction.
+    "terminal output:",
 )
 
 # Client-injected context wrappers some agents prepend as role="user" messages
@@ -439,21 +443,25 @@ def _strip_mention(text: str) -> str:
 
 # VS Code Copilot Chat inserts inline mention tokens (``@file:src/foo.py``,
 # ``@selection:...``, ``@terminal:1``, ``@workspace:...``, ...) INTO the user's
-# text. These are client-injected references, not user intent — and their
-# incidental tokens ("file", "component", ...) skew semantic classification
-# (a "let's plan for @file:component-runtime.md" message tipped to
-# code_generation because of the "file"/"component" tokens). Strip any
-# ``@word:content`` token position-independently, mirroring how we strip the
-# XML context blocks. Structural (no hardcoded mention-name list); emails
-# (``a@b.com``, no colon after the local part) are left untouched.
+# text, plus paste references (``#attachment:Pasted text #1``). These are
+# client-injected references, not user intent — and their incidental tokens
+# skew semantic classification (a "let's plan for @file:component-runtime.md"
+# message tipped to code_generation because of the "file"/"component" tokens).
+# Strip them position-independently, mirroring how we strip the XML context
+# blocks. Structural: any ``@word:content`` token, plus the ``#attachment``
+# paste-reference namespace. Emails (``a@b.com``, no colon after the local
+# part) are left untouched.
 _CHAT_MENTION_RE = re.compile(r"@[a-zA-Z][\w-]*:[^\s]+")
+# VS Code paste reference: "#attachment:Pasted text #1".
+_ATTACHMENT_REF_RE = re.compile(r"#attachment:[^\n]*")
 
 
 def _strip_chat_mentions(text: str) -> str:
-    """Remove client-injected ``@mention:…`` tokens from *text*."""
-    if not text or "@" not in text:
+    """Remove client-injected ``@mention:…`` tokens and ``#attachment`` paste
+    references from *text*."""
+    if not text or ("@" not in text and "#attachment" not in text):
         return text
-    return _CHAT_MENTION_RE.sub("", text).strip()
+    return _ATTACHMENT_REF_RE.sub("", _CHAT_MENTION_RE.sub("", text)).strip()
 
 
 # ── Harness-agnostic system-prompt preamble detection ────────────────────────

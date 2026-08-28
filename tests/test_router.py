@@ -1569,6 +1569,34 @@ def test_classify_strips_chat_mention_file_token():
     assert _strip_chat_mentions("mail foo@bar.com please") == "mail foo@bar.com please"
 
 
+def test_classify_skips_terminal_output_echo():
+    """VS Code 'Terminal output: ...' echoes (sent as role=user) are command
+    output, not user intent — the walk skips them and finds the real
+    instruction, so error-ish terminal text can't classify as debugging."""
+    from src.api.router import _extract_intent_text, _is_tool_result
+    term = "Terminal output: bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8)"
+    assert _is_tool_result({"role": "user", "content": term}, [], 0)
+    msgs = [
+        {"role": "user", "content": "please plan the component runtime feature"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": term},
+    ]
+    intent, meta = _extract_intent_text(msgs)
+    assert intent == "please plan the component runtime feature"
+    assert meta["skipped_tool"] == 1
+
+
+def test_classify_strips_attachment_paste_ref():
+    """VS Code '#attachment:Pasted text #1' paste references are client
+    artifacts — stripping them keeps the real instruction (and its semantic
+    classification) intact."""
+    from src.api.router import _strip_chat_mentions
+    assert (_strip_chat_mentions("it seems its still the same #attachment:Pasted text #1")
+            == "it seems its still the same")
+    # A bare '#attachment' with no colon is NOT a reference — left alone.
+    assert _strip_chat_mentions("the #attachment file") == "the #attachment file"
+
+
 def test_context_tail_unknown_client_tag_still_stripped():
     """Wrapper detection is STRUCTURAL — a brand-new client tag that is NOT in
     any name list must still be recognized and stripped (no hardcoding)."""
