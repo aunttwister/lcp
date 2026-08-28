@@ -43,21 +43,24 @@ RUN if [ "$WITH_BENCH" = "1" ]; then \
         && pip install --no-cache-dir -r code_runner/requirements_eval.txt ; \
     fi
 
-# ── Semantic routing + memory (baked GLOBALLY — in-process modules) ──────────
-# These two modules run IN-PROCESS (the classifier and the memory backend), so
-# their deps MUST live in the image's site-packages — NOT pip --target'd into
-# the bind-mounted /opt/lcp-modules (PYTHONPATH shadowing there caused the
-# tokenizers version conflict). LiveBench is the ONLY module that stays on the
-# bind mount: it runs in subprocesses that inject their own PYTHONPATH.
+# ── Semantic routing + memory (OPTIONAL — runtime-installed modules) ────────
+# These two modules run IN-PROCESS (the embedding task classifier and the
+# memory backend). The DEFAULT image is LEAN: their deps are NOT baked in —
+# the Setup page installs each into its own --target dir under the
+# bind-mounted /opt/lcp-modules (router/ and memory/), where they survive
+# container recreation. Set WITH_ROUTER=1 / WITH_MEMORY=1 to bake a module
+# into the image site-packages instead (instant availability, larger image).
+#
+# The --target installs APPEND to sys.path (never prepend) and are verified
+# with a fresh-subprocess import probe, so a broken/partial copy can't shadow
+# a good install. tokenizers is pinned to 0.22.2 (transformers requires
+# tokenizers in [0.22.0, 0.23.0]; 0.23.1 is out of range).
 #
 # sentence-transformers + tokenizers are shared by BOTH modules; lancedb is
-# memory-only. The SAME embedding model (bge-small) serves both, so the weights
-# are cached ONCE under /app/models/embedding (not bind-mounted).
-#
-# Set WITH_ROUTER=0 / WITH_MEMORY=0 for a lean image (the module then degrades
-# until installed at runtime from the Setup page).
-ARG WITH_ROUTER=1
-ARG WITH_MEMORY=1
+# memory-only. When baked, the SAME embedding model (bge-small) weights are
+# cached ONCE under /app/models/embedding (not bind-mounted).
+ARG WITH_ROUTER=0
+ARG WITH_MEMORY=0
 RUN if [ "$WITH_ROUTER" = "1" ] || [ "$WITH_MEMORY" = "1" ]; then \
         pip install --no-cache-dir sentence-transformers "tokenizers==0.22.2" ; \
     fi \

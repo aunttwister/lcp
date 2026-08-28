@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        WITH_ROUTER: ${WITH_ROUTER:-1}
+        WITH_ROUTER: ${WITH_ROUTER:-0}
         WITH_MEMORY: ${WITH_MEMORY:-0}
         WITH_BENCH: ${WITH_BENCH:-0}
     container_name: lcp
@@ -20,12 +20,14 @@ services:
       - LISTEN_PORT=8734
       - TIKTOKEN_CACHE_DIR=/app/data/tiktoken_cache
       - LCP_SECRET_KEY=${LCP_SECRET_KEY}
-      # Runtime-installed modules (LiveBench only) persist in a dedicated
-      # bind-mount directory so they survive container recreation. No
-      # PYTHONPATH here: every module the gateway imports IN-PROCESS (semantic
-      # routing, memory) is baked GLOBALLY into the image; LiveBench is the
-      # only --target module and it runs in subprocesses that inject their own
-      # PYTHONPATH via livebench_pythonpath().
+      # Runtime-installed modules (semantic routing, memory, LiveBench) persist
+      # in a dedicated bind-mount directory so they survive container
+      # recreation. The default image is LEAN: each module's deps are installed
+      # from the Setup page into their own --target dir under /opt/lcp-modules
+      # (router/, memory/). LiveBench additionally runs in subprocesses that
+      # inject their own PYTHONPATH via livebench_pythonpath(). Set
+      # WITH_ROUTER=1 / WITH_MEMORY=1 / WITH_BENCH=1 to bake a module into the
+      # image instead.
       - LCP_MODULES_DIR=/opt/lcp-modules
       # Provider API keys and the OpenCode cookie are managed via the dashboard
       # UI — they're encrypted with LCP_SECRET_KEY and stored in SQLite.

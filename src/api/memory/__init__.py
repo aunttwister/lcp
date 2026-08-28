@@ -257,14 +257,14 @@ def router_status() -> dict:
     dir (runtime install on a lean image); False when baked into the image
     site-packages.
     """
-    site = os.path.join(os.environ.get("LCP_MODULES_DIR", "").strip() or "/opt/lcp-modules", "router")
+    site = router_site()
     available = router_available(site)
     return {
         "available": available,
         "removable": available and not router_available(None),
         "active": available,
         "site": site,
-        "models_dir": os.path.join(os.path.dirname(site), "models", "router"),
+        "models_dir": router_models(),
     }
 
 

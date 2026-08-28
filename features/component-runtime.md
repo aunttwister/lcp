@@ -1,8 +1,15 @@
 # Feature: Component Runtime (Spatiotemporal Composability)
 
 **Created:** 2026-08-16
-**Status:** proposal
+**Status:** implemented (2026-08-28)
 **Phase:** cross-cutting (post-Phase 7, architectural)
+
+> **Implemented.** The reference documentation for the shipped runtime lives
+> in [`docs/component-runtime.md`](../docs/component-runtime.md). This file
+> retains the original design rationale; the code has since diverged in minor
+> ways (e.g. `model_registry`/`secret_key` are not components; the router uses
+> `[engine, settings]`; request-path resolution goes through
+> `resolve_service(key, fallback)`).
 
 ## North Star
 

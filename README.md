@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1495%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-1701%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -18,6 +18,8 @@
 - [VS Code Integration](#vs-code-integration)
 - [Configuration](#configuration)
 - [Benchmarking (LiveBench)](#benchmarking-livebench)
+- [Semantic Dynamic Routing](#semantic-dynamic-routing)
+- [Component Runtime](#component-runtime)
 - [Why LCP over alternatives?](#why-lcp-over-alternatives)
 - [Architecture](#architecture)
 - [Dependencies](#dependencies)
@@ -83,6 +85,7 @@ Clients (agents, VS Code, scripts, curl)
 - Circuit breaker with configurable thresholds — degraded providers are probed, dead providers are skipped
 - Profile-based routing by URL path: `/l2`, `/l1`, `/career`, `/coder`, `/cron`
 - SSE streaming passthrough — real-time token delivery, no buffering
+- **Semantic task classification** — every request is classified by *meaning* using an embedding model (bge-small), not exact keywords ([semantic dynamic routing](#semantic-dynamic-routing))
 - Benchmark-driven capability routing — grade each model with LiveBench, then route each request by the model's measured task scores ([benchmarking](#benchmarking-livebench))
 
 ### Tool permission control
@@ -401,6 +404,35 @@ The Models page uses this status to show a clear "not installed" notice instead
 of a Run button, and to flag when `coding` is unsupported — while still listing
 past runs.
 
+## Semantic Dynamic Routing
+
+Every request is classified into a **task type by meaning, not keywords**. The
+embedding-based classifier (`BAAI/bge-small-en-v1.5`, 384-dim) embeds the
+user's intent and matches it against per-task exemplar centroids, so
+"why does this throw a KeyError?" routes as `debugging` while "write a pytest
+for this" routes as `unit_tests` — regardless of the exact words used.
+
+The classifier is an **installable module** (Setup → Semantic routing), like
+memory and LiveBench — the default image is lean and installs it at runtime;
+`WITH_ROUTER=1` bakes it in instead. When unavailable, routing degrades
+gracefully to heuristic classification.
+
+See [Semantic Dynamic Routing](docs/semantic-routing.md) for the full
+classifier, config, and module-lifecycle details.
+
+## Component Runtime
+
+LCP wires itself through a **declarative component runtime** instead of a
+hand-sequenced bootstrap: 13 components (circuit breaker, key manager, cost
+cache, dynamic router, memory, cost plugins, …) each declare what they need
+(`requires`) and publish (`provides`), and return their own cleanup. The
+runtime topologically sorts them, starts them, and tears them down in reverse
+(LIFO) — so startup order bugs and teardown leaks are structurally impossible,
+and a failed optional module degrades instead of crashing boot.
+
+See [Component Runtime](docs/component-runtime.md) for the contract, the full
+component graph, and the request-path resolution model.
+
 ## Why LCP over alternatives?
 
 | | LCP | LiteLLM | OpenRouter | one-api |
@@ -422,7 +454,7 @@ What makes LCP different isn't just proxying — it's **decisions**:
 - **Agent-native control**: per-profile tool permissions, budgets, and keys, so you can run
   many agents (Hermes, Claude Code, Copilot, cron) behind one gateway and know exactly who
   spent what, with what tools.
-- **Zero external services**: one container, SQLite, hot-reloadable YAML. No Postgres, no
+- **Zero external services**: one container, SQLite, DB-backed config. No Postgres, no
   Redis, no cloud.
 
 ## Architecture
@@ -432,9 +464,10 @@ LCP (:8734) — single process, single port
 |
 +-- Python stdlib (http.server) — no framework overhead
 +-- SQLite (costs.db) — zero-infrastructure persistence
-+-- YAML config — human-readable, hot-reloadable
++-- DB-backed config — editable from the UI, no hot-reload files
 +-- Server-rendered dashboard — Chart.js, no SPA
 +-- Plugin architecture — provider costs, memory backends
++-- Component runtime — declarative startup + LIFO teardown
 +-- Docker — python:3.11-slim
 ```
 
@@ -451,21 +484,29 @@ Every runtime dependency and what it does in LCP:
 | **`structlog`** | Structured JSON logging to stdout. Every request, error, budget breach, and startup step is a machine-readable log line — `docker logs lcp` is grep-friendly. |
 | **`sqlalchemy`** | SQLite ORM for the `requests`, `budgets`, `alerts`, and `api_keys` tables. All cost history, spend limits, and alert state lives here. No external database. |
 | **`alembic`** | Database schema migrations. Every schema change (alerts table, API keys, error_detail column) gets a numbered migration in `alembic/versions/`. Run automatically on container startup via `alembic upgrade head`. |
-| **`pyyaml`** | Reads and writes `config/gateway.yaml`. The config is hot-reloaded — edit providers, profiles, or pricing while the server is running and changes take effect on the next request. |
+| **`pyyaml`** | Reads the seed config and `config/gateway.example.yaml`. The live config is DB-backed (SQLite `settings` table), editable from the UI — no file hot-reload needed. |
 | **`tiktoken`** | Exact BPE token counts using the `cl100k_base` encoding (same tokenizer used by DeepSeek and OpenAI models). Powers the pre-request `X-Estimated-Cost` header and the dynamic flash/pro router. The ~1 MB vocabulary file is pre-downloaded at Docker build time and persisted to a volume — zero CDN dependency at runtime. |
 | **`jinja2`** | Server-rendered HTML templates for the dashboard, profiles page, providers, API keys, alerts, and logs. No SPA, no build step, no npm — pages load instantly from the server. Shared partials for sidebar, modals, and JS utilities. |
+
+Optional modules (installed at runtime from the Setup page, **not baked into the
+lean image by default**):
+
+| Package | Role in LCP |
+|---|---|
+| **`sentence-transformers` + `torch`** | The embedding model powering semantic task classification (router module) and semantic memory recall (memory module). Installed per-module into `<LCP_MODULES_DIR>/<module>`; bake in with `WITH_ROUTER=1` / `WITH_MEMORY=1`. |
+| **`lancedb`** | Embedded vector store (memory module only) — columnar storage + ANN indexing, no separate service. |
 
 Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 1495 unit tests covering routing (incl. benchmark-driven capability routing, runtime enable toggle, per-profile routing overrides, `unit_tests` taxonomy), budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, the memory plugin, and the plugin system |
+| `pytest` | Test runner — 1701 tests covering routing (incl. benchmark-driven capability routing, semantic task classification, the runtime enable toggle, per-profile routing overrides, `unit_tests` taxonomy), budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, the memory plugin, the component runtime, and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**92% overall** — 7,247 of 7,884 statements covered (1495 tests, 0 integration tests).
+**91% overall** — 8,475 of 9,280 statements covered (1701 tests, 15 deselected integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 
@@ -473,40 +514,51 @@ Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 |---|---|
 | `src/__init__.py` | 100% |
 | `src/api/__init__.py` | 100% |
-| `src/api/alert_manager.py` | 99% |
+| `src/api/alert_manager.py` | 98% |
 | `src/api/benchmark.py` | 95% |
 | `src/api/benchmark_import.py` | 97% |
-| `src/api/circuit_breaker.py` | 98% |
-| `src/api/config.py` | 98% |
-| `src/api/cost_cache.py` | 92% |
-| `src/api/cost_estimator.py` | 100% |
-| `src/api/cost_plugins/base.py` | 100% |
+| `src/api/circuit_breaker.py` | 99% |
+| `src/api/component.py` | 94% |
+| `src/api/config.py` | 90% |
+| `src/api/cost_cache.py` | 91% |
+| `src/api/cost_estimator.py` | 95% |
+| `src/api/cost_plugins/__init__.py` | 100% |
+| `src/api/cost_plugins/base.py` | 96% |
 | `src/api/cost_plugins/commandcode.py` | 93% |
 | `src/api/cost_plugins/commandcode_api.py` | 94% |
 | `src/api/cost_plugins/deepseek.py` | 94% |
 | `src/api/cost_plugins/llamacpp.py` | 96% |
 | `src/api/cost_plugins/opencode.py` | 90% |
-| `src/api/cost_plugins/opencode_api.py` | 91% |
-| `src/api/credential_store.py` | 98% |
+| `src/api/cost_plugins/opencode_api.py` | 90% |
+| `src/api/credential_store.py` | 95% |
 | `src/api/crypto.py` | 100% |
 | `src/api/exceptions.py` | 100% |
-| `src/api/key_manager.py` | 98% |
+| `src/api/key_manager.py` | 97% |
 | `src/api/livebench_tasks.py` | 100% |
 | `src/api/logging_config.py` | 100% |
+| `src/api/memory/__init__.py` | 91% |
+| `src/api/memory/base.py` | 100% |
+| `src/api/memory/embeddings.py` | 84% |
+| `src/api/memory/harness.py` | 93% |
+| `src/api/memory/lancedb_backend.py` | 77% |
 | `src/api/models.py` | 100% |
-| `src/api/prompt_cache.py` | 100% |
-| `src/api/reasoning_store.py` | 96% |
+| `src/api/prompt_cache.py` | 98% |
+| `src/api/reasoning_store.py` | 95% |
 | `src/api/request_pipeline.py` | 96% |
-| `src/api/router.py` | 89% |
-| `src/api/seed_capabilities.py` | 99% |
-| `src/api/setup.py` | 97% |
-| `src/api/token_verifier.py` | 97% |
-| `src/main.py` | 93% |
+| `src/api/router.py` | 86% |
+| `src/api/runtime.py` | 97% |
+| `src/api/seed_capabilities.py` | 98% |
+| `src/api/setup.py` | 87% |
+| `src/api/task_classifier.py` | 87% |
+| `src/api/token_verifier.py` | 95% |
+| `src/main.py` | 85% |
+| `src/server/__init__.py` | 100% |
 | `src/server/endpoints.py` | 88% |
-| `src/server/handler.py` | 94% |
+| `src/server/handler.py` | 93% |
 | `src/server/server.py` | 100% |
 | `src/server/sse_helpers.py` | 100% |
-| `src/ui/dashboard.py` | 99% |
+| `src/ui/__init__.py` | 100% |
+| `src/ui/dashboard.py` | 98% |
 | `src/ui/pages.py` | 94% |
 | `src/ui/render.py` | 97% |
 
