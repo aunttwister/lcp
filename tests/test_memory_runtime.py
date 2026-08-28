@@ -136,7 +136,10 @@ class TestEmbedderFromConfig:
         m = embedder_from_config({})
         assert m.model_name == DEFAULT_MODEL
         assert m.device == "cpu"
-        assert m.cache_dir is None
+        # cache_dir now always resolves to the shared model cache (baked image
+        # path when present, else the persistent modules dir) so the memory
+        # embedder and the semantic router share the same weights.
+        assert m.cache_dir == mem.memory_models()
 
     def test_from_config_block(self, monkeypatch, tmp_path):
         monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "modules"))

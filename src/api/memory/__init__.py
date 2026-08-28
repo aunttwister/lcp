@@ -39,8 +39,18 @@ def memory_site() -> str:
     return os.path.join(root, "memory")
 
 
+# Shared, baked image path for the embedding model weights. Both the semantic
+# router and the memory plugin embed with the SAME model (BAAI/bge-small-en-v1.5),
+# so ONE baked cache serves both. It must live under /app (not bind-mounted) —
+# /opt/lcp-modules and /app/data are bind-mounted at runtime and would shadow
+# any image content baked there.
+_BAKED_MODELS_DIR = "/app/models/embedding"
+
+
 def memory_models() -> str:
-    """Return the directory used to cache the embedding model weights."""
+    """Return the directory used to cache the memory embedding model weights."""
+    if os.path.isdir(_BAKED_MODELS_DIR):
+        return _BAKED_MODELS_DIR
     root = os.environ.get("LCP_MODULES_DIR", "").strip() or "/opt/lcp-modules"
     return os.path.join(root, "models", "memory")
 
@@ -48,26 +58,18 @@ def memory_models() -> str:
 def router_site() -> str:
     """Return the site-packages dir for the SEMANTIC ROUTING module deps.
 
-    ``<LCP_MODULES_DIR>/router`` — pip installs sentence-transformers + torch
-    ``--target`` here (independent of the memory plugin's install). The Docker
-    build (WITH_ROUTER=1) and the Setup-page installer both use this dir.
+    Only used by the LEAN-image runtime installer (WITH_ROUTER=0):
+    ``pip install --target <LCP_MODULES_DIR>/router``. In the default baked
+    image the deps live in the image site-packages and this dir is unused.
     """
     root = os.environ.get("LCP_MODULES_DIR", "").strip() or "/opt/lcp-modules"
     return os.path.join(root, "router")
 
 
 def router_models() -> str:
-    """Return the directory used to cache the router embedding model weights.
-
-    Prefers the baked image path (``/app/models/router``, populated by the
-    Docker build's WITH_ROUTER=1 step) when present; otherwise falls back to
-    the persistent modules dir used by the Setup-page runtime installer. The
-    image path matters because ``/opt/lcp-modules`` and ``/app/data`` are
-    bind-mounted at runtime and shadow any image content baked there.
-    """
-    baked = "/app/models/router"
-    if os.path.isdir(baked):
-        return baked
+    """Return the directory used to cache the router embedding model weights."""
+    if os.path.isdir(_BAKED_MODELS_DIR):
+        return _BAKED_MODELS_DIR
     root = os.environ.get("LCP_MODULES_DIR", "").strip() or "/opt/lcp-modules"
     return os.path.join(root, "models", "router")
 
@@ -145,6 +147,13 @@ def init_memory(config=None) -> bool:
             embedder = embedder_from_config(mem_cfg)
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_embedder_init_failed", error=str(exc))
+
+        # Lean images (WITH_MEMORY=0) install the memory module at runtime into
+        # memory_site(). Make that dir importable IN-PROCESS (PYTHONPATH only
+        # affects fresh interpreters) so lancedb resolves without a restart.
+        site = memory_site()
+        if site and site not in sys.path:
+            sys.path.append(site)
 
         from .lancedb_backend import LanceDBMemoryBackend
 

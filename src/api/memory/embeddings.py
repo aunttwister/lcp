@@ -96,11 +96,10 @@ class EmbeddingModel:
 def embedder_from_config(cfg: dict) -> EmbeddingModel:
     """Build an :class:`EmbeddingModel` from a ``plugins.memory`` config block."""
     emb = (cfg or {}).get("embedding") or {}
-    cache_dir = None
-    # Prefer an explicit cache dir; default to $LCP_MODULES_DIR/models/memory.
-    models_root = os.environ.get("LCP_MODULES_DIR", "").strip()
-    if models_root:
-        cache_dir = os.path.join(models_root, "models", "memory")
+    # Use the SAME baked model cache the semantic router uses when present,
+    # else the persistent modules dir (Setup-page runtime install).
+    from . import memory_models
+    cache_dir = memory_models()
     return EmbeddingModel(
         model_name=emb.get("model", DEFAULT_MODEL),
         device=emb.get("device", "cpu"),

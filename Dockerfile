@@ -43,39 +43,31 @@ RUN if [ "$WITH_BENCH" = "1" ]; then \
         && pip install --no-cache-dir -r code_runner/requirements_eval.txt ; \
     fi
 
-# ── Memory (OPTIONAL — memory "plugin") ─────────────────────────────────────
-# The memory module (LanceDB + sentence-transformers + embedding model cache) is
-# opt-in. Set the build arg WITH_MEMORY=1 to bake its deps into the image under
-# $LCP_MODULES_DIR/memory; the default (WITH_MEMORY=0) keeps the gateway lean and
-# the memory endpoints report "unavailable" until installed from the Setup page.
+# ── Semantic routing + memory (baked GLOBALLY — in-process modules) ──────────
+# These two modules run IN-PROCESS (the classifier and the memory backend), so
+# their deps MUST live in the image's site-packages — NOT pip --target'd into
+# the bind-mounted /opt/lcp-modules (PYTHONPATH shadowing there caused the
+# tokenizers version conflict). LiveBench is the ONLY module that stays on the
+# bind mount: it runs in subprocesses that inject their own PYTHONPATH.
 #
-#   docker compose build --build-arg WITH_MEMORY=1 lcp
-ARG WITH_MEMORY=0
-RUN if [ "$WITH_MEMORY" = "1" ]; then \
-        mkdir -p "${LCP_MODULES_DIR}" \
-        && pip install --no-cache-dir --target "${LCP_MODULES_DIR}/memory" \
-            lancedb sentence-transformers ; \
-    fi
-
-# ── Semantic routing (REQUIRED — embedding task classification) ──────────────
-# The semantic task classifier (src/api/task_classifier.py) is the SOLE task
-# classifier (no keyword fallback), so its deps are baked in by default.
+# sentence-transformers + tokenizers are shared by BOTH modules; lancedb is
+# memory-only. The SAME embedding model (bge-small) serves both, so the weights
+# are cached ONCE under /app/models/embedding (not bind-mounted).
 #
-# IMPORTANT: install sentence-transformers GLOBALLY (image site-packages) and
-# cache the bge-small weights under /app/models/router — NOT under
-# $LCP_MODULES_DIR or /app/data. Both of those are bind-mounted at runtime
-# (docker-compose.yml), so any content baked there in the image is shadowed by
-# the host volume and invisible to the running container.
-#
-# Set the build arg WITH_ROUTER=0 for a lean image (classification then degrades
-# to the structural heuristics until the module is installed from the Setup page).
+# Set WITH_ROUTER=0 / WITH_MEMORY=0 for a lean image (the module then degrades
+# until installed at runtime from the Setup page).
 ARG WITH_ROUTER=1
-RUN if [ "$WITH_ROUTER" = "1" ]; then \
-        pip install --no-cache-dir sentence-transformers \
-            "tokenizers==0.22.2" \
-        && mkdir -p /app/models/router \
+ARG WITH_MEMORY=1
+RUN if [ "$WITH_ROUTER" = "1" ] || [ "$WITH_MEMORY" = "1" ]; then \
+        pip install --no-cache-dir sentence-transformers "tokenizers==0.22.2" ; \
+    fi \
+    && if [ "$WITH_MEMORY" = "1" ]; then \
+        pip install --no-cache-dir lancedb ; \
+    fi \
+    && if [ "$WITH_ROUTER" = "1" ]; then \
+        mkdir -p /app/models/embedding \
         && python3 -c \
-            "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5', cache_folder='/app/models/router')" ; \
+            "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5', cache_folder='/app/models/embedding')" ; \
     fi
 
 # ── Application code ──
