@@ -857,18 +857,23 @@ def _summarize_conversation(
     ``tool_call_id`` so the structural checks in ``_extract_intent_text``
     behave identically when the summary is replayed. Content is trimmed from
     the END so leading tool-result markers (``[tool result]``, ``<tool_result``,
-    ...) survive the trim. If the serialized size still exceeds ``max_total``,
-    the OLDEST messages are dropped (the intent walk is newest-first) and a
-    placeholder system message records how many were dropped.
+    ...) survive the trim — EXCEPT for client-context wrapper messages, whose
+    real instruction sits at the END (``<userRequest>...plan...</userRequest>``),
+    so those are trimmed from the START instead. If the serialized size still
+    exceeds ``max_total``, the OLDEST messages are dropped (the intent walk is
+    newest-first) and a placeholder system message records how many were
+    dropped.
     """
 
-    def _trim(text, limit):
+    def _trim(text, limit, from_end=True):
         if not text:
             return ""
         text = str(text)
         if len(text) <= limit:
             return text
-        return text[:limit] + f"… [{len(text) - limit} chars omitted]"
+        if from_end:
+            return text[:limit] + f"… [{len(text) - limit} chars omitted]"
+        return f"[{len(text) - limit} chars omitted] …" + text[-limit:]
 
     def _one(msg):
         out = {}
@@ -877,7 +882,16 @@ def _summarize_conversation(
         content = msg.get("content")
         if isinstance(content, str):
             if content.strip():
-                out["content"] = _trim(content, max_content)
+                # Client-context wrappers carry the real instruction at the END
+                # (<userRequest>...</userRequest>), so keep the END intact when
+                # trimming — but ONLY when a genuine trailing instruction exists
+                # (_context_tail finds one). A truncated/unclosed wrapper whose
+                # tail is just attachment body must keep the DEFAULT head-trim,
+                # else the body leaks back in as intent. Every other message
+                # keeps its head (so leading tool-result markers survive).
+                tail = _context_tail(content) if (msg.get("role") == "user" and _is_client_context(content)) else None
+                keep_end = bool(tail and tail.lower().lstrip() not in _CONTINUATIONS)
+                out["content"] = _trim(content, max_content, from_end=not keep_end)
         elif isinstance(content, list):
             blocks = []
             for b in content[:8]:

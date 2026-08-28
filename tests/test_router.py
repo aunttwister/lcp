@@ -1670,6 +1670,36 @@ def test_summarize_conversation_drops_oldest_when_huge():
     assert any(isinstance(m.get("content"), str) and "omitted" in m["content"] for m in s)
 
 
+def test_summarize_preserves_trailing_user_request_instruction():
+    """Regression (judge replay NOINTENT): a client-context wrapper carries the
+    real instruction at the END (<userRequest>...</userRequest>). Trimming from
+    the START (default) would cut it off and replay would find no intent; the
+    wrapper message must keep its tail so the stored summary still replays to
+    the genuine instruction (planning)."""
+    from src.api.router import _summarize_conversation, _extract_intent_text, classify_task_detail
+    doc = "# Component Runtime\n\n" + "x" * 400  # long attachment body
+    user_msg = (
+        "<attachments>\n<attachment id=\"component-runtime.md\" filePath=\"/x/component-runtime.md\">\n"
+        + doc + "\n</attachment>\n</attachments>\n"
+        "<context>The current date is 2026-08-28.</context>\n"
+        "<userRequest>let's now plan for the @file:component-runtime.md feature</userRequest>"
+    )
+    msgs = [
+        {"role": "system", "content": "You are an expert AI programming assistant."},
+        {"role": "user", "content": user_msg},
+    ]
+    summarized = _summarize_conversation(msgs, max_content=200, max_total=4000)
+    # The trailing instruction survives the trim.
+    assert "<userRequest>let's now plan" in summarized[1]["content"]
+    # Replaying the summary recovers the same genuine instruction.
+    assert _extract_intent_text(summarized)[0] == _extract_intent_text(msgs)[0]
+    # And (with the embedder active) it classifies as planning, not NOINTENT.
+    detail = classify_task_detail(summarized)
+    assert detail.task == "planning"
+    assert detail.path == "semantic"
+    assert detail.intent_text == "let's now plan for the  feature"
+
+
 def test_record_decision_persists_rationale_and_conversation(registry_db):
     import json
     from src.api.router import CapabilityRouter, classify_task_detail, _extract_intent_text
