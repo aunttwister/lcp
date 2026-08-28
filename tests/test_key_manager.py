@@ -1,8 +1,9 @@
 """Tests for key_manager.py — API key CRUD, rotation, validation, spend tracking."""
 
 import pytest
+import src.api.key_manager as key_manager_mod
 from src.api.models import get_engine, Base, ApiKey
-from src.api.key_manager import init_key_manager
+from src.api.key_manager import KeyManager
 
 
 @pytest.fixture
@@ -11,7 +12,8 @@ def km(temp_dir):
     db_path = str(temp_dir / "keys_test.db")
     engine = get_engine(db_path)
     Base.metadata.create_all(engine)
-    return init_key_manager(engine, str(temp_dir))
+    km = key_manager_mod._key_manager = KeyManager(engine, str(temp_dir))
+    return km
 
 
 class TestCreateKey:
@@ -176,7 +178,7 @@ class TestLegacyMigration:
         db_path = str(temp_dir / "migrate_test.db")
         engine = get_engine(db_path)
         Base.metadata.create_all(engine)
-        km2 = init_key_manager(engine, str(data_dir))
+        km2 = key_manager_mod._key_manager = KeyManager(engine, str(data_dir))
 
         keys = km2.list_keys()
         assert len(keys) >= 1
@@ -194,7 +196,7 @@ class TestLegacyMigration:
         db_path = str(temp_dir / "empty_migrate.db")
         engine = get_engine(db_path)
         Base.metadata.create_all(engine)
-        km2 = init_key_manager(engine, str(data_dir))
+        km2 = key_manager_mod._key_manager = KeyManager(engine, str(data_dir))
         assert km2.list_keys() == []
 
     def test_migrate_json_decode_error(self, temp_dir):
@@ -207,7 +209,7 @@ class TestLegacyMigration:
         db_path = str(temp_dir / "bad_migrate.db")
         engine = get_engine(db_path)
         Base.metadata.create_all(engine)
-        km2 = init_key_manager(engine, str(data_dir))
+        km2 = key_manager_mod._key_manager = KeyManager(engine, str(data_dir))
         # Falls through with no keys migrated
         assert km2.list_keys() == []
 

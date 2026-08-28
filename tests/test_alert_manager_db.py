@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.api.alert_manager import AlertManager, _alert_to_dict, init_alert_manager
+from src.api.alert_manager import AlertManager, _alert_to_dict
 from src.api.models import Alert, get_session
 
 
@@ -166,12 +166,14 @@ class TestAlertToDict:
 class TestSingleton:
     def test_init_alert_manager_sets_engine(self, temp_db):
         db_path, engine = temp_db
-        am = init_alert_manager(engine)
+        import src.api.alert_manager as am_mod
+        am = am_mod._alert_manager = AlertManager(engine)
         assert am._engine is engine
 
     def test_get_alert_manager_reuses_singleton(self, db_am, temp_db):
         # init singleton with the temp engine
-        init_alert_manager(db_am._engine)
+        import src.api.alert_manager as am_mod
+        am_mod._alert_manager = AlertManager(db_am._engine)
         from src.api.alert_manager import get_alert_manager
         am = get_alert_manager()
         assert am is db_am or am._engine is db_am._engine

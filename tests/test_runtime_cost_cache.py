@@ -8,10 +8,11 @@ from src.api.runtime import Runtime
 @pytest.fixture(autouse=True)
 def _reset_cc_globals():
     """Force-reset the cost_cache module globals after every test so binding
-    _runtime here never leaks into other test files."""
+    a runtime here never leaks into other test files."""
     import src.api.cost_cache as cc
+    import src.api.runtime as runtime
     yield
-    cc._runtime = None
+    runtime._active_runtime = None
     cc._settings_store = None
     cc._cost_cache = None
     cc._refresher = None

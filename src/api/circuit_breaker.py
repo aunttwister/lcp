@@ -373,10 +373,11 @@ def get_circuit_breaker(config=None) -> CircuitBreaker:
     (lazy-created with *config*), preserving the boot/tests path until main.py
     is rewired to the runtime.
     """
-    global _runtime
-    if _runtime is not None:
+    from .runtime import get_runtime
+    rt = get_runtime()
+    if rt is not None:
         try:
-            comp = _runtime.resolve("circuit_breaker")
+            comp = rt.resolve("circuit_breaker")
         except Exception:  # noqa: BLE001 — inactive/unbound → legacy
             comp = None
         if comp is not None and getattr(comp, "breaker", None) is not None:
@@ -394,13 +395,10 @@ def get_circuit_breaker(config=None) -> CircuitBreaker:
 # runtime's CircuitBreakerComponent, which constructs the breaker with BOTH
 # config and engine injected up front — eliminating the post-hoc
 # attach_engine() call. The engine attach also reloads persisted health.
-_runtime: Optional["Runtime"] = None
 
 
 def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_circuit_breaker()`` delegates to it."""
-    global _runtime
-    _runtime = rt
     from .runtime import bind_active_runtime
     bind_active_runtime(rt)
 

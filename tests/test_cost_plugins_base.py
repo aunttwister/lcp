@@ -6,7 +6,6 @@ from src.api.cost_plugins.base import (
     CostPlugin,
     PluginRegistry,
     get_registry,
-    init_plugins,
 )
 
 
@@ -252,47 +251,3 @@ class TestSingleton:
         assert isinstance(reg, PluginRegistry)
         # Second call returns same instance
         assert get_registry() is reg
-
-    def test_init_plugins_is_idempotent(self):
-        reg1 = init_plugins()
-        reg2 = init_plugins()
-        assert reg1 is reg2
-
-    def test_init_plugins_with_extras(self):
-        reg = init_plugins(extra_plugins=[_DummyPlugin()])
-        assert reg.for_provider("dummy") is not None
-
-    def test_init_plugins_does_not_override_existing(self):
-        reg1 = init_plugins(extra_plugins=[_DummyPlugin()])
-        # Second call with different extra should return same registry, not re-register
-        reg2 = init_plugins(extra_plugins=[_AnotherPlugin()])
-        assert reg1 is reg2
-        # Dummy should still be registered
-        assert reg1.for_provider("dummy") is not None
-
-    def test_init_plugins_fills_empty_registry(self):
-        """When _registry exists but is empty, init_plugins should fill it."""
-        import src.api.cost_plugins.base as base_mod
-        base_mod._registry = PluginRegistry()
-        reg = init_plugins()
-        # Should have found and registered the auto-registered plugins
-        assert "deepseek" in reg.providers
-        assert "opencode" in reg.providers
-        assert "llamacpp" in reg.providers
-
-    def test_init_plugins_injects_engine_into_registered(self):
-        """When a registry already has providers, init_plugins(engine=...) calls set_engine."""
-        import src.api.cost_plugins.base as base_mod
-        from unittest.mock import MagicMock
-        reg = PluginRegistry()
-        plugin = _MinimalPlugin()
-        plugin.set_engine = MagicMock()
-        reg.register(plugin)
-        base_mod._registry = reg
-        try:
-            result = init_plugins(engine="fake-engine")
-            assert result is reg
-            plugin.set_engine.assert_called_once_with("fake-engine")
-        finally:
-            # Restore the singleton so other test files see a clean registry
-            base_mod._registry = None

@@ -17,7 +17,6 @@ from .base import (
     PluginRegistry,
     bind_runtime,
     get_registry,
-    init_plugins,
 )
 
 # Import plugins to trigger registration
@@ -32,5 +31,4 @@ __all__ = [
     "PluginRegistry",
     "bind_runtime",
     "get_registry",
-    "init_plugins",
 ]

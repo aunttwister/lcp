@@ -125,10 +125,11 @@ def get_credential_store(engine=None, data_dir: str = "data") -> CredentialStore
     Delegates to the runtime's CredentialStoreComponent when bound; otherwise
     the legacy singleton (lazy-created with *engine*).
     """
-    global _runtime
-    if _runtime is not None:
+    from .runtime import get_runtime
+    rt = get_runtime()
+    if rt is not None:
         try:
-            comp = _runtime.resolve("credential_store")
+            comp = rt.resolve("credential_store")
         except Exception:  # noqa: BLE001 — inactive/unbound → legacy
             comp = None
         if comp is not None and getattr(comp, "store", None) is not None:
@@ -139,28 +140,13 @@ def get_credential_store(engine=None, data_dir: str = "data") -> CredentialStore
     return _credential_store
 
 
-def init_credential_store(engine, data_dir: str = "data") -> CredentialStore:
-    """Initialize the credential store singleton with the engine."""
-    global _credential_store
-    _credential_store = CredentialStore(engine, data_dir)
-    return _credential_store
-
-
 # ── Component-runtime adapter (Phase C) ────────────────────────────────────
-_runtime: Optional["Runtime"] = None
 
 
 def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_credential_store()`` delegates to it."""
-    global _runtime
-    _runtime = rt
     from .runtime import bind_active_runtime
     bind_active_runtime(rt)
-
-
-def is_runtime_bound() -> bool:
-    """True when an active Runtime is bound (it owns the credential store)."""
-    return _runtime is not None
 
 
 class CredentialStoreComponent(Component):

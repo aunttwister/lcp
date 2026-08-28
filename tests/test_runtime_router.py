@@ -7,9 +7,9 @@ from src.api.runtime import Runtime
 
 @pytest.fixture(autouse=True)
 def _reset_router_globals():
-    import src.api.router as r
+    import src.api.runtime as runtime
     yield
-    r._runtime = None
+    runtime._active_runtime = None
 
 
 @pytest.fixture
@@ -45,6 +45,6 @@ def test_facade_delegates_when_bound(rt):
 def test_facade_falls_back_when_unbound(monkeypatch):
     import src.api.router as r
     from src.api.router import get_dynamic_router
-    monkeypatch.setattr(r, "_runtime", None)
+    monkeypatch.setattr("src.api.runtime._active_runtime", None)
     # Legacy eager singleton returns the default router.
     assert get_dynamic_router() is r._dynamic_router

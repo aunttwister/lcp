@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.api.credential_store import CredentialStore, init_credential_store, get_credential_store
+from src.api.credential_store import CredentialStore, get_credential_store
 from src.api.models import ProviderCredential, get_session
 
 
@@ -91,7 +91,8 @@ class TestCookieStorage:
 class TestCredentialStoreSingleton:
     def test_init_and_get(self, temp_db, temp_dir):
         db_path, engine = temp_db
-        s = init_credential_store(engine, data_dir=str(temp_dir))
+        import src.api.credential_store as cs
+        s = cs._credential_store = CredentialStore(engine, str(temp_dir))
         assert get_credential_store() is s
 
     def test_uninitialized_returns_none(self):

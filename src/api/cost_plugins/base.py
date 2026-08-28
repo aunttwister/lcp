@@ -315,10 +315,11 @@ def get_registry() -> PluginRegistry:
     constructor). Otherwise it returns the legacy module-level singleton —
     preserving the boot/tests path until main.py is rewired to the runtime.
     """
-    global _runtime
-    if _runtime is not None:
+    from ..runtime import get_runtime
+    rt = get_runtime()
+    if rt is not None:
         try:
-            comp = _runtime.resolve("cost_plugins")
+            comp = rt.resolve("cost_plugins")
         except Exception:  # noqa: BLE001 — inactive/unbound → legacy
             comp = None
         if comp is not None and getattr(comp, "registry", None) is not None:
@@ -326,50 +327,6 @@ def get_registry() -> PluginRegistry:
     global _registry
     if _registry is None:
         _registry = PluginRegistry()
-    return _registry
-
-
-def init_plugins(extra_plugins: Optional[list[CostPlugin]] = None,
-                 engine: Any = None) -> PluginRegistry:
-    """Initialize the global registry and register built-in plugins.
-
-    May be called multiple times — subsequent calls are no-ops.
-    Use *extra_plugins* to inject additional or test plugins.
-    Pass *engine* (SQLAlchemy engine) to plugins that need gateway DB access.
-    """
-    global _registry
-    if _registry is not None:
-        # Ensure the registry has the built-in plugins loaded.
-        # Module-level auto-registration may have been bypassed, so
-        # we explicitly register them when the registry is empty.
-        if not _registry.providers:
-            from .deepseek import DeepSeekCostPlugin
-            from .opencode import OpenCodeCostPlugin
-            from .llamacpp import LlamaCppCostPlugin
-            from .commandcode import CommandCodeCostPlugin
-            _registry.register(DeepSeekCostPlugin())
-            _registry.register(OpenCodeCostPlugin(engine=engine))
-            _registry.register(LlamaCppCostPlugin())
-            _registry.register(CommandCodeCostPlugin(engine=engine))
-        elif engine is not None:
-            # Inject engine into already-registered plugins that need it
-            for _name, _plugin in _registry._plugins.items():
-                if hasattr(_plugin, "set_engine"):
-                    _plugin.set_engine(engine)
-        return _registry
-
-    _registry = PluginRegistry()
-    from .deepseek import DeepSeekCostPlugin
-    from .opencode import OpenCodeCostPlugin
-    from .llamacpp import LlamaCppCostPlugin
-    _registry.register(DeepSeekCostPlugin())
-    _registry.register(OpenCodeCostPlugin(engine=engine))
-    _registry.register(LlamaCppCostPlugin())
-
-    if extra_plugins:
-        for p in extra_plugins:
-            _registry.register(p)
-
     return _registry
 
 
@@ -382,13 +339,10 @@ def init_plugins(extra_plugins: Optional[list[CostPlugin]] = None,
 # component builds a FRESH registry with engine injected at construction
 # (constructor injection — no set_engine probing), and returns a disposer that
 # runs each plugin's on_shutdown() (e.g. llamacpp persists its usage cache).
-_runtime: Optional["Runtime"] = None
 
 
 def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_registry()`` delegates to it."""
-    global _runtime
-    _runtime = rt
     from ..runtime import bind_active_runtime
     bind_active_runtime(rt)
 

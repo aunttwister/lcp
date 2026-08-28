@@ -9,10 +9,10 @@ from src.api.runtime import Runtime
 def _reset_km_cs_globals():
     import src.api.key_manager as km
     import src.api.credential_store as cs
+    import src.api.runtime as runtime
     yield
-    km._runtime = None
+    runtime._active_runtime = None
     km._key_manager = None
-    cs._runtime = None
     cs._credential_store = None
 
 
@@ -57,8 +57,7 @@ def test_facades_fall_back_when_unbound(monkeypatch):
     import src.api.credential_store as cs
     from src.api.key_manager import get_key_manager
     from src.api.credential_store import get_credential_store
-    monkeypatch.setattr(km, "_runtime", None)
-    monkeypatch.setattr(cs, "_runtime", None)
+    monkeypatch.setattr("src.api.runtime._active_runtime", None)
     km._key_manager = None
     cs._credential_store = None
     assert get_key_manager() is None       # no engine passed → None (legacy)

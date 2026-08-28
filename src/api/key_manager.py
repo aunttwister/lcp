@@ -257,10 +257,11 @@ def get_key_manager(engine=None, data_dir: str = "data") -> KeyManager:
     Delegates to the runtime's KeyManagerComponent when bound; otherwise the
     legacy singleton (lazy-created with *engine*).
     """
-    global _runtime
-    if _runtime is not None:
+    from .runtime import get_runtime
+    rt = get_runtime()
+    if rt is not None:
         try:
-            comp = _runtime.resolve("key_manager")
+            comp = rt.resolve("key_manager")
         except Exception:  # noqa: BLE001 — inactive/unbound → legacy
             comp = None
         if comp is not None and getattr(comp, "manager", None) is not None:
@@ -271,28 +272,13 @@ def get_key_manager(engine=None, data_dir: str = "data") -> KeyManager:
     return _key_manager
 
 
-def init_key_manager(engine, data_dir: str = "data") -> KeyManager:
-    """Force-initialize the key manager with an engine."""
-    global _key_manager
-    _key_manager = KeyManager(engine, data_dir)
-    return _key_manager
-
-
 # ── Component-runtime adapter (Phase C) ────────────────────────────────────
-_runtime: Optional["Runtime"] = None
 
 
 def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_key_manager()`` delegates to it."""
-    global _runtime
-    _runtime = rt
     from .runtime import bind_active_runtime
     bind_active_runtime(rt)
-
-
-def is_runtime_bound() -> bool:
-    """True when an active Runtime is bound (it owns the key manager)."""
-    return _runtime is not None
 
 
 class KeyManagerComponent(Component):

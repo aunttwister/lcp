@@ -3,12 +3,22 @@ import os
 import tempfile
 
 import pytest
+import src.api.router as router_mod
 from src.api.router import (
     CapabilityRouter, classify_task, get_dynamic_router,
-    init_router, logical_model_name, benchmark_model_name,
+    logical_model_name, benchmark_model_name,
     normalize_model_id, detect_quantization,
 )
 from src.api.seed_capabilities import DEFAULT_MODEL_REGISTRY
+
+
+def _seed_router(db_path="data/costs.db", enabled=False, cost_bias=0.15):
+    """Seed the module-level dynamic router (legacy init_router)."""
+    r = CapabilityRouter(enabled=enabled, db_path=db_path, cost_bias=cost_bias)
+    if enabled:
+        r.load_matrix()
+    router_mod._dynamic_router = r
+    return r
 
 # A realistic VS Code Copilot system prompt (the exact text the client sends as
 # role="system" — some of which is echoed as role="user").
@@ -536,19 +546,19 @@ def test_singleton():
     assert get_dynamic_router() is get_dynamic_router()
 
 def test_init_router_passes_cost_bias(registry_db):
-    init_router(registry_db, enabled=True, cost_bias=0.4)
+    _seed_router(registry_db, enabled=True, cost_bias=0.4)
     try:
         r = get_dynamic_router()
         assert r.enabled is True
         assert r.cost_bias == 0.4
     finally:
         # restore the default so other tests aren't affected
-        init_router(enabled=False)
+        _seed_router(enabled=False)
 
 def test_sync_router_enabled_from_settings(registry_db, monkeypatch):
     """Boot seeds enabled=False from the yaml baseline; the persisted UI toggle
     must re-sync the global router to enabled=True."""
-    init_router(registry_db, enabled=False)
+    _seed_router(registry_db, enabled=False)
     try:
         class FakeSettings:
             def get_routing_enabled(self, default=None):
@@ -558,7 +568,7 @@ def test_sync_router_enabled_from_settings(registry_db, monkeypatch):
         assert sync_router_enabled_from_settings() is True
         assert get_dynamic_router().enabled is True
     finally:
-        init_router(enabled=False)
+        _seed_router(enabled=False)
 
 def test_get_model_score_resolves_debugging_via_matrix(registry_db):
     """debugging is derived from code_generation, so scores must resolve."""
@@ -782,8 +792,8 @@ def test_invalidate_matrix(registry_db):
     assert router.load_matrix() is not None
 
 def test_routing_status(registry_db, monkeypatch):
-    from src.api.router import routing_status, init_router
-    init_router(registry_db, enabled=True)
+    from src.api.router import routing_status
+    _seed_router(registry_db, enabled=True)
     monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: None)
     router = get_dynamic_router()
     router._record_decision({"ts": "t", "profile": "l2", "task": "debugging",
@@ -794,7 +804,7 @@ def test_routing_status(registry_db, monkeypatch):
     assert st["policy"] == "eager"
     assert "recent_decisions" in st
     assert st["recent_decisions"][0]["action"] == "reorder"
-    init_router(enabled=False)  # restore
+    _seed_router(enabled=False)  # restore
 
 
 def test_decisions_persist_across_restart(registry_db):
@@ -1107,15 +1117,15 @@ def test_select_step_policy_rule_override(registry_db, monkeypatch):
     assert router.recent_decisions()[-1]["policy"] == "cost_first"
 
 def test_routing_status_includes_rules(registry_db, monkeypatch):
-    from src.api.router import routing_status, init_router
+    from src.api.router import routing_status
     rules = [{"task": "debugging", "action": "prefer", "provider": "deepseek"}]
-    init_router(registry_db, enabled=True)
+    _seed_router(registry_db, enabled=True)
     try:
         _rule_router(registry_db, monkeypatch, rules)
         st = routing_status(None)
         assert st["rules"] == rules
     finally:
-        init_router(enabled=False)
+        _seed_router(enabled=False)
 
 # ── Per-profile routing (enable/policy/min_score/rules overrides) ─────────
 
@@ -1198,8 +1208,8 @@ def test_per_profile_policy_and_rules(registry_db, monkeypatch):
 
 
 def test_routing_status_includes_per_profile(registry_db, monkeypatch):
-    from src.api.router import routing_status, init_router, _status_for_profile
-    init_router(registry_db, enabled=True)
+    from src.api.router import routing_status, _status_for_profile
+    _seed_router(registry_db, enabled=True)
     monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: None)
     try:
         class _Cfg:
@@ -1216,15 +1226,15 @@ def test_routing_status_includes_per_profile(registry_db, monkeypatch):
         assert block["enabled"] is True
         assert "rules" in block
     finally:
-        init_router(enabled=False)
+        _seed_router(enabled=False)
 
 
 def test_routing_status_restricts_to_selected_models(registry_db, monkeypatch):
     """Per-task recommendations only include models referenced by a chain."""
     from src.api.seed_capabilities import seed_livebench
-    from src.api.router import routing_status, init_router
+    from src.api.router import routing_status
     seed_livebench(registry_db)
-    init_router(registry_db, enabled=True)
+    _seed_router(registry_db, enabled=True)
     try:
         # Chain selects ONLY deepseek-v4-flash — recommendations must not
         # mention models like gpt-5.6-sol / claude-fable-5 that aren't selected.
@@ -1237,21 +1247,21 @@ def test_routing_status_restricts_to_selected_models(registry_db, monkeypatch):
         for task, rec in st["per_task"].items():
             assert rec["model"] == "deepseek-v4-flash", f"{task} -> {rec['model']} (not selected)"
     finally:
-        init_router(enabled=False)
+        _seed_router(enabled=False)
 
 def test_routing_status_falls_back_without_config(registry_db, monkeypatch):
     """Without config (tests), the top model per task is still shown."""
     from src.api.seed_capabilities import seed_livebench
-    from src.api.router import routing_status, init_router
+    from src.api.router import routing_status
     seed_livebench(registry_db)
-    init_router(registry_db, enabled=True)
+    _seed_router(registry_db, enabled=True)
     try:
         st = routing_status(None)
         assert st["per_task"], "expected per_task populated without config"
         # The top overall model appears for at least one task.
         assert any(rec["model"] for rec in st["per_task"].values())
     finally:
-        init_router(enabled=False)
+        _seed_router(enabled=False)
 
 
 # ── Model registry tests (explicit alias → logical → benchmark) ───────────
@@ -1366,11 +1376,10 @@ def test_router_load_matrix_error_returns_empty(tmp_path):
     assert matrix == {}
 
 def test_init_router_warm_cache(registry_db):
-    from src.api import router as router_mod
-    router_mod.init_router(db_path=registry_db, enabled=True)
+    _seed_router(db_path=registry_db, enabled=True)
     assert router_mod.get_dynamic_router().enabled is True
     # Restore for other tests.
-    router_mod.init_router(db_path=registry_db, enabled=False)
+    _seed_router(db_path=registry_db, enabled=False)
 
 
 # ── Observability + judgment: classify_task_detail, summarize, rationale ────

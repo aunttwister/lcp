@@ -8,8 +8,9 @@ from src.api.runtime import Runtime
 @pytest.fixture(autouse=True)
 def _reset_am_globals():
     import src.api.alert_manager as am
+    import src.api.runtime as runtime
     yield
-    am._runtime = None
+    runtime._active_runtime = None
     am._alert_manager = None
 
 
@@ -41,7 +42,7 @@ def test_facade_delegates_when_bound(rt):
 def test_facade_falls_back_when_unbound(monkeypatch):
     import src.api.alert_manager as am
     from src.api.alert_manager import get_alert_manager
-    monkeypatch.setattr(am, "_runtime", None)
+    monkeypatch.setattr("src.api.runtime._active_runtime", None)
     am._alert_manager = None
     m = get_alert_manager()
     assert m is not None

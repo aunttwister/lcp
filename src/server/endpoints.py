@@ -18,9 +18,20 @@ from ..api.cost_plugins import get_registry
 from ..api.models import get_session, Request as RequestModel, Budget, ApiKey, FailoverEvent
 from ..api.prompt_cache import get_prompt_cache
 from ..api.token_verifier import get_token_verifier
+from ..api.runtime import resolve_service
 from ..ui.dashboard import render_dashboard
 
 logger = get_logger("lcp.server")
+
+
+def _credential_store_for(handler):
+    """Resolve the credential store from the active runtime, falling back to
+    the legacy lazy-init against the handler's engine when no runtime is bound
+    (standalone/tests)."""
+    return resolve_service(
+        "credential_store",
+        fallback=lambda: get_credential_store(handler.engine),
+    )
 
 
 def _fmt_params(n: int) -> str:
@@ -225,7 +236,7 @@ class HealthEndpoints:
 
     def _serve_health(self):
         provider_status = {}
-        cb = get_circuit_breaker()
+        cb = resolve_service("circuit_breaker", fallback=get_circuit_breaker)
         for key, h in cb.get_all_health().items():
             provider, url, profile = key
             tripped_until = None
@@ -259,7 +270,7 @@ class HealthEndpoints:
         if not provider or not base_url or not profile:
             self._send_json({"error": "missing provider, base_url, or profile"}, 400)
             return
-        cb = get_circuit_breaker()
+        cb = resolve_service("circuit_breaker", fallback=get_circuit_breaker)
         cb.reset(provider, base_url, profile)
         self._send_json({"ok": True, "provider": provider, "profile": profile})
 
@@ -314,7 +325,7 @@ class HealthEndpoints:
 
     def _serve_providers_health_api(self):
         """GET /api/providers/health — all provider health with uptime + failures."""
-        cb = get_circuit_breaker()
+        cb = resolve_service("circuit_breaker", fallback=get_circuit_breaker)
         summary = {"total": 0, "healthy": 0, "degraded": 0, "dead": 0}
         providers_out: dict[str, dict] = {}
 
@@ -475,7 +486,7 @@ class HealthEndpoints:
                     self.config.providers.get(name, {}).get("api_base", "")
                 break
 
-        cb = get_circuit_breaker()
+        cb = resolve_service("circuit_breaker", fallback=get_circuit_breaker)
         if base_url:
             status = cb.force_status(name, base_url, profile, action)
             self._send_json({"ok": True, "provider": name, "profile": profile,
@@ -585,7 +596,7 @@ class HealthEndpoints:
 
     def _serve_cache_stats(self):
         """Prompt cache hit/miss statistics."""
-        cache = get_prompt_cache()  # local import in original; use top-level
+        cache = resolve_service("prompt_cache", fallback=get_prompt_cache)
         self._send_json(cache.stats)
 
     def _serve_metrics(self):
@@ -606,8 +617,8 @@ class HealthEndpoints:
             total_cost = 0
             failed = 0
 
-        cache = get_prompt_cache()
-        verifier = get_token_verifier()
+        cache = resolve_service("prompt_cache", fallback=get_prompt_cache)
+        verifier = resolve_service("token_verifier", fallback=get_token_verifier)
 
         lines = [
             "# HELP lcp_requests_total Total requests processed",
@@ -682,7 +693,7 @@ class ProviderEndpoints:
     def _serve_providers_list(self):
         cfg = self.config
         providers = {}
-        store = get_credential_store()
+        store = resolve_service("credential_store", fallback=get_credential_store)
         for name, pdata in cfg.providers.items():
             providers[name] = {
                 "api_base": pdata.get("api_base", ""),
@@ -695,7 +706,7 @@ class ProviderEndpoints:
         self._send_json({"providers": providers, "profile_chains": profile_chains})
 
     def _serve_provider_presets(self):
-        presets = get_registry().presets
+        presets = resolve_service("pricing", fallback=get_registry).presets
         self._send_json({"presets": presets})
 
     def _serve_provider_create(self):
@@ -718,7 +729,7 @@ class ProviderEndpoints:
         # Store the API key (if provided) encrypted in the credential store —
         # never in the git-tracked gateway.yaml.
         if body.get("api_key"):
-            store = get_credential_store(self.engine)
+            store = _credential_store_for(self)
             if store is not None:
                 store.set(name, body["api_key"])
             else:
@@ -728,7 +739,7 @@ class ProviderEndpoints:
         # cost plugin exposes usage/balance/credits) populated on the next
         # background pass rather than waiting for the TTL.
         from ..api.cost_cache import get_refresher
-        refresher = get_refresher()
+        refresher = resolve_service("refresher", fallback=get_refresher)
         if refresher is not None:
             refresher.request_refresh(provider=name)
         self._send_json({"ok": True, "provider": name})
@@ -745,7 +756,7 @@ class ProviderEndpoints:
             return
         pdata = cfg.raw["providers"][name]
         if "api_key" in body:
-            store = get_credential_store(self.engine)
+            store = _credential_store_for(self)
             if store is not None:
                 store.set(name, body.get("api_key") or "")
             else:
@@ -758,7 +769,7 @@ class ProviderEndpoints:
         cfg.save()
         # See create: request a background cache refresh for this provider.
         from ..api.cost_cache import get_refresher
-        refresher = get_refresher()
+        refresher = resolve_service("refresher", fallback=get_refresher)
         if refresher is not None:
             refresher.request_refresh(provider=name)
         self._send_json({"ok": True, "provider": name})
@@ -773,7 +784,7 @@ class ProviderEndpoints:
             pcfg["chain"] = [c for c in pcfg.get("chain", []) if c.get("provider") != name]
         cfg.save()
         # Clear any stored credential for the deleted provider
-        store = get_credential_store(self.engine)
+        store = _credential_store_for(self)
         if store is not None:
             store.set(name, "")
         self._send_json({"ok": True, "deleted": name})
@@ -796,7 +807,7 @@ class ProviderEndpoints:
         # Resolve API key from credential store if not provided inline
         key_source = "inline"
         if not api_key and provider:
-            store = get_credential_store(self.engine)
+            store = _credential_store_for(self)
             if store is not None:
                 api_key = store.get(provider) or ""
                 if api_key:
@@ -940,7 +951,7 @@ class ProviderEndpoints:
             return
 
         # Try plugin first for provider-specific parser
-        registry = get_registry()
+        registry = resolve_service("pricing", fallback=get_registry)
         if provider:
             plugin = registry.for_provider(provider)
             if plugin and hasattr(plugin, 'discover_models'):
@@ -954,13 +965,13 @@ class ProviderEndpoints:
         api_key = body.get("api_key", "")
         headers = _browser_headers(api_base)
         if provider and not api_key:
-            store = get_credential_store(self.engine)
+            store = _credential_store_for(self)
             if store is not None:
                 api_key = store.get(provider) or ""
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         # UI-managed cookie from the credential store
-        store = get_credential_store(self.engine)
+        store = _credential_store_for(self)
         cookie = ""
         if store is not None:
             cookie = store.get_cookie("opencode") or ""
@@ -1042,7 +1053,7 @@ class ProviderEndpoints:
         # (best-effort — Command Code does not expose per-plan model availability).
         if provider == "commandcode":
             try:
-                plugin = get_registry().for_provider("commandcode")
+                plugin = resolve_service("pricing", fallback=get_registry).for_provider("commandcode")
                 if plugin is not None:
                     sub = plugin.fetch_subscription() or {}
                     if sub.get("plan_id"):
@@ -1253,12 +1264,12 @@ class KeyEndpoints:
     _read_body: Any
 
     def _serve_keys_list(self):
-        km = get_key_manager()
+        km = resolve_service("key_manager", fallback=get_key_manager)
         keys = km.list_keys() if km else []
         self._send_json({"keys": keys})
 
     def _serve_key_detail(self, key_id: str):
-        km = get_key_manager()
+        km = resolve_service("key_manager", fallback=get_key_manager)
         if not km:
             self._send_json({"error": "key manager not initialized"}, 500)
             return
@@ -1279,7 +1290,7 @@ class KeyEndpoints:
         except Exception:
             self._send_json({"error": "invalid JSON body"}, 400)
             return
-        km = get_key_manager()
+        km = resolve_service("key_manager", fallback=get_key_manager)
         if not km:
             self._send_json({"error": "key manager not initialized"}, 500)
             return
@@ -1293,7 +1304,7 @@ class KeyEndpoints:
         self._send_json(result)
 
     def _serve_key_rotate(self, key_id: str):
-        km = get_key_manager()
+        km = resolve_service("key_manager", fallback=get_key_manager)
         if not km:
             self._send_json({"error": "key manager not initialized"}, 500)
             return
@@ -1309,7 +1320,7 @@ class KeyEndpoints:
             self._send_json({"error": "key not found"}, 404)
 
     def _serve_key_delete(self, key_id: str):
-        km = get_key_manager()
+        km = resolve_service("key_manager", fallback=get_key_manager)
         if not km:
             self._send_json({"error": "key manager not initialized"}, 500)
             return
@@ -1335,7 +1346,7 @@ class AlertEndpoints:
     _read_body: Any
 
     def _serve_alerts_list(self):
-        am = get_alert_manager()
+        am = resolve_service("alert_manager", fallback=get_alert_manager)
         limit = 100
         status = None
         parsed = urlparse(self.path)
@@ -1348,11 +1359,11 @@ class AlertEndpoints:
         self._send_json({"alerts": alerts})
 
     def _serve_alerts_active(self):
-        am = get_alert_manager()
+        am = resolve_service("alert_manager", fallback=get_alert_manager)
         self._send_json({"alerts": am.get_active_alerts()})
 
     def _serve_alerts_config(self):
-        am = get_alert_manager()
+        am = resolve_service("alert_manager", fallback=get_alert_manager)
         self._send_json({"config": am.config})
 
     def _serve_alerts_config_update(self):
@@ -1361,12 +1372,12 @@ class AlertEndpoints:
         except Exception:
             self._send_json({"error": "invalid JSON body"}, 400)
             return
-        am = get_alert_manager()
+        am = resolve_service("alert_manager", fallback=get_alert_manager)
         config = am.update_config(body)
         self._send_json({"ok": True, "config": config})
 
     def _serve_alert_acknowledge(self, alert_id: str):
-        am = get_alert_manager()
+        am = resolve_service("alert_manager", fallback=get_alert_manager)
         ok = am.acknowledge(alert_id)
         if ok:
             self._send_json({"ok": True, "acknowledged": alert_id})
@@ -1374,7 +1385,7 @@ class AlertEndpoints:
             self._send_json({"error": "alert not found"}, 404)
 
     def _serve_alerts_test_webhook(self):
-        am = get_alert_manager()
+        am = resolve_service("alert_manager", fallback=get_alert_manager)
         result = am.test_webhook()
         self._send_json(result)
 
@@ -1543,7 +1554,7 @@ class PluginEndpoints:
         qs = parse_qs(urlparse(self.path).query)
         start = qs.get("start", [None])[0]
         end = qs.get("end", [None])[0]
-        data = get_registry().fetch_all_usage(start_date=start, end_date=end)
+        data = resolve_service("pricing", fallback=get_registry).fetch_all_usage(start_date=start, end_date=end)
         self._send_json({"plugin_usage": data})
 
     def _serve_plugin_balances(self):
@@ -1553,16 +1564,16 @@ class PluginEndpoints:
         the cache is initialized; otherwise falls back to a live fetch.
         """
         from ..api.cost_cache import cached_plugin_payloads, get_cost_cache
-        cache = get_cost_cache()
+        cache = resolve_service("cost_cache", fallback=get_cost_cache)
         if cache is None:
-            data = get_registry().fetch_all_balances()
+            data = resolve_service("pricing", fallback=get_registry).fetch_all_balances()
         else:
-            data = cached_plugin_payloads(cache, "balance", get_registry())
+            data = cached_plugin_payloads(cache, "balance", resolve_service("pricing", fallback=get_registry))
         self._send_json({"plugin_balances": data})
 
     def _serve_plugin_summary(self):
         """Return rich provider summaries (usage limits, balance, etc.)."""
-        data = get_registry().fetch_all_summaries()
+        data = resolve_service("pricing", fallback=get_registry).fetch_all_summaries()
         self._send_json({"plugin_summaries": data})
 
     def _serve_plugin_subscriptions(self):
@@ -1572,16 +1583,16 @@ class PluginEndpoints:
         the cache is initialized; otherwise falls back to a live fetch.
         """
         from ..api.cost_cache import cached_plugin_payloads, get_cost_cache
-        cache = get_cost_cache()
+        cache = resolve_service("cost_cache", fallback=get_cost_cache)
         if cache is None:
-            data = get_registry().fetch_all_subscriptions()
+            data = resolve_service("pricing", fallback=get_registry).fetch_all_subscriptions()
         else:
-            data = cached_plugin_payloads(cache, "subscription", get_registry())
+            data = cached_plugin_payloads(cache, "subscription", resolve_service("pricing", fallback=get_registry))
         self._send_json({"plugin_subscriptions": data})
 
     def _serve_plugin_cookie_get(self, provider: str):
         """Return whether a UI-managed cookie exists for a provider (never the value)."""
-        store = get_credential_store(self.engine)
+        store = _credential_store_for(self)
         has = bool(store and store.has_cookie(provider))
         self._send_json({"provider": provider, "has_cookie": has})
 
@@ -1593,7 +1604,7 @@ class PluginEndpoints:
             self._send_json({"error": "invalid JSON body"}, 400)
             return
         cookie = (body.get("cookie") or "").strip()
-        store = get_credential_store(self.engine)
+        store = _credential_store_for(self)
         if store is None:
             self._send_json({"error": "credential store not initialized"}, 500)
             return
@@ -1601,17 +1612,17 @@ class PluginEndpoints:
         # New/cleared credentials invalidate the cached scrape for this provider
         # and re-scrape it in the background (never blocking this request).
         from ..api.cost_cache import get_cost_cache, get_refresher
-        cache = get_cost_cache()
+        cache = resolve_service("cost_cache", fallback=get_cost_cache)
         if cache is not None:
             cache.invalidate(provider=provider)
-        refresher = get_refresher()
+        refresher = resolve_service("refresher", fallback=get_refresher)
         if refresher is not None:
             refresher.request_refresh(provider=provider)
         self._send_json({"ok": True, "provider": provider, "has_cookie": bool(cookie)})
 
     def _serve_plugin_workspace_id_get(self, provider: str):
         """Return whether a UI-managed workspace ID exists for a provider."""
-        store = get_credential_store(self.engine)
+        store = _credential_store_for(self)
         has = bool(store and store.has_workspace_id(provider))
         self._send_json({"provider": provider, "has_workspace_id": has})
 
@@ -1623,17 +1634,17 @@ class PluginEndpoints:
             self._send_json({"error": "invalid JSON body"}, 400)
             return
         ws_id = (body.get("workspace_id") or "").strip()
-        store = get_credential_store(self.engine)
+        store = _credential_store_for(self)
         if store is None:
             self._send_json({"error": "credential store not initialized"}, 500)
             return
         store.set_workspace_id(provider, ws_id)
         # Invalidate + background re-scrape (see cookie-set handler).
         from ..api.cost_cache import get_cost_cache, get_refresher
-        cache = get_cost_cache()
+        cache = resolve_service("cost_cache", fallback=get_cost_cache)
         if cache is not None:
             cache.invalidate(provider=provider)
-        refresher = get_refresher()
+        refresher = resolve_service("refresher", fallback=get_refresher)
         if refresher is not None:
             refresher.request_refresh(provider=provider)
         self._send_json({"ok": True, "provider": provider, "has_workspace_id": bool(ws_id)})
@@ -1655,10 +1666,10 @@ class SettingsEndpoints:
     def _serve_settings_api(self):
         """GET /api/settings — default TTL, per-provider TTLs, cache entries."""
         from ..api.cost_cache import get_cost_cache, get_refresher, get_settings
-        settings = get_settings()
+        settings = resolve_service("settings", fallback=get_settings)
         ttl = settings.get_ttl_minutes() if settings is not None else 30
-        cache = get_cost_cache()
-        refresher = get_refresher()
+        cache = resolve_service("cost_cache", fallback=get_cost_cache)
+        refresher = resolve_service("refresher", fallback=get_refresher)
         self._send_json({
             "ttl_minutes": ttl,
             "per_provider_ttl": settings.ttl_overrides() if settings is not None else {},
@@ -1681,11 +1692,11 @@ class SettingsEndpoints:
             return
         provider = (body.get("provider") or "").strip().lower() or None
         from ..api.cost_cache import get_refresher, get_settings
-        settings = get_settings()
+        settings = resolve_service("settings", fallback=get_settings)
         if settings is None:
             self._send_json({"error": "settings store not initialized"}, 500)
             return
-        refresher = get_refresher()
+        refresher = resolve_service("refresher", fallback=get_refresher)
 
         if provider and "ttl_minutes" not in body:
             # Reset this provider to the global default.
@@ -1716,7 +1727,7 @@ class SettingsEndpoints:
     def _serve_settings_refresh_api(self):
         """POST /api/settings/cache/refresh — enqueue a background re-scrape."""
         from ..api.cost_cache import get_refresher
-        refresher = get_refresher()
+        refresher = resolve_service("refresher", fallback=get_refresher)
         if refresher is not None:
             refresher.request_refresh()
             self._send_json({"ok": True, "refreshing": True})
@@ -1726,10 +1737,10 @@ class SettingsEndpoints:
     def _serve_settings_cache_clear(self):
         """POST /api/settings/cache/clear — wipe the cache (refreshes after)."""
         from ..api.cost_cache import get_cost_cache, get_refresher
-        cache = get_cost_cache()
+        cache = resolve_service("cost_cache", fallback=get_cost_cache)
         if cache is not None:
             cache.clear()
-        refresher = get_refresher()
+        refresher = resolve_service("refresher", fallback=get_refresher)
         if refresher is not None:
             refresher.request_refresh()
         self._send_json({"ok": True})
@@ -1746,7 +1757,7 @@ class SettingsEndpoints:
         qs = parse_qs(urlparse(self.path).query)
         profile = (qs.get("profile") or [None])[0]
         if profile:
-            router = get_dynamic_router()
+            router = resolve_service("dynamic_router", fallback=get_dynamic_router)
             block = _status_for_profile(router, self.config, profile)
             block["per_task"] = routing_status(self.config)["per_task"]
             block["recent_decisions"] = routing_status(self.config)["recent_decisions"]
@@ -1772,7 +1783,7 @@ class SettingsEndpoints:
             self._send_json({"error": "invalid JSON body"}, 400)
             return
         from ..api.cost_cache import get_settings
-        settings = get_settings()
+        settings = resolve_service("settings", fallback=get_settings)
         if settings is None:
             self._send_json({"error": "settings store not initialized"}, 500)
             return
@@ -1850,7 +1861,7 @@ class SettingsEndpoints:
                     self._send_json({"error": f"rule {i}: min_score must be a number"}, 400)
                     return
         from ..api.cost_cache import get_settings
-        settings = get_settings()
+        settings = resolve_service("settings", fallback=get_settings)
         if settings is None:
             self._send_json({"error": "settings store not initialized"}, 500)
             return
@@ -2806,7 +2817,7 @@ class MemoryEndpoints:
         raw_key = auth_header[7:]
         try:
             from ..api.key_manager import get_key_manager
-            km = get_key_manager()
+            km = resolve_service("key_manager", fallback=get_key_manager)
             if km is None:
                 self._send_json({"error": {"code": "LCP-5001", "message": "internal error"}}, 500)
                 return False
@@ -2832,7 +2843,7 @@ class MemoryEndpoints:
         """Return the active backend or send a 501 + None."""
         try:
             from ..api.memory import get_memory
-            backend = get_memory()
+            backend = resolve_service("memory", fallback=get_memory)
         except Exception:
             backend = None
         if backend is None:

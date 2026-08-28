@@ -361,10 +361,11 @@ def init_settings(engine: Any) -> SettingsStore:
 
 
 def get_settings() -> Optional[SettingsStore]:
-    global _runtime
-    if _runtime is not None:
+    from .runtime import get_runtime
+    rt = get_runtime()
+    if rt is not None:
         try:
-            comp = _runtime.resolve("settings")
+            comp = rt.resolve("settings")
         except Exception:  # noqa: BLE001 — inactive/unbound → legacy
             comp = None
         if comp is not None and getattr(comp, "store", None) is not None:
@@ -480,17 +481,12 @@ class CostPluginCache:
 _cost_cache: Optional[CostPluginCache] = None
 
 
-def init_cost_cache(engine: Any) -> CostPluginCache:
-    global _cost_cache
-    _cost_cache = CostPluginCache(engine)
-    return _cost_cache
-
-
 def get_cost_cache() -> Optional[CostPluginCache]:
-    global _runtime
-    if _runtime is not None:
+    from .runtime import get_runtime
+    rt = get_runtime()
+    if rt is not None:
         try:
-            comp = _runtime.resolve("cost_cache")
+            comp = rt.resolve("cost_cache")
         except Exception:  # noqa: BLE001 — inactive/unbound → legacy
             comp = None
         if comp is not None and getattr(comp, "cache", None) is not None:
@@ -728,24 +724,12 @@ def _default_registry():
     return get_registry()
 
 
-def init_refresher(cache: CostPluginCache, settings: Optional[SettingsStore] = None,
-                   **kwargs) -> CacheRefresher:
-    """Create (and register) the global background refresher.
-
-    The caller is expected to call ``.start()`` (main.py does at boot).
-    Not starting here keeps tests able to build a refresher and drive
-    ``_pass()`` directly without spawning a thread.
-    """
-    global _refresher
-    _refresher = CacheRefresher(cache, settings, **kwargs)
-    return _refresher
-
-
 def get_refresher() -> Optional[CacheRefresher]:
-    global _runtime
-    if _runtime is not None:
+    from .runtime import get_runtime
+    rt = get_runtime()
+    if rt is not None:
         try:
-            comp = _runtime.resolve("refresher")
+            comp = rt.resolve("refresher")
         except Exception:  # noqa: BLE001 — inactive/unbound → legacy
             comp = None
         if comp is not None and getattr(comp, "refresher", None) is not None:
@@ -753,17 +737,12 @@ def get_refresher() -> Optional[CacheRefresher]:
     return _refresher
 
 
-def stop_refresher() -> None:
-    global _refresher
-    if _refresher is not None:
-        _refresher.stop()
-        _refresher = None
-
-
 def _reset_singletons() -> None:
     """Test helper — clear all module-level singletons."""
     global _settings_store, _cost_cache, _refresher
-    stop_refresher()
+    if _refresher is not None:
+        _refresher.stop()
+    _refresher = None
     _settings_store = None
     _cost_cache = None
 
@@ -774,13 +753,10 @@ def _reset_singletons() -> None:
 # When a Runtime is bound, the get_settings()/get_cost_cache()/get_refresher()
 # facades delegate to the runtime's components. The refresher's disposer stops
 # its background thread on shutdown — the only real init→shutdown pair here.
-_runtime: Optional["Runtime"] = None
 
 
 def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so the cost-cache facades delegate to it."""
-    global _runtime
-    _runtime = rt
     from .runtime import bind_active_runtime
     bind_active_runtime(rt)
 

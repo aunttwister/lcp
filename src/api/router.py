@@ -2096,25 +2096,16 @@ def get_dynamic_router() -> CapabilityRouter:
     Delegates to the runtime's RouterComponent when bound; otherwise the
     legacy eager singleton.
     """
-    global _runtime
-    if _runtime is not None:
+    from .runtime import get_runtime
+    rt = get_runtime()
+    if rt is not None:
         try:
-            comp = _runtime.resolve("dynamic_router")
+            comp = rt.resolve("dynamic_router")
         except Exception:  # noqa: BLE001 — inactive/unbound → legacy
             comp = None
         if comp is not None and getattr(comp, "router", None) is not None:
             return comp.router
     return _dynamic_router
-
-
-def init_router(db_path: str = "data/costs.db", enabled: bool = False,
-                cost_bias: float = DEFAULT_COST_BIAS):
-    """Initialize the global router. Call once at startup."""
-    global _dynamic_router
-    _dynamic_router = CapabilityRouter(enabled=enabled, db_path=db_path,
-                                       cost_bias=cost_bias)
-    if enabled:
-        _dynamic_router.load_matrix()  # warm the cache
 
 
 def sync_router_enabled_from_settings() -> bool:
@@ -2148,13 +2139,10 @@ def invalidate_router_matrix() -> None:
 
 
 # ── Component-runtime adapter (Phase C) ────────────────────────────────────
-_runtime: Optional["Runtime"] = None
 
 
 def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_dynamic_router()`` delegates to it."""
-    global _runtime
-    _runtime = rt
     from .runtime import bind_active_runtime
     bind_active_runtime(rt)
 

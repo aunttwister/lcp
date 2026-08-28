@@ -41,8 +41,9 @@ def rt(monkeypatch):
     rt.start()
     cp.bind_runtime(rt)
     yield rt
-    # Reset the facade global so other tests see the legacy singleton.
-    monkeypatch.setattr(base_mod, "_runtime", None)
+    # Reset the central active-runtime accessor so other tests see the legacy
+    # singleton.
+    monkeypatch.setattr("src.api.runtime._active_runtime", None)
 
 
 def test_component_registers_and_provides(rt):
@@ -72,7 +73,7 @@ def test_get_registry_delegates_to_runtime_when_bound(rt):
 
 def test_get_registry_falls_back_to_legacy_when_unbound(monkeypatch):
     import src.api.cost_plugins.base as base_mod
-    monkeypatch.setattr(base_mod, "_runtime", None)
+    monkeypatch.setattr("src.api.runtime._active_runtime", None)
     base_mod._registry = None
     reg = get_registry()
     assert isinstance(reg, PluginRegistry)
@@ -109,7 +110,7 @@ def test_bind_runtime_cleared_returns_legacy(monkeypatch):
     rt = Runtime(engine=object())
     rt.register(CostPluginsComponent())
     rt.start()
-    monkeypatch.setattr("src.api.cost_plugins.base._runtime", None)
+    monkeypatch.setattr("src.api.runtime._active_runtime", None)
     # Legacy singleton used when no runtime bound.
     import src.api.cost_plugins.base as base_mod
     base_mod._registry = None

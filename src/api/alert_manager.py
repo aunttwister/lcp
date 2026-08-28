@@ -313,10 +313,11 @@ def get_alert_manager(engine=None) -> AlertManager:
     injected at construction — no silent _engine mutation). Otherwise the
     legacy singleton.
     """
-    global _runtime
-    if _runtime is not None:
+    from .runtime import get_runtime
+    rt = get_runtime()
+    if rt is not None:
         try:
-            comp = _runtime.resolve("alert_manager")
+            comp = rt.resolve("alert_manager")
         except Exception:  # noqa: BLE001 — inactive/unbound → legacy
             comp = None
         if comp is not None and getattr(comp, "manager", None) is not None:
@@ -329,21 +330,11 @@ def get_alert_manager(engine=None) -> AlertManager:
     return _alert_manager
 
 
-def init_alert_manager(engine) -> AlertManager:
-    """Force-initialize the alert manager with an engine."""
-    global _alert_manager
-    _alert_manager = AlertManager(engine)
-    return _alert_manager
-
-
 # ── Component-runtime adapter (Phase C) ────────────────────────────────────
-_runtime: Optional["Runtime"] = None
 
 
 def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_alert_manager()`` delegates to it."""
-    global _runtime
-    _runtime = rt
     from .runtime import bind_active_runtime
     bind_active_runtime(rt)
 

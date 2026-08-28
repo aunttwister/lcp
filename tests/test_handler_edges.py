@@ -38,8 +38,9 @@ def _status(handler):
 
 @pytest.fixture(autouse=True)
 def _setup_config(temp_db):
-    from src.api.key_manager import init_key_manager
-    init_key_manager(temp_db, "data")
+    from src.api.key_manager import KeyManager
+    import src.api.key_manager as key_manager_mod
+    key_manager_mod._key_manager = KeyManager(temp_db, "data")
     cfg = MagicMock()
     cfg.server = {"port": 8734, "default_profile": "l2"}
     cfg.profiles = {

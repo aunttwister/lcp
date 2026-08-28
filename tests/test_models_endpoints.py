@@ -51,8 +51,9 @@ def _json_body(handler):
 @pytest.fixture(autouse=True)
 def _setup_handler_config(temp_db):
     """Ensure LCPHandler.config is set for all tests."""
-    from src.api.key_manager import init_key_manager
-    init_key_manager(temp_db[1], "data")
+    from src.api.key_manager import KeyManager
+    import src.api.key_manager as key_manager_mod
+    key_manager_mod._key_manager = KeyManager(temp_db[1], "data")
 
     cfg = MagicMock()
     cfg.server = {"port": 8734, "default_profile": "l2"}

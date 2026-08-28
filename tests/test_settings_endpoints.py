@@ -5,16 +5,40 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import src.api.cost_cache as cc
 from src.api.cost_cache import (
+    CacheRefresher,
+    CostPluginCache,
     _reset_singletons,
     get_cost_cache,
     get_settings,
-    init_cost_cache,
-    init_refresher,
     init_settings,
 )
+import src.api.router as router_mod
 from src.api.models import Base, get_engine
+from src.api.router import CapabilityRouter
 from src.server import LCPHandler
+
+
+def _seed_router(db_path="data/costs.db", enabled=False, cost_bias=0.15):
+    """Seed the module-level dynamic router (legacy init_router)."""
+    r = CapabilityRouter(enabled=enabled, db_path=db_path, cost_bias=cost_bias)
+    if enabled:
+        r.load_matrix()
+    router_mod._dynamic_router = r
+    return r
+
+
+def _seed_cost_cache(engine):
+    """Seed the module-level cost-cache singleton (legacy init_cost_cache)."""
+    cc._cost_cache = CostPluginCache(engine)
+    return cc._cost_cache
+
+
+def _seed_refresher(cache, settings=None):
+    """Seed the module-level refresher singleton (legacy init_refresher)."""
+    cc._refresher = CacheRefresher(cache, settings)
+    return cc._refresher
 
 
 class TestHandler(LCPHandler):
@@ -92,7 +116,7 @@ class TestSettingsApi:
 
     def test_settings_api_default(self, engine):
         init_settings(engine)
-        init_cost_cache(engine)
+        _seed_cost_cache(engine)
         h = TestHandler(path="/api/settings", engine=engine)
         h.do_GET()
         body = _json_body(h)
@@ -150,8 +174,8 @@ class TestSettingsApi:
 
     def test_settings_refresh_and_clear(self, engine, mock_config):
         init_settings(engine)
-        init_cost_cache(engine)
-        init_refresher(get_cost_cache(), get_settings())
+        _seed_cost_cache(engine)
+        _seed_refresher(get_cost_cache(), get_settings())
         h = TestHandler(path="/api/settings/cache/refresh", method="POST", engine=engine, body="{}")
         h.config = mock_config
         h.do_POST()
@@ -166,9 +190,8 @@ class TestSettingsApi:
         assert get_cost_cache().entries() == []
 
     def test_routing_status_api(self, engine, mock_config):
-        from src.api.router import init_router
         init_settings(engine)
-        init_router(enabled=True)
+        _seed_router(enabled=True)
         try:
             h = TestHandler(path="/api/routing/status", engine=engine)
             h.config = mock_config
@@ -179,7 +202,7 @@ class TestSettingsApi:
             assert "per_task" in body
             assert "recent_decisions" in body
         finally:
-            init_router(enabled=False)
+            _seed_router(enabled=False)
 
     def test_routing_policy_update(self, engine, mock_config):
         init_settings(engine)
@@ -336,8 +359,7 @@ class TestSettingsApi:
     def test_routing_status_per_profile(self, engine, mock_config):
         init_settings(engine)
         get_settings().set_routing_enabled(True, profile="l2")
-        from src.api.router import init_router
-        init_router(enabled=True)
+        _seed_router(enabled=True)
         try:
             h = TestHandler(path="/api/routing/status?profile=l2", engine=engine)
             h.config = mock_config
@@ -347,12 +369,11 @@ class TestSettingsApi:
             assert body["enabled"] is True
             assert "rules" in body
         finally:
-            init_router(enabled=False)
+            _seed_router(enabled=False)
 
     def test_routing_status_has_per_profile_map(self, engine, mock_config):
         init_settings(engine)
-        from src.api.router import init_router
-        init_router(enabled=True)
+        _seed_router(enabled=True)
         try:
             h = TestHandler(path="/api/routing/status", engine=engine)
             h.config = mock_config
@@ -360,7 +381,7 @@ class TestSettingsApi:
             body = _json_body(h)
             assert "per_profile" in body
         finally:
-            init_router(enabled=False)
+            _seed_router(enabled=False)
 
     def test_routing_clear_profile_override(self, engine, mock_config):
         init_settings(engine)
@@ -376,8 +397,8 @@ class TestSettingsApi:
 
     def test_provider_create_requests_refresh(self, engine, mock_config, monkeypatch):
         init_settings(engine)
-        cache = init_cost_cache(engine)
-        refresher = init_refresher(cache, get_settings())
+        cache = _seed_cost_cache(engine)
+        refresher = _seed_refresher(cache, get_settings())
         # The refresher must receive a refresh request for the provider.
         requested = []
         monkeypatch.setattr(refresher, "request_refresh",
@@ -391,8 +412,8 @@ class TestSettingsApi:
 
     def test_provider_update_requests_refresh(self, engine, mock_config, monkeypatch):
         init_settings(engine)
-        cache = init_cost_cache(engine)
-        refresher = init_refresher(cache, get_settings())
+        cache = _seed_cost_cache(engine)
+        refresher = _seed_refresher(cache, get_settings())
         requested = []
         monkeypatch.setattr(refresher, "request_refresh",
                             lambda provider=None, kind=None: requested.append(provider))
@@ -409,7 +430,7 @@ class TestSettingsApi:
 class TestPluginEndpointsCacheRead:
     def test_subscriptions_served_from_cache_without_fetch(self, engine, monkeypatch):
         init_settings(engine)
-        cache = init_cost_cache(engine)
+        cache = _seed_cost_cache(engine)
         cache.set("opencode", "subscription", {"monthly_pct": 42.0})
 
         from src.api.cost_plugins import get_registry
@@ -426,7 +447,7 @@ class TestPluginEndpointsCacheRead:
 
     def test_subscriptions_stale_flag(self, engine):
         init_settings(engine)
-        cache = init_cost_cache(engine)
+        cache = _seed_cost_cache(engine)
         cache.set("opencode", "subscription", {"monthly_pct": 42.0}, stale_error="boom")
 
         h = TestHandler(path="/api/cost-plugins/subscriptions", engine=engine)
@@ -439,7 +460,7 @@ class TestPluginEndpointsCacheRead:
 
     def test_subscriptions_unsupported_provider_is_none(self, engine):
         init_settings(engine)
-        init_cost_cache(engine)
+        _seed_cost_cache(engine)
         h = TestHandler(path="/api/cost-plugins/subscriptions", engine=engine)
         h.do_GET()
         body = _json_body(h)
@@ -448,7 +469,7 @@ class TestPluginEndpointsCacheRead:
 
     def test_balances_served_from_cache(self, engine):
         init_settings(engine)
-        cache = init_cost_cache(engine)
+        cache = _seed_cost_cache(engine)
         cache.set("deepseek", "balance", {"balance": 11.5, "currency": "USD"})
         h = TestHandler(path="/api/cost-plugins/balances", engine=engine)
         h.do_GET()
@@ -457,8 +478,8 @@ class TestPluginEndpointsCacheRead:
 
     def test_cookie_set_invalidates_cache_and_requests_refresh(self, engine, monkeypatch, mock_config):
         init_settings(engine)
-        cache = init_cost_cache(engine)
-        init_refresher(cache, get_settings())
+        cache = _seed_cost_cache(engine)
+        _seed_refresher(cache, get_settings())
         cache.set("opencode", "subscription", {"monthly_pct": 42.0})
 
         # Stub the credential store so the handler has one to write to.

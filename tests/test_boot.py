@@ -32,16 +32,8 @@ def _runtime_cleanup():
     here never leaks into other test files (which fall back to the legacy
     module singletons)."""
     yield
-    import src.api.alert_manager as am
-    import src.api.circuit_breaker as cb
-    import src.api.cost_cache as cc
-    import src.api.cost_plugins.base as cpb
-    import src.api.credential_store as cs
-    import src.api.key_manager as km
-    import src.api.memory as mem
-    import src.api.router as router
-    for mod in (am, cb, cc, cpb, cs, km, mem, router):
-        mod._runtime = None
+    import src.api.runtime as runtime
+    runtime._active_runtime = None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -272,12 +264,9 @@ class TestCreateServer:
         engine = MagicMock()
         http_server_cls = MagicMock()
 
-        with patch("src.server.server.ThreadingHTTPServer", http_server_cls), \
-             patch("src.server.server.init_key_manager") as mock_km:
-
+        with patch("src.server.server.ThreadingHTTPServer", http_server_cls):
             result = create_server(boot_config, engine, 8734)
 
-        mock_km.assert_called_once_with(engine, "data")
         # ThreadingHTTPServer constructed with address + handler class
         addr, handler_cls = http_server_cls.call_args[0]
         assert addr == ("0.0.0.0", 8734)
@@ -286,23 +275,18 @@ class TestCreateServer:
         assert handler_cls.engine is engine
         assert result == http_server_cls.return_value
 
-    def test_skips_legacy_init_when_runtime_bound(self, boot_config):
-        """When the component runtime owns key_manager/credential_store, the
-        factory must NOT force-init the legacy singletons."""
-        import src.api.key_manager as km
-        import src.api.credential_store as cs
+    def test_never_force_inits_legacy_singletons(self, boot_config):
+        """The factory never force-inits the key manager / credential store —
+        the component runtime owns them (Phase D)."""
         from src.server.server import create_server
         engine = MagicMock()
         http_server_cls = MagicMock()
 
-        km._runtime = object()
-        cs._runtime = object()
-
         with patch("src.server.server.ThreadingHTTPServer", http_server_cls), \
-             patch("src.server.server.init_key_manager") as mock_km, \
-             patch("src.server.server.init_credential_store") as mock_cs:
+             patch("src.api.key_manager.KeyManager") as mock_km_cls, \
+             patch("src.api.credential_store.CredentialStore") as mock_cs_cls:
 
             create_server(boot_config, engine, 8734)
 
-        mock_km.assert_not_called()
-        mock_cs.assert_not_called()
+        mock_km_cls.assert_not_called()
+        mock_cs_cls.assert_not_called()

@@ -67,9 +67,10 @@ def _json_body(handler):
 def _setup_handler_config(temp_db):
     """Ensure LCPHandler.config is set for all tests (mirrors test_server.py)."""
     from unittest.mock import MagicMock
-    from src.api.key_manager import init_key_manager
+    from src.api.key_manager import KeyManager
+    import src.api.key_manager as key_manager_mod
 
-    init_key_manager(temp_db, "data")
+    key_manager_mod._key_manager = KeyManager(temp_db, "data")
 
     cfg = MagicMock()
     cfg.server = {"port": 8734, "default_profile": "l2"}

@@ -15,10 +15,11 @@ from src.server import LCPHandler
 def _setup_handler_config(temp_db):
     """Ensure LCPHandler.config and key manager are set for all tests."""
     from unittest.mock import MagicMock
-    from src.api.key_manager import init_key_manager
+    from src.api.key_manager import KeyManager
+    import src.api.key_manager as key_manager_mod
 
     engine = temp_db
-    init_key_manager(engine, "data")
+    key_manager_mod._key_manager = KeyManager(engine, "data")
 
     cfg = MagicMock()
     cfg.server = {"port": 8734, "default_profile": "l2"}
@@ -168,8 +169,9 @@ class TestAuthEnforcement:
 
     def test_accepts_valid_key(self, temp_db):
         """A valid key should pass auth and proceed to the pipeline."""
-        from src.api.key_manager import init_key_manager
-        km = init_key_manager(temp_db, "data")
+        from src.api.key_manager import KeyManager
+        import src.api.key_manager as key_manager_mod
+        km = key_manager_mod._key_manager = KeyManager(temp_db, "data")
         result = km.create_key(name="Test", allowed_profiles="l2")
         body = json.dumps({"messages": [{"role": "user", "content": "hi"}], "max_tokens": 5, "stream": False})
         h = TestHandler(path="/l2/chat/completions", method="POST", engine=temp_db,
@@ -181,8 +183,9 @@ class TestAuthEnforcement:
 
     def test_rejects_key_without_profile_access(self, temp_db):
         """A key limited to l1 should not access l2."""
-        from src.api.key_manager import init_key_manager
-        km = init_key_manager(temp_db, "data")
+        from src.api.key_manager import KeyManager
+        import src.api.key_manager as key_manager_mod
+        km = key_manager_mod._key_manager = KeyManager(temp_db, "data")
         result = km.create_key(name="L1 Only", allowed_profiles="l1")
         h = TestHandler(path="/l2/chat/completions", method="POST", engine=temp_db,
                         headers={"Authorization": f"Bearer {result['key']}"})
@@ -287,8 +290,9 @@ class TestCapabilityImportEndpoint:
 
 class TestKeyEndpoints:
     def test_list_keys(self, temp_db):
-        from src.api.key_manager import init_key_manager
-        km = init_key_manager(temp_db, "data")
+        from src.api.key_manager import KeyManager
+        import src.api.key_manager as key_manager_mod
+        km = key_manager_mod._key_manager = KeyManager(temp_db, "data")
         km.create_key(name="K1")
         h = TestHandler(path="/api/keys", engine=temp_db)
         h.do_GET()
@@ -297,8 +301,9 @@ class TestKeyEndpoints:
         assert len(body.get("keys", [])) >= 1
 
     def test_create_key(self, temp_db):
-        from src.api.key_manager import init_key_manager
-        init_key_manager(temp_db, "data")
+        from src.api.key_manager import KeyManager
+        import src.api.key_manager as key_manager_mod
+        key_manager_mod._key_manager = KeyManager(temp_db, "data")
         body = json.dumps({"name": "New Key", "allowed_profiles": "l2", "spend_limit": 100})
         h = TestHandler(path="/api/keys", method="POST", engine=temp_db, body=body)
         h.do_POST()
@@ -306,8 +311,9 @@ class TestKeyEndpoints:
         assert _json_body(h).get("key", "").startswith("lcp_")
 
     def test_key_detail(self, temp_db):
-        from src.api.key_manager import init_key_manager
-        km = init_key_manager(temp_db, "data")
+        from src.api.key_manager import KeyManager
+        import src.api.key_manager as key_manager_mod
+        km = key_manager_mod._key_manager = KeyManager(temp_db, "data")
         created = km.create_key(name="Detail")
         h = TestHandler(path=f"/api/keys/{created['id']}", engine=temp_db)
         h.do_GET()
@@ -316,8 +322,9 @@ class TestKeyEndpoints:
         assert body["key"]["name"] == "Detail"
 
     def test_rotate_key(self, temp_db):
-        from src.api.key_manager import init_key_manager
-        km = init_key_manager(temp_db, "data")
+        from src.api.key_manager import KeyManager
+        import src.api.key_manager as key_manager_mod
+        km = key_manager_mod._key_manager = KeyManager(temp_db, "data")
         created = km.create_key(name="Rotate")
         h = TestHandler(path=f"/api/keys/{created['id']}/rotate", method="POST", engine=temp_db)
         h.do_POST()
@@ -327,8 +334,9 @@ class TestKeyEndpoints:
         assert body.get("old_id") == created["id"]
 
     def test_delete_key(self, temp_db):
-        from src.api.key_manager import init_key_manager
-        km = init_key_manager(temp_db, "data")
+        from src.api.key_manager import KeyManager
+        import src.api.key_manager as key_manager_mod
+        km = key_manager_mod._key_manager = KeyManager(temp_db, "data")
         created = km.create_key(name="Delete Me")
         h = TestHandler(path=f"/api/keys/{created['id']}", method="DELETE", engine=temp_db)
         h.do_DELETE()
@@ -348,8 +356,19 @@ class TestProviderEndpoints:
         assert "providers" in body
 
     def test_presets(self, temp_db):
-        from src.api.cost_plugins import init_plugins
-        init_plugins()
+        # Seed a populated plugin registry (the runtime component builds one
+        # with the built-ins; tests construct it directly).
+        import src.api.cost_plugins.base as cpb
+        from src.api.cost_plugins.commandcode import CommandCodeCostPlugin
+        from src.api.cost_plugins.deepseek import DeepSeekCostPlugin
+        from src.api.cost_plugins.llamacpp import LlamaCppCostPlugin
+        from src.api.cost_plugins.opencode import OpenCodeCostPlugin
+        reg = cpb.PluginRegistry()
+        reg.register(DeepSeekCostPlugin())
+        reg.register(OpenCodeCostPlugin())
+        reg.register(LlamaCppCostPlugin())
+        reg.register(CommandCodeCostPlugin())
+        cpb._registry = reg
         h = TestHandler(path="/api/providers/presets", engine=temp_db)
         h.do_GET()
         assert _status(h) == 200
@@ -748,8 +767,9 @@ class TestStaticEndpoints:
         assert _status(h) == 200
 
     def test_page_keys(self, temp_db):
-        from src.api.key_manager import init_key_manager
-        init_key_manager(temp_db, "data")
+        from src.api.key_manager import KeyManager
+        import src.api.key_manager as key_manager_mod
+        key_manager_mod._key_manager = KeyManager(temp_db, "data")
         h = TestHandler(path="/keys", engine=temp_db)
         h.do_GET()
         assert _status(h) == 200

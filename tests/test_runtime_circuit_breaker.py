@@ -9,10 +9,11 @@ from src.api.runtime import Runtime
 @pytest.fixture(autouse=True)
 def _reset_cb_globals():
     """Force-reset the circuit_breaker module globals after EVERY test in this
-    module so binding _runtime here can never leak into other test files."""
+    module so binding a runtime here can never leak into other test files."""
     import src.api.circuit_breaker as cb_mod
+    import src.api.runtime as runtime
     yield
-    cb_mod._runtime = None
+    runtime._active_runtime = None
     cb_mod._circuit_breaker = None
 
 
@@ -47,7 +48,7 @@ def test_get_circuit_breaker_delegates_when_bound(rt):
 
 def test_get_circuit_breaker_falls_back_when_unbound(monkeypatch):
     import src.api.circuit_breaker as cb_mod
-    monkeypatch.setattr(cb_mod, "_runtime", None)
+    monkeypatch.setattr("src.api.runtime._active_runtime", None)
     cb_mod._circuit_breaker = None
     b = get_circuit_breaker(config=object())
     assert b is not None

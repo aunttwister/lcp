@@ -9,10 +9,20 @@ section in sync with the global toggle.
 
 import pytest
 
+import src.api.router as router_mod
 from src.api.config import Config
 from src.api.cost_cache import SettingsStore
 from src.api.models import Base, get_engine
-from src.api.router import CapabilityRouter, init_router, routing_status
+from src.api.router import CapabilityRouter, routing_status
+
+
+def _seed_router(db_path="data/costs.db", enabled=False, cost_bias=0.15):
+    """Seed the module-level dynamic router (legacy init_router)."""
+    r = CapabilityRouter(enabled=enabled, db_path=db_path, cost_bias=cost_bias)
+    if enabled:
+        r.load_matrix()
+    router_mod._dynamic_router = r
+    return r
 
 
 @pytest.fixture
@@ -90,25 +100,25 @@ class TestRoutingStatusFromDbConfig:
     def test_routing_status_reflects_db_policy(self, registry_db, db_config_with_policy, monkeypatch):
         cfg, store = db_config_with_policy
         monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: store)
-        init_router(registry_db, enabled=True)
+        _seed_router(registry_db, enabled=True)
         try:
             st = routing_status(cfg)
             assert st["policy"] == "cost_first"
             assert st["min_score"] == 0.4
         finally:
-            init_router(enabled=False)
+            _seed_router(enabled=False)
 
     def test_routing_status_per_profile_from_db_config(self, registry_db, db_config_with_policy, monkeypatch):
         cfg, store = db_config_with_policy
         monkeypatch.setattr("src.api.cost_cache.get_settings", lambda: store)
-        init_router(registry_db, enabled=True)
+        _seed_router(registry_db, enabled=True)
         try:
             st = routing_status(cfg)
             assert "per_profile" in st
             for block in st["per_profile"].values():
                 assert block["policy"] == "cost_first"
         finally:
-            init_router(enabled=False)
+            _seed_router(enabled=False)
 
 
 class TestIsEnabledPrecedence:
