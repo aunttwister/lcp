@@ -649,9 +649,11 @@ _router_last: Optional[dict] = None     # terminal result (done/failed) for the 
 ROUTER_PACKAGES = [
     "sentence-transformers>=3.0",
     # transformers (a sentence-transformers dep) requires tokenizers in
-    # [0.22.0, 0.23.0]; pip otherwise resolves 0.23.1 and sentence-transformers
-    # refuses to import ("tokenizers>=0.22.0,<=0.23.0 is required").
-    "tokenizers==0.23.0",
+    # [0.22.0, 0.23.0]. 0.23.0 does NOT exist on PyPI (only 0.23.0rc0 and
+    # 0.23.1, which is out of range), so the newest satisfying release is
+    # 0.22.2. Unpinned, pip resolves 0.23.1 and sentence-transformers refuses
+    # to import ("tokenizers>=0.22.0,<=0.23.0 is required").
+    "tokenizers==0.22.2",
 ]
 ROUTER_MODEL = "BAAI/bge-small-en-v1.5"
 
