@@ -103,6 +103,31 @@ class TestMemoryStatus:
         assert st["active"] is False
         assert "site" in st and "models_dir" in st
 
+    def test_status_baked_not_removable(self, monkeypatch):
+        """Baked image: deps importable from global site-packages too, so
+        deleting the module dir (Remove) would be a no-op."""
+        monkeypatch.setattr("src.api.memory.memory_available", lambda site=None: True)
+        st = mem.memory_status()
+        assert st["available"] is True
+        assert st["removable"] is False
+
+    def test_status_runtime_install_removable(self, monkeypatch):
+        """Lean image after a runtime install: deps importable ONLY via the
+        module --target dir, so the module can be removed/reinstalled."""
+        monkeypatch.setattr(
+            "src.api.memory.memory_available",
+            lambda site=None: site is not None,
+        )
+        st = mem.memory_status()
+        assert st["available"] is True
+        assert st["removable"] is True
+
+    def test_status_not_installed(self, monkeypatch):
+        monkeypatch.setattr("src.api.memory.memory_available", lambda site=None: False)
+        st = mem.memory_status()
+        assert st["available"] is False
+        assert st["removable"] is False
+
 
 class TestRouterStatus:
     def test_router_status_shape(self, monkeypatch):
@@ -117,6 +142,21 @@ class TestRouterStatus:
         st = mem.router_status()
         assert st["available"] is False
         assert st["active"] is False
+
+    def test_router_status_baked_not_removable(self, monkeypatch):
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: True)
+        st = mem.router_status()
+        assert st["available"] is True
+        assert st["removable"] is False
+
+    def test_router_status_runtime_install_removable(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.api.memory.router_available",
+            lambda site=None: site is not None,
+        )
+        st = mem.router_status()
+        assert st["available"] is True
+        assert st["removable"] is True
 
 
 class TestNoopEmbed:

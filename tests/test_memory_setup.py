@@ -93,6 +93,43 @@ class TestMemoryStep:
             step = setup_mod.memory_step()
         assert step["installing"] is inflight
 
+    def test_memory_step_baked_flag(self, monkeypatch):
+        """Baked image: available but not removable -> UI must not offer Remove."""
+        with patch("src.api.memory.memory_status",
+                   return_value={"available": True, "removable": False}):
+            step = setup_mod.memory_step()
+        assert step["installed"] is True
+        assert step["baked"] is True
+
+    def test_memory_step_runtime_installed_not_baked(self, monkeypatch):
+        """Runtime install on a lean image: available AND removable -> Remove OK."""
+        with patch("src.api.memory.memory_status",
+                   return_value={"available": True, "removable": True}):
+            step = setup_mod.memory_step()
+        assert step["installed"] is True
+        assert step["baked"] is False
+
+    def test_memory_step_not_installed(self, monkeypatch):
+        with patch("src.api.memory.memory_status",
+                   return_value={"available": False, "removable": False}):
+            step = setup_mod.memory_step()
+        assert step["installed"] is False
+        assert step["baked"] is False
+
+    def test_router_step_baked_flag(self, monkeypatch):
+        with patch("src.api.memory.router_status",
+                   return_value={"available": True, "removable": False}):
+            step = setup_mod.router_step()
+        assert step["installed"] is True
+        assert step["baked"] is True
+
+    def test_router_step_runtime_installed_not_baked(self, monkeypatch):
+        with patch("src.api.memory.router_status",
+                   return_value={"available": True, "removable": True}):
+            step = setup_mod.router_step()
+        assert step["installed"] is True
+        assert step["baked"] is False
+
 
 class TestMemoryInstallCoordinator:
     def test_mem_progress_idle_by_default(self):

@@ -194,6 +194,10 @@ def memory_step() -> dict:
         ),
         "required": False,
         "installed": bool(status.get("available")),
+        # True when the deps are baked into the image site-packages (not the
+        # module --target dir), so the UI must NOT offer Remove (it would be a
+        # no-op) — nothing to reinstall either.
+        "baked": bool(status.get("available")) and not bool(status.get("removable")),
         "status": status,
         "install_path": memory_site(),
         "installing": installing,
@@ -225,6 +229,9 @@ def router_step() -> dict:
         ),
         "required": False,
         "installed": bool(status.get("available")),
+        # Same baked vs runtime-installed distinction as the memory module:
+        # baked-in deps can't be removed, so no Remove button in the UI.
+        "baked": bool(status.get("available")) and not bool(status.get("removable")),
         "status": status,
         "install_path": router_site(),
         "installing": installing,

@@ -110,7 +110,10 @@ function renderProgress() {
 
 function installState(step) {
   const s = step.installing;
-  if (!s) return step.installed ? 'done' : (step.required ? 'required' : 'optional');
+  if (!s) {
+    if (step.installed) return step.baked ? 'baked' : 'done';
+    return step.required ? 'required' : 'optional';
+  }
   if (s.status === 'failed') return 'failed';
   return 'running';
 }
@@ -123,6 +126,7 @@ function statusBadge(step) {
     failed: ['error', 'failed'],
     required: ['error', 'required'],
     optional: ['cache', 'optional'],
+    baked: ['cache', 'baked in image'],
   };
   const [cls, label] = map[state] || ['cache', state];
   return '<span class="badge badge-' + cls + '">' + label + '</span>';
@@ -142,9 +146,11 @@ function stepCard(step) {
   const state = installState(step);
   const action = state === 'done'
     ? ' <button class="btn btn-outline btn-sm btn-danger" data-remove="' + step.kind + ':' + esc(step.name) + '">Remove</button>'
-    : (state === 'running'
-      ? '<span class="muted" style="font-size:0.7rem">installing…</span>'
-      : '<button class="btn btn-outline btn-sm" data-install="' + step.kind + ':' + esc(step.name) + '">Install</button>');
+    : (state === 'baked'
+      ? '<span class="muted" style="font-size:0.7rem">Baked into image — not removable</span>'
+      : (state === 'running'
+        ? '<span class="muted" style="font-size:0.7rem">installing…</span>'
+        : '<button class="btn btn-outline btn-sm" data-install="' + step.kind + ':' + esc(step.name) + '">Install</button>'));
   return '<div class="setup-step" id="step-' + step.kind + '-' + step.name + '">' +
     '<div class="setup-step-main">' +
       '<div class="setup-step-title">' + esc(step.title || step.name) + statusBadge(step) + '</div>' +

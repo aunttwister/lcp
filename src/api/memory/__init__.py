@@ -190,11 +190,17 @@ def memory_status() -> dict:
     """Return a status dict for the UI / manifest.
 
     ``available`` reflects the installed module (importable deps);
+    ``removable`` is True ONLY when the deps live exclusively in the module's
+    own ``--target`` dir (a runtime install on a lean image). When the deps
+    are also/only in the interpreter site-packages (baked image), ``available``
+    is True but ``removable`` is False — deleting the module dir would be a
+    no-op, so the Setup UI must not offer Remove/Reinstall.
     ``active`` reflects the runtime backend (config-enabled + initialized).
     """
     available = memory_available(memory_site())
     return {
         "available": available,
+        "removable": available and not memory_available(None),
         "active": _backend is not None,
         "site": memory_site(),
         "models_dir": memory_models(),
@@ -232,11 +238,18 @@ def router_available(site: Optional[str] = None) -> bool:
 
 
 def router_status() -> dict:
-    """Return a status dict for the semantic routing module (UI / manifest)."""
+    """Return a status dict for the semantic routing module (UI / manifest).
+
+    ``removable`` follows the same rule as ``memory_status``: True only when
+    sentence-transformers is importable EXCLUSIVELY via the router ``--target``
+    dir (runtime install on a lean image); False when baked into the image
+    site-packages.
+    """
     site = os.path.join(os.environ.get("LCP_MODULES_DIR", "").strip() or "/opt/lcp-modules", "router")
     available = router_available(site)
     return {
         "available": available,
+        "removable": available and not router_available(None),
         "active": available,
         "site": site,
         "models_dir": os.path.join(os.path.dirname(site), "models", "router"),
