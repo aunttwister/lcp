@@ -228,7 +228,8 @@ def _probe_embed(embed) -> bool:
         return False
     try:
         vec = embed(["semantic probe"])[0]
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — surface WHY the probe failed
+        logger.warning("semantic_probe_embed_failed", error=str(exc)[:300])
         return False
     if not vec:
         return False

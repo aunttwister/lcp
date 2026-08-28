@@ -50,7 +50,18 @@ class EmbeddingModel:
         kwargs: dict = {"device": self.device}
         if self.cache_dir:
             kwargs["cache_folder"] = self.cache_dir
-        self._model = SentenceTransformer(self.model_name, **kwargs)
+        try:
+            self._model = SentenceTransformer(self.model_name, **kwargs)
+        except Exception:
+            # The weights may already be cached while the HuggingFace Hub is
+            # unreachable (e.g. an offline container). Retry offline so the
+            # cached snapshot is used instead of failing on the hub check.
+            if not (self.cache_dir and os.path.isdir(self.cache_dir)):
+                raise
+            logger.info("embedding_retry_local_files_only", model=self.model_name,
+                        cache_dir=self.cache_dir)
+            kwargs["local_files_only"] = True
+            self._model = SentenceTransformer(self.model_name, **kwargs)
         return self._model
 
     @property
