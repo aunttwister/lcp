@@ -121,9 +121,13 @@ Setup page (the same "not installed → Install → Remove" lifecycle as memory)
   (`importlib.util.find_spec('sentence_transformers')`), so a `--target`
   install is detected correctly.
 - **Status:** `router_status()` reports `available` / `removable` / `active`.
-  `removable` is true only when the deps live *exclusively* in the `--target`
-  dir — when baked into the image (`WITH_ROUTER=1`), the Setup page shows
-  "baked in image" and offers no Remove button.
+  `removable` is true when the deps live *exclusively* in the `--target` dir.
+  When baked into the image (`WITH_ROUTER=1`) the Setup page still shows a
+  **Remove** button: it uninstalls the baked deps from the running container's
+  image layer (runtime-only — a rebuild re-bakes them). Removal is refused
+  while the Memory module is also baked, because both share
+  `sentence-transformers`/`torch`; rebuild the image lean
+  (`WITH_ROUTER=0` / `WITH_MEMORY=0`) to manage both from Setup.
 
 After install/remove, `invalidate_semantic_classifier()` drops the cached
 classifier so the next request rebuilds it against the new deps — no restart

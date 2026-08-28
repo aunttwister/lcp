@@ -632,17 +632,82 @@ def _tail_mem_detail(fallback: str, lines: int = 6) -> str:
     return f"{fallback}\n{tail[-800:]}"
 
 
+# ── Baked-module removal ─────────────────────────────────────────────────────
+# When a module is BAKED into the image, its deps live in the container's
+# site-packages (writable image layer), so deleting the --target dir is a
+# no-op. "Remove" then uninstalls the baked deps from the RUNNING container.
+# This is runtime-only: a rebuild with the matching WITH_*=1 bake arg restores
+# them. The shared deps (sentence-transformers/transformers/tokenizers/torch)
+# are used by BOTH the router and memory modules, so removal is refused while
+# the sibling module is also baked.
+BAKED_ROUTER_PACKAGES = [
+    "sentence-transformers",
+    "transformers",
+    "tokenizers",
+    "torch",
+]
+BAKED_MEMORY_PACKAGES = [
+    "lancedb",
+    "sentence-transformers",
+    "transformers",
+    "tokenizers",
+    "torch",
+]
+
+
+def _uninstall_baked_packages(packages: list[str]) -> list[str]:
+    """pip uninstall *packages* from the container's site-packages.
+
+    Best-effort and never raises. Returns the package names pip reports as
+    successfully uninstalled; packages that aren't installed are skipped.
+    """
+    uninstalled: list[str] = []
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "uninstall", "-y",
+             "--disable-pip-version-check", *packages],
+            capture_output=True, text=True, timeout=300,
+        )
+        for line in proc.stdout.splitlines():
+            if line.startswith("Successfully uninstalled"):
+                uninstalled.append(line.split("Successfully uninstalled ", 1)[1].strip())
+    except Exception as exc:  # noqa: BLE001 — removal must never crash the request
+        logger.warning("baked_packages_uninstall_failed", error=str(exc))
+    return uninstalled
+
+
 def remove_memory(engine) -> dict:
-    """Remove the memory module (deps dir + model cache) and clear setup state.
+    """Remove the memory module and clear setup state.
 
     Does NOT delete stored memories in the LanceDB data dir (that lives under
     the app data dir, not LCP_MODULES_DIR).
+
+    Lean image: deletes the --target deps dir + model cache. Baked image
+    (deps in the image site-packages): uninstalls the baked deps from the
+    running container so the module becomes genuinely unavailable — a rebuild
+    with WITH_MEMORY=1 restores them. Blocked while SEMANTIC ROUTING is also
+    baked, because both share sentence-transformers/torch.
     """
+    from .memory import memory_available, router_available
+
     removed: list[str] = []
     for path in (memory_site(), memory_models_dir()):
         if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
             removed.append(path)
+
+    if memory_available(None):
+        # Baked into the image site-packages — the --target removal above was
+        # a no-op, so uninstall the baked deps from the running container.
+        if router_available(None):
+            raise SetupError(
+                "Cannot remove the Memory module: Semantic routing is also "
+                "baked into the image and shares sentence-transformers/torch. "
+                "Rebuild the image with WITH_ROUTER=0 and WITH_MEMORY=0 so "
+                "both modules are runtime-managed, then remove them from the "
+                "Setup page."
+            )
+        removed += _uninstall_baked_packages(BAKED_MEMORY_PACKAGES)
 
     set_state(engine, "module:memory", "removed")
     logger.info("setup_memory_removed", removed=removed)
@@ -838,12 +903,34 @@ def _tail_router_detail(fallback: str, lines: int = 6) -> str:
 
 
 def remove_router(engine) -> dict:
-    """Remove the semantic routing module (deps dir + model cache) and clear setup state."""
+    """Remove the semantic routing module and clear setup state.
+
+    Lean image: deletes the --target deps dir + model cache. Baked image
+    (deps in the image site-packages): uninstalls the baked deps from the
+    running container so the module becomes genuinely unavailable — a rebuild
+    with WITH_ROUTER=1 restores them. Blocked while MEMORY is also baked,
+    because both share sentence-transformers/torch.
+    """
+    from .memory import memory_available, router_available
+
     removed: list[str] = []
     for path in (router_site(), router_models_dir()):
         if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
             removed.append(path)
+
+    if router_available(None):
+        # Baked into the image site-packages — the --target removal above was
+        # a no-op, so uninstall the baked deps from the running container.
+        if memory_available(None):
+            raise SetupError(
+                "Cannot remove Semantic routing: the Memory module is also "
+                "baked into the image and shares sentence-transformers/torch. "
+                "Rebuild the image with WITH_ROUTER=0 and WITH_MEMORY=0 so "
+                "both modules are runtime-managed, then remove them from the "
+                "Setup page."
+            )
+        removed += _uninstall_baked_packages(BAKED_ROUTER_PACKAGES)
 
     set_state(engine, "module:router", "removed")
     from .task_classifier import invalidate_semantic_classifier

@@ -199,6 +199,10 @@ class TestRemoveMemory:
         models.mkdir(parents=True)
         (site / "x").write_text("")
         monkeypatch.setenv("LCP_MODULES_DIR", str(mods))
+        # Lean image: deps live in the --target dir only, not global
+        # site-packages — so the baked-uninstall branch must not trigger.
+        monkeypatch.setattr("src.api.memory.memory_available", lambda site=None: False)
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: False)
 
         result = setup_mod.remove_memory(temp_db)
         assert result["removed"] is True
@@ -208,9 +212,33 @@ class TestRemoveMemory:
 
     def test_remove_memory_noop_when_absent(self, temp_db, monkeypatch, tmp_path):
         monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "mods"))
+        monkeypatch.setattr("src.api.memory.memory_available", lambda site=None: False)
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: False)
         result = setup_mod.remove_memory(temp_db)
         assert result["removed"] is True
         assert result["paths"] == []
+
+    def test_remove_memory_baked_uninstalls_deps(self, temp_db, monkeypatch):
+        """Baked image: removing uninstalls the baked deps from site-packages."""
+        monkeypatch.setattr("src.api.memory.memory_available", lambda site=None: True)
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: False)
+        uninstalled = []
+        monkeypatch.setattr(
+            setup_mod, "_uninstall_baked_packages",
+            lambda pkgs: uninstalled.extend(pkgs) or pkgs,
+        )
+
+        result = setup_mod.remove_memory(temp_db)
+        assert uninstalled == setup_mod.BAKED_MEMORY_PACKAGES
+        assert result["removed"] is True
+        assert setup_mod.load_state(temp_db)["module:memory"]["status"] == "removed"
+
+    def test_remove_memory_baked_blocked_when_router_baked(self, temp_db, monkeypatch):
+        """Both baked: removal refused (shared sentence-transformers/torch)."""
+        monkeypatch.setattr("src.api.memory.memory_available", lambda site=None: True)
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: True)
+        with pytest.raises(setup_mod.SetupError, match="Semantic routing is also baked"):
+            setup_mod.remove_memory(temp_db)
 
 
 class TestRouterInstallCoordinator:
@@ -273,6 +301,9 @@ class TestRemoveRouter:
         models.mkdir(parents=True)
         (site / "x").write_text("")
         monkeypatch.setenv("LCP_MODULES_DIR", str(mods))
+        # Lean image: deps live in the --target dir only — no baked uninstall.
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: False)
+        monkeypatch.setattr("src.api.memory.memory_available", lambda site=None: False)
 
         result = setup_mod.remove_router(temp_db)
         assert result["removed"] is True
@@ -282,9 +313,54 @@ class TestRemoveRouter:
 
     def test_remove_router_noop_when_absent(self, temp_db, monkeypatch, tmp_path):
         monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "mods"))
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: False)
+        monkeypatch.setattr("src.api.memory.memory_available", lambda site=None: False)
         result = setup_mod.remove_router(temp_db)
         assert result["removed"] is True
         assert result["paths"] == []
+
+    def test_remove_router_baked_uninstalls_deps(self, temp_db, monkeypatch):
+        """Baked image: removing uninstalls the baked deps from site-packages."""
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: True)
+        monkeypatch.setattr("src.api.memory.memory_available", lambda site=None: False)
+        uninstalled = []
+        monkeypatch.setattr(
+            setup_mod, "_uninstall_baked_packages",
+            lambda pkgs: uninstalled.extend(pkgs) or pkgs,
+        )
+
+        result = setup_mod.remove_router(temp_db)
+        assert uninstalled == setup_mod.BAKED_ROUTER_PACKAGES
+        assert result["removed"] is True
+        assert setup_mod.load_state(temp_db)["module:router"]["status"] == "removed"
+
+    def test_remove_router_baked_blocked_when_memory_baked(self, temp_db, monkeypatch):
+        """Both baked: removal refused (shared sentence-transformers/torch)."""
+        monkeypatch.setattr("src.api.memory.router_available", lambda site=None: True)
+        monkeypatch.setattr("src.api.memory.memory_available", lambda site=None: True)
+        with pytest.raises(setup_mod.SetupError, match="Memory module is also baked"):
+            setup_mod.remove_router(temp_db)
+
+
+def test_uninstall_baked_packages_parses_success(monkeypatch):
+    """The pip-uninstall helper reports the packages pip actually removed."""
+    import subprocess as sp
+    fake = type("R", (), {
+        "stdout": (
+            "Successfully uninstalled sentence-transformers-6.0.0\n"
+            "Successfully uninstalled torch-2.13.0\n"
+        ),
+    })()
+    monkeypatch.setattr(setup_mod.subprocess, "run", lambda *a, **k: fake)
+    out = setup_mod._uninstall_baked_packages(["sentence-transformers", "torch"])
+    assert out == ["sentence-transformers-6.0.0", "torch-2.13.0"]
+
+
+def test_uninstall_baked_packages_never_raises(monkeypatch):
+    def _boom(*a, **k):
+        raise RuntimeError("pip exploded")
+    monkeypatch.setattr(setup_mod.subprocess, "run", _boom)
+    assert setup_mod._uninstall_baked_packages(["torch"]) == []
 
 
 class TestMemoryAvailableProbe:

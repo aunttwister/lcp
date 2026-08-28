@@ -144,13 +144,12 @@ function stepCard(step) {
   const logBtn = (step.kind === 'module' && installing && installing.log)
     ? '<button class="btn btn-outline btn-sm" data-log="' + step.kind + '-' + step.name + '">Logs</button>' : '';
   const state = installState(step);
-  const action = state === 'done'
-    ? ' <button class="btn btn-outline btn-sm btn-danger" data-remove="' + step.kind + ':' + esc(step.name) + '">Remove</button>'
-    : (state === 'baked'
-      ? '<span class="muted" style="font-size:0.7rem">Baked into image — not removable</span>'
-      : (state === 'running'
-        ? '<span class="muted" style="font-size:0.7rem">installing…</span>'
-        : '<button class="btn btn-outline btn-sm" data-install="' + step.kind + ':' + esc(step.name) + '">Install</button>'));
+  const removeBtn = ' <button class="btn btn-outline btn-sm btn-danger" data-remove="' + step.kind + ':' + esc(step.name) + '">Remove</button>';
+  const action = (state === 'done' || state === 'baked')
+    ? removeBtn  // baked modules are removable from the running container
+    : (state === 'running'
+      ? '<span class="muted" style="font-size:0.7rem">installing…</span>'
+      : '<button class="btn btn-outline btn-sm" data-install="' + step.kind + ':' + esc(step.name) + '">Install</button>');
   return '<div class="setup-step" id="step-' + step.kind + '-' + step.name + '">' +
     '<div class="setup-step-main">' +
       '<div class="setup-step-title">' + esc(step.title || step.name) + statusBadge(step) + '</div>' +
@@ -183,9 +182,18 @@ function renderSteps() {
 async function removeStep(target) {
   const [kind, name] = target.split(':');
   const title = kind === 'provider' ? name : moduleName(name);
-  if (!confirm('Remove "' + title + '" plugin? This clears its config and credentials.')) return;
+  const mod = kind === 'module' ? moduleByName(name) : null;
+  const baked = !!(mod && mod.baked);
+  const msg = baked
+    ? 'Remove "' + title + '" from this running container?\n\n' +
+      'This uninstalls the baked deps from the image layer. It is runtime-only — ' +
+      'a rebuild with the matching WITH_* bake arg restores them.'
+    : 'Remove "' + title + '" plugin? This clears its config and credentials.';
+  if (!confirm(msg)) return;
+  // Disable every Remove button so a slow baked uninstall doesn't look stuck.
+  document.querySelectorAll('[data-remove]').forEach(btn => btn.disabled = true);
   const res = await api('DELETE', '/api/setup/' + kind + '/' + name);
-  if (res.error) { alert('Error: ' + res.error); return; }
+  if (res.error) { alert('Error: ' + res.error); }
   await loadSetup();
 }
 
