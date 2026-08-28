@@ -16,10 +16,17 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from .cost_estimator import count_tokens
 from .logging_config import get_logger
+
+if TYPE_CHECKING:  # pragma: no cover — runtime import only for type hints
+    from .component import Component
+    from .runtime import Runtime
+else:
+    from .component import Component
+    from .runtime import Runtime
 
 logger = get_logger("lcp.router")
 
@@ -2084,6 +2091,19 @@ _dynamic_router = CapabilityRouter(enabled=False)
 
 
 def get_dynamic_router() -> CapabilityRouter:
+    """Return the active dynamic router.
+
+    Delegates to the runtime's RouterComponent when bound; otherwise the
+    legacy eager singleton.
+    """
+    global _runtime
+    if _runtime is not None:
+        try:
+            comp = _runtime.resolve("dynamic_router")
+        except Exception:  # noqa: BLE001 — inactive/unbound → legacy
+            comp = None
+        if comp is not None and getattr(comp, "router", None) is not None:
+            return comp.router
     return _dynamic_router
 
 
@@ -2124,7 +2144,55 @@ def invalidate_router_matrix() -> None:
     Called when a benchmark run completes or the registry changes so routing
     picks up fresh scores without a restart.
     """
-    _dynamic_router.invalidate_matrix()
+    get_dynamic_router().invalidate_matrix()
+
+
+# ── Component-runtime adapter (Phase C) ────────────────────────────────────
+_runtime: Optional["Runtime"] = None
+
+
+def bind_runtime(rt: "Runtime") -> None:
+    """Bind an active Runtime so ``get_dynamic_router()`` delegates to it."""
+    global _runtime
+    _runtime = rt
+
+
+class RouterComponent(Component):
+    """The dynamic router as a runtime component.
+
+    ``requires=["engine", "settings"]`` — engine is the model-registry DB; the
+    settings store supplies the enabled toggle (replacing the post-init
+    ``sync_router_enabled_from_settings`` mutation at boot).
+    """
+
+    name = "dynamic_router"
+    requires = ["engine", "settings"]
+    provides = ["dynamic_router"]
+
+    def __init__(self, db_path: str = "data/costs.db", enabled: bool = False,
+                 cost_bias: float = DEFAULT_COST_BIAS):
+        super().__init__()
+        self._db_path = db_path
+        self._enabled = enabled
+        self._cost_bias = cost_bias
+        self.router: Optional[CapabilityRouter] = None
+
+    def setup(self, rt: "Runtime") -> Optional[Any]:
+        self.router = CapabilityRouter(
+            enabled=self._enabled, db_path=self._db_path,
+            cost_bias=self._cost_bias,
+        )
+        # Re-apply the persisted UI toggle (settings store) if present.
+        try:
+            settings = rt.resolve("settings")
+            override = settings.get_routing_enabled(default=None)
+            if override is not None:
+                self.router.enabled = override
+        except Exception:  # noqa: BLE001 — settings may be absent in tests
+            pass
+        if self.router.enabled:
+            self.router.load_matrix()  # warm the cache
+        return None
 
 
 def _status_for_profile(router, config, profile: Optional[str]) -> dict:
