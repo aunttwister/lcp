@@ -449,7 +449,11 @@ _mem_last: Optional[dict] = None     # terminal result (done/failed) for the UI
 
 # Memory deps are installed into their own --target dir (memory_site) so
 # remove_memory can delete them without touching LiveBench's shared site.
-MEMORY_PACKAGES = ["lancedb>=0.15", "sentence-transformers>=3.0"]
+# tokenizers is pinned for the SAME reason as ROUTER_PACKAGES: transformers
+# (a sentence-transformers dep) rejects tokenizers>0.23.0, and an unpinned
+# --target copy in /opt/lcp-modules/memory would shadow the baked global
+# install (this dir is on PYTHONPATH) and break the semantic classifier too.
+MEMORY_PACKAGES = ["lancedb>=0.15", "sentence-transformers>=3.0", "tokenizers==0.22.2"]
 MEMORY_MODEL = "BAAI/bge-small-en-v1.5"
 
 
