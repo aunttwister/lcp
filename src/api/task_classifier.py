@@ -28,7 +28,10 @@ from __future__ import annotations
 import math
 from typing import Optional
 
+from .logging_config import get_logger
 from .memory.embeddings import DEFAULT_MODEL
+
+logger = get_logger("lcp.router.classifier")
 
 # Task type -> canonical exemplar prompts (short, representative).
 TASK_EXEMPLARS: dict[str, list[str]] = {
@@ -257,6 +260,7 @@ def get_semantic_classifier() -> Optional[SemanticClassifier]:
         config = get_config()
         router_cfg = (getattr(config, "plugins", None) or {}).get("router") or {}
         if not router_cfg.get("enabled", True):
+            logger.info("semantic_classifier_disabled_by_config")
             return None
         # The router deps are ``pip install --target``ed into <LCP_MODULES_DIR>
         # /router (by the Docker build or the Setup page). Make that dir
@@ -274,6 +278,12 @@ def get_semantic_classifier() -> Optional[SemanticClassifier]:
             cache_dir=models_dir,
         )
         if not _probe_embed(model.embed):
+            logger.warning(
+                "semantic_classifier_unavailable",
+                reason="embed probe returned no signal",
+                models_dir=models_dir,
+                site=site,
+            )
             return None
         # Gate the semantic path on a HIGH-confidence match so the deterministic
         # keyword signals still win for clear intent; only genuinely ambiguous
@@ -284,7 +294,9 @@ def get_semantic_classifier() -> Optional[SemanticClassifier]:
             or SemanticClassifier.DEFAULT_MIN_SCORE
         )
         _classifier = SemanticClassifier(embed=model.embed, min_score=min_score)
-    except Exception:
+        logger.info("semantic_classifier_ready", min_score=min_score, models_dir=models_dir)
+    except Exception as exc:  # noqa: BLE001 — classifier must never break routing
+        logger.warning("semantic_classifier_unavailable", error=str(exc)[:300])
         _classifier = None
     return _classifier if (_classifier is not None and _classifier.available) else None
 
