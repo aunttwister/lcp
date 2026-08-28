@@ -7,8 +7,16 @@ healthy → degraded → dead based on consecutive failure thresholds.
 
 import time
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Optional
 
 from .logging_config import get_logger
+
+if TYPE_CHECKING:  # pragma: no cover — runtime import only for type hints
+    from .component import Component
+    from .runtime import Runtime
+else:
+    from .component import Component
+    from .runtime import Runtime
 
 logger = get_logger("lcp.circuit_breaker")
 
@@ -357,10 +365,63 @@ _circuit_breaker: CircuitBreaker | None = None
 
 
 def get_circuit_breaker(config=None) -> CircuitBreaker:
-    """Get or create the circuit breaker singleton."""
+    """Get the active circuit breaker.
+
+    When a Runtime is bound and its ``circuit_breaker`` component is active,
+    returns the runtime's breaker (config + engine injected at construction —
+    no attach_engine post-hoc step). Otherwise returns the legacy singleton
+    (lazy-created with *config*), preserving the boot/tests path until main.py
+    is rewired to the runtime.
+    """
+    global _runtime
+    if _runtime is not None:
+        try:
+            comp = _runtime.resolve("circuit_breaker")
+        except Exception:  # noqa: BLE001 — inactive/unbound → legacy
+            comp = None
+        if comp is not None and getattr(comp, "breaker", None) is not None:
+            return comp.breaker
     global _circuit_breaker
     if _circuit_breaker is None and config is not None:
         _circuit_breaker = CircuitBreaker(config)
     if _circuit_breaker is None:
         raise RuntimeError("CircuitBreaker not initialized — call with config first")
     return _circuit_breaker
+
+
+# ── Component-runtime adapter (Phase C) ────────────────────────────────────
+# When an active Runtime is bound, get_circuit_breaker() delegates to the
+# runtime's CircuitBreakerComponent, which constructs the breaker with BOTH
+# config and engine injected up front — eliminating the post-hoc
+# attach_engine() call. The engine attach also reloads persisted health.
+_runtime: Optional["Runtime"] = None
+
+
+def bind_runtime(rt: "Runtime") -> None:
+    """Bind an active Runtime so ``get_circuit_breaker()`` delegates to it."""
+    global _runtime
+    _runtime = rt
+
+
+class CircuitBreakerComponent(Component):
+    """The circuit breaker as a runtime component.
+
+    ``requires=["config", "engine"]`` — both deps declared, injected at
+    construction. ``setup`` creates the breaker, attaches the engine (which
+    loads persisted provider health), and returns a no-op disposer (the breaker
+    persists per-event, so there is nothing to undo on shutdown).
+    """
+
+    name = "circuit_breaker"
+    requires = ["config", "engine"]
+    provides = ["circuit_breaker"]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.breaker: Optional[CircuitBreaker] = None
+
+    def setup(self, rt: "Runtime") -> Optional[Any]:
+        breaker = CircuitBreaker(rt.resolve("config"))
+        breaker.attach_engine(rt.resolve("engine"))
+        self.breaker = breaker
+        return None
