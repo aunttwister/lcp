@@ -11,9 +11,17 @@ import urllib.request
 import urllib.error
 import ssl
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Optional
 
 from .logging_config import get_logger
 from .models import Alert, get_session
+
+if TYPE_CHECKING:  # pragma: no cover — runtime import only for type hints
+    from .component import Component
+    from .runtime import Runtime
+else:
+    from .component import Component
+    from .runtime import Runtime
 
 logger = get_logger("lcp.alerts")
 
@@ -299,7 +307,20 @@ _alert_manager: AlertManager | None = None
 
 
 def get_alert_manager(engine=None) -> AlertManager:
-    """Get or create the alert manager singleton."""
+    """Get the active alert manager.
+
+    Delegates to the runtime's AlertManagerComponent when bound (engine
+    injected at construction — no silent _engine mutation). Otherwise the
+    legacy singleton.
+    """
+    global _runtime
+    if _runtime is not None:
+        try:
+            comp = _runtime.resolve("alert_manager")
+        except Exception:  # noqa: BLE001 — inactive/unbound → legacy
+            comp = None
+        if comp is not None and getattr(comp, "manager", None) is not None:
+            return comp.manager
     global _alert_manager
     if _alert_manager is None:
         _alert_manager = AlertManager(engine)
@@ -313,3 +334,33 @@ def init_alert_manager(engine) -> AlertManager:
     global _alert_manager
     _alert_manager = AlertManager(engine)
     return _alert_manager
+
+
+# ── Component-runtime adapter (Phase C) ────────────────────────────────────
+_runtime: Optional["Runtime"] = None
+
+
+def bind_runtime(rt: "Runtime") -> None:
+    """Bind an active Runtime so ``get_alert_manager()`` delegates to it."""
+    global _runtime
+    _runtime = rt
+
+
+class AlertManagerComponent(Component):
+    """The alert manager as a runtime component.
+
+    ``requires=["engine"]`` — engine injected at construction (no getter-side
+    mutation of a live instance).
+    """
+
+    name = "alert_manager"
+    requires = ["engine"]
+    provides = ["alert_manager"]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.manager: Optional[AlertManager] = None
+
+    def setup(self, rt: "Runtime") -> Optional[Any]:
+        self.manager = AlertManager(rt.resolve("engine"))
+        return None
