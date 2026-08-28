@@ -10,9 +10,17 @@ import json
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
 
 from .logging_config import get_logger
 from .models import ApiKey, get_session
+
+if TYPE_CHECKING:  # pragma: no cover — runtime import only for type hints
+    from .component import Component
+    from .runtime import Runtime
+else:
+    from .component import Component
+    from .runtime import Runtime
 
 logger = get_logger("lcp.keys")
 
@@ -244,7 +252,19 @@ _key_manager: KeyManager | None = None
 
 
 def get_key_manager(engine=None, data_dir: str = "data") -> KeyManager:
-    """Get or create the key manager singleton."""
+    """Get the active key manager.
+
+    Delegates to the runtime's KeyManagerComponent when bound; otherwise the
+    legacy singleton (lazy-created with *engine*).
+    """
+    global _runtime
+    if _runtime is not None:
+        try:
+            comp = _runtime.resolve("key_manager")
+        except Exception:  # noqa: BLE001 — inactive/unbound → legacy
+            comp = None
+        if comp is not None and getattr(comp, "manager", None) is not None:
+            return comp.manager
     global _key_manager
     if _key_manager is None and engine is not None:
         _key_manager = KeyManager(engine, data_dir)
@@ -256,4 +276,34 @@ def init_key_manager(engine, data_dir: str = "data") -> KeyManager:
     global _key_manager
     _key_manager = KeyManager(engine, data_dir)
     return _key_manager
+
+
+# ── Component-runtime adapter (Phase C) ────────────────────────────────────
+_runtime: Optional["Runtime"] = None
+
+
+def bind_runtime(rt: "Runtime") -> None:
+    """Bind an active Runtime so ``get_key_manager()`` delegates to it."""
+    global _runtime
+    _runtime = rt
+
+
+class KeyManagerComponent(Component):
+    """The API-key manager as a runtime component.
+
+    ``requires=["engine", "data_dir"]`` — both declared; the data_dir only
+    feeds legacy JSON-key migration.
+    """
+
+    name = "key_manager"
+    requires = ["engine", "data_dir"]
+    provides = ["key_manager"]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.manager: Optional[KeyManager] = None
+
+    def setup(self, rt: "Runtime") -> Optional[Any]:
+        self.manager = KeyManager(rt.resolve("engine"), rt.resolve("data_dir") or "data")
+        return None
 

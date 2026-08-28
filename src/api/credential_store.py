@@ -11,10 +11,18 @@ Precedence when resolving a provider key at request time (in forward_request):
 """
 
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Optional
 
 from .crypto import encrypt_secret, decrypt_secret
 from .logging_config import get_logger
 from .models import ProviderCredential, get_session
+
+if TYPE_CHECKING:  # pragma: no cover — runtime import only for type hints
+    from .component import Component
+    from .runtime import Runtime
+else:
+    from .component import Component
+    from .runtime import Runtime
 
 logger = get_logger("lcp.credentials")
 
@@ -112,7 +120,19 @@ _credential_store: CredentialStore | None = None
 
 
 def get_credential_store(engine=None, data_dir: str = "data") -> CredentialStore | None:
-    """Get the singleton credential store (None if not initialized)."""
+    """Get the active credential store (None if not initialized).
+
+    Delegates to the runtime's CredentialStoreComponent when bound; otherwise
+    the legacy singleton (lazy-created with *engine*).
+    """
+    global _runtime
+    if _runtime is not None:
+        try:
+            comp = _runtime.resolve("credential_store")
+        except Exception:  # noqa: BLE001 — inactive/unbound → legacy
+            comp = None
+        if comp is not None and getattr(comp, "store", None) is not None:
+            return comp.store
     global _credential_store
     if _credential_store is None and engine is not None:
         _credential_store = CredentialStore(engine, data_dir)
@@ -124,3 +144,33 @@ def init_credential_store(engine, data_dir: str = "data") -> CredentialStore:
     global _credential_store
     _credential_store = CredentialStore(engine, data_dir)
     return _credential_store
+
+
+# ── Component-runtime adapter (Phase C) ────────────────────────────────────
+_runtime: Optional["Runtime"] = None
+
+
+def bind_runtime(rt: "Runtime") -> None:
+    """Bind an active Runtime so ``get_credential_store()`` delegates to it."""
+    global _runtime
+    _runtime = rt
+
+
+class CredentialStoreComponent(Component):
+    """The encrypted credential store as a runtime component.
+
+    ``requires=["engine", "data_dir"]`` — data_dir selects the on-disk fallback
+    key used by the crypto layer.
+    """
+
+    name = "credential_store"
+    requires = ["engine", "data_dir"]
+    provides = ["credential_store"]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.store: Optional[CredentialStore] = None
+
+    def setup(self, rt: "Runtime") -> Optional[Any]:
+        self.store = CredentialStore(rt.resolve("engine"), rt.resolve("data_dir") or "data")
+        return None
