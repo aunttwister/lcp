@@ -45,6 +45,23 @@ def memory_models() -> str:
     return os.path.join(root, "models", "memory")
 
 
+def router_site() -> str:
+    """Return the site-packages dir for the SEMANTIC ROUTING module deps.
+
+    ``<LCP_MODULES_DIR>/router`` — pip installs sentence-transformers + torch
+    ``--target`` here (independent of the memory plugin's install). The Docker
+    build (WITH_ROUTER=1) and the Setup-page installer both use this dir.
+    """
+    root = os.environ.get("LCP_MODULES_DIR", "").strip() or "/opt/lcp-modules"
+    return os.path.join(root, "router")
+
+
+def router_models() -> str:
+    """Return the directory used to cache the router embedding model weights."""
+    root = os.environ.get("LCP_MODULES_DIR", "").strip() or "/opt/lcp-modules"
+    return os.path.join(root, "models", "router")
+
+
 def memory_available(site: Optional[str] = None) -> bool:
     """Return True when the memory module's Python deps are importable.
 

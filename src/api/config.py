@@ -158,6 +158,15 @@ SEED_CONFIG: dict[str, Any] = {
             "min_score": 0.0,
             "embedding": {"model": "BAAI/bge-small-en-v1.5", "dim": 384, "device": "cpu"},
         },
+        # SEMANTIC ROUTING module — the sole task classifier (no keyword
+        # fallback). Deps + model weights are baked into the image by the
+        # Docker build (WITH_ROUTER=1); this block just pins the model and
+        # the confidence gate.
+        "router": {
+            "enabled": True,
+            "min_score": 0.35,
+            "embedding": {"model": "BAAI/bge-small-en-v1.5", "dim": 384, "device": "cpu"},
+        },
     },
 }
 

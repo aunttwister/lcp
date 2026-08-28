@@ -1,6 +1,11 @@
 services:
   lcp:
-    build: .
+    build:
+      context: .
+      args:
+        WITH_ROUTER: ${WITH_ROUTER:-1}
+        WITH_MEMORY: ${WITH_MEMORY:-0}
+        WITH_BENCH: ${WITH_BENCH:-0}
     container_name: lcp
     restart: unless-stopped
     ports:
@@ -20,7 +25,8 @@ services:
       - LCP_MODULES_DIR=/opt/lcp-modules
       # Make module dependencies importable: LiveBench deps (site) + the
       # livebench package (<repo-root>/livebench) + memory module deps
-      # ($LCP_MODULES_DIR/memory).
-      - PYTHONPATH=/opt/lcp-modules/site:/opt/lcp-modules/livebench:/opt/lcp-modules/memory
+      # ($LCP_MODULES_DIR/memory) + semantic routing deps
+      # ($LCP_MODULES_DIR/router).
+      - PYTHONPATH=/opt/lcp-modules/site:/opt/lcp-modules/livebench:/opt/lcp-modules/memory:/opt/lcp-modules/router
       # Provider API keys and the OpenCode cookie are managed via the dashboard
       # UI — they're encrypted with LCP_SECRET_KEY and stored in SQLite.

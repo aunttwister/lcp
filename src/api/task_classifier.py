@@ -248,17 +248,26 @@ def get_semantic_classifier() -> Optional[SemanticClassifier]:
     if _classifier is not None:
         return _classifier
     try:
+        import sys
+
         from ..api.config import get_config
         from .memory.embeddings import EmbeddingModel
+        from .memory import router_site, router_models
 
         config = get_config()
         router_cfg = (getattr(config, "plugins", None) or {}).get("router") or {}
         if not router_cfg.get("enabled", True):
             return None
-        # The router embedder lives in the router module's own deps dir so it
-        # is independent from the memory plugin's install.
-        from .memory import memory_models as _router_models  # reuse models dir pattern
-        models_dir = router_cfg.get("models_dir") or _router_models()
+        # The router deps are ``pip install --target``ed into <LCP_MODULES_DIR>
+        # /router (by the Docker build or the Setup page). Make that dir
+        # importable IN-PROCESS so sentence-transformers resolves without a
+        # container restart (PYTHONPATH only affects fresh interpreters).
+        site = router_cfg.get("site") or router_site()
+        if site and site not in sys.path:
+            sys.path.insert(0, site)
+        # The router embedder caches weights in the router module's own models
+        # dir so it is independent from the memory plugin's install.
+        models_dir = router_cfg.get("models_dir") or router_models()
         model = EmbeddingModel(
             model_name=router_cfg.get("embedding", {}).get("model", DEFAULT_MODEL),
             device=router_cfg.get("embedding", {}).get("device", "cpu"),
