@@ -383,7 +383,7 @@ def _context_tail(text: str) -> Optional[str]:
     m = _USER_REQUEST_RE.search(raw)
     if m:
         content = m.group(1).strip(" \n\t:-")
-        content = _strip_mention(content)
+        content = _strip_chat_mentions(_strip_mention(content))
         return content if content and content.lower().lstrip() not in _CONTINUATIONS else None
 
     # 2. Bracketed prefix (mention / reply-quote / notice).
@@ -391,7 +391,7 @@ def _context_tail(text: str) -> Optional[str]:
         stripped = _strip_bracket_segments(raw)
         if stripped == raw:
             return None  # unclosed bracket — truncated/unknown notice, not intent
-        rest = stripped.strip(" \n\t:-")
+        rest = _strip_chat_mentions(stripped).strip(" \n\t:-")
         return rest if rest and rest.lower().lstrip() not in _CONTINUATIONS else None
 
     # 3. XML-style wrapper without an explicit user-request container.
@@ -403,7 +403,7 @@ def _context_tail(text: str) -> Optional[str]:
     m = _OPENING_TAG_RE.search(rest)
     if m:
         rest = rest[:m.start()]
-    rest = rest.strip(" \n\t:-")
+    rest = _strip_chat_mentions(rest).strip(" \n\t:-")
     return rest if rest and rest.lower().lstrip() not in _CONTINUATIONS else None
 
 
@@ -435,6 +435,25 @@ def _strip_mention(text: str) -> str:
     real instruction that follows (e.g. ``[aunttwister] can you set the SEO
     job...`` -> ``can you set the SEO job...``)."""
     return _MENTION_PREFIX_RE.sub("", text, count=1).strip()
+
+
+# VS Code Copilot Chat inserts inline mention tokens (``@file:src/foo.py``,
+# ``@selection:...``, ``@terminal:1``, ``@workspace:...``, ...) INTO the user's
+# text. These are client-injected references, not user intent — and their
+# incidental tokens ("file", "component", ...) skew semantic classification
+# (a "let's plan for @file:component-runtime.md" message tipped to
+# code_generation because of the "file"/"component" tokens). Strip any
+# ``@word:content`` token position-independently, mirroring how we strip the
+# XML context blocks. Structural (no hardcoded mention-name list); emails
+# (``a@b.com``, no colon after the local part) are left untouched.
+_CHAT_MENTION_RE = re.compile(r"@[a-zA-Z][\w-]*:[^\s]+")
+
+
+def _strip_chat_mentions(text: str) -> str:
+    """Remove client-injected ``@mention:…`` tokens from *text*."""
+    if not text or "@" not in text:
+        return text
+    return _CHAT_MENTION_RE.sub("", text).strip()
 
 
 # ── Harness-agnostic system-prompt preamble detection ────────────────────────
@@ -608,7 +627,7 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
             meta["skipped_cont"] += 1
             continue
         meta["source"] = "last_instruction"
-        stripped = _strip_mention(text)
+        stripped = _strip_chat_mentions(_strip_mention(text))
         return (stripped or text).strip(), meta
     # Nothing genuine survived: if we saw a preamble, return it flagged so the
     # classifier can route to a neutral default (path=preamble).
@@ -616,7 +635,7 @@ def _extract_intent_text(messages: list[dict]) -> tuple[str, dict]:
         meta["source"] = "preamble"
         return last_preamble_text.strip(), meta
     meta["source"] = "first_user_fallback"
-    stripped = _strip_mention(first_user_text)
+    stripped = _strip_chat_mentions(_strip_mention(first_user_text))
     return (stripped or first_user_text).strip(), meta
 
 
@@ -668,12 +687,12 @@ def classify_task_detail(
         if _is_client_context(text):
             tail = _context_tail(text)
             if tail and tail.lower().lstrip() not in _CONTINUATIONS:
-                chunk = tail.lower() + " "
+                chunk = _strip_chat_mentions(tail).lower() + " "
                 combined += chunk
                 if msg.get("role") == "user":
                     user_text += chunk
             continue
-        chunk = text.lower() + " "
+        chunk = _strip_chat_mentions(text).lower() + " "
         combined += chunk
         if msg.get("role") == "user":
             user_text += chunk

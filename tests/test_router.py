@@ -1545,6 +1545,30 @@ def test_extract_intent_text_attachment_with_real_instruction():
     assert meta["source"] == "last_instruction"
 
 
+def test_classify_strips_chat_mention_file_token():
+    """A VS Code @file: mention token (client artifact) must not skew semantic
+    classification. 'let's now plan for the @file:component-runtime.md feature'
+    was tipping to code_generation because of the 'file'/'component' tokens;
+    with the mention stripped it must classify as planning."""
+    from src.api.router import classify_task_detail, _extract_intent_text, _strip_chat_mentions
+    msgs = [
+        {"role": "system", "content": "You are an expert AI programming assistant."},
+        {"role": "user", "content": (
+            "<attachments><attachment id=\"component-runtime.md\" filePath=\"/x/component-runtime.md\">"
+            + _attachment_doc() + "</attachment></attachments>"
+            "<context>today</context>"
+            "<userRequest>let's now plan for the @file:component-runtime.md feature</userRequest>"
+        )},
+    ]
+    intent, _ = _extract_intent_text(msgs)
+    assert "@file:component-runtime.md" not in intent
+    detail = classify_task_detail(msgs)
+    assert detail.task == "planning"
+    assert detail.path == "semantic"
+    # Emails are not @mention tokens (no colon after the local part) — untouched.
+    assert _strip_chat_mentions("mail foo@bar.com please") == "mail foo@bar.com please"
+
+
 def test_context_tail_unknown_client_tag_still_stripped():
     """Wrapper detection is STRUCTURAL — a brand-new client tag that is NOT in
     any name list must still be recognized and stripped (no hardcoding)."""
