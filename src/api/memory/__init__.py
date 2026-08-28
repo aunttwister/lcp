@@ -283,6 +283,8 @@ def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_memory()`` delegates to it."""
     global _runtime
     _runtime = rt
+    from ..runtime import bind_active_runtime
+    bind_active_runtime(rt)
 
 
 class MemoryComponent(Component):
@@ -298,6 +300,10 @@ class MemoryComponent(Component):
     name = "memory"
     requires = ["config"]
     provides = ["memory"]
+
+    @property
+    def service(self):
+        return get_memory()
 
     def setup(self, rt: "Runtime") -> Optional[Any]:
         init_memory(rt.resolve("config"))

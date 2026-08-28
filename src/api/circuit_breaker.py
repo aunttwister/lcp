@@ -401,6 +401,8 @@ def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_circuit_breaker()`` delegates to it."""
     global _runtime
     _runtime = rt
+    from .runtime import bind_active_runtime
+    bind_active_runtime(rt)
 
 
 class CircuitBreakerComponent(Component):
@@ -419,6 +421,10 @@ class CircuitBreakerComponent(Component):
     def __init__(self) -> None:
         super().__init__()
         self.breaker: Optional[CircuitBreaker] = None
+
+    @property
+    def service(self) -> Optional[CircuitBreaker]:
+        return self.breaker
 
     def setup(self, rt: "Runtime") -> Optional[Any]:
         breaker = CircuitBreaker(rt.resolve("config"))

@@ -19,10 +19,17 @@ def create_server(config, engine, port=8734):
     ConfiguredHandler.config = config
     ConfiguredHandler.engine = engine
 
-    # Initialize key manager with engine
-    init_key_manager(engine, "data")
-    # Initialize credential store (encrypted provider API keys)
-    init_credential_store(engine, "data")
+    # Key manager + credential store are owned by the component runtime when
+    # it is active (Phase D) — the runtime's components inject the engine and
+    # the resolved data_dir at setup. Direct/test callers without a bound
+    # runtime fall back to the legacy force-init so the server still works
+    # standalone.
+    from ..api.key_manager import is_runtime_bound as km_bound
+    from ..api.credential_store import is_runtime_bound as cs_bound
+    if not km_bound():
+        init_key_manager(engine, "data")
+    if not cs_bound():
+        init_credential_store(engine, "data")
 
     server = ThreadingHTTPServer(("0.0.0.0", port), ConfiguredHandler)
     logger.info("server_created", port=port, profiles=list(config.profiles.keys()))

@@ -389,6 +389,8 @@ def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_registry()`` delegates to it."""
     global _runtime
     _runtime = rt
+    from ..runtime import bind_active_runtime
+    bind_active_runtime(rt)
 
 
 class CostPluginsComponent(Component):
@@ -414,6 +416,10 @@ class CostPluginsComponent(Component):
         if self._registry is None:
             raise RuntimeError("cost_plugins component has not been set up")
         return self._registry
+
+    @property
+    def service(self) -> PluginRegistry:
+        return self.registry
 
     def setup(self, rt: "Runtime") -> Optional[Any]:
         from .deepseek import DeepSeekCostPlugin

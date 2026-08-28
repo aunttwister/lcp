@@ -147,5 +147,9 @@ class ReasoningStoreComponent:
     requires = []
     provides = ["reasoning_store"]
 
+    @property
+    def service(self):
+        return get_reasoning_store()
+
     def setup(self, rt):
         return None

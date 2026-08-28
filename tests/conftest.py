@@ -114,3 +114,17 @@ def _reset_credential_store():
     cs._credential_store = None
     yield
     cs._credential_store = None
+
+
+@pytest.fixture(autouse=True)
+def _reset_active_runtime():
+    """Reset the central active-runtime accessor after EVERY test.
+
+    Facades call ``runtime.bind_active_runtime(rt)`` when a runtime is bound;
+    without this reset a runtime from one test would leak into the next and
+    make the request path (resolve_service) resolve stale runtime-owned
+    services instead of the legacy singletons the test seeded.
+    """
+    import src.api.runtime as runtime
+    yield
+    runtime._active_runtime = None

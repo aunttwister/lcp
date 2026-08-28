@@ -103,5 +103,9 @@ class PromptCacheComponent:
     requires = []
     provides = ["prompt_cache"]
 
+    @property
+    def service(self):
+        return get_prompt_cache()
+
     def setup(self, rt):
         return None

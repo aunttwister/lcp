@@ -105,5 +105,9 @@ class TokenVerifierComponent:
     requires = []
     provides = ["token_verifier"]
 
+    @property
+    def service(self):
+        return get_token_verifier()
+
     def setup(self, rt):
         return None

@@ -154,6 +154,13 @@ def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_credential_store()`` delegates to it."""
     global _runtime
     _runtime = rt
+    from .runtime import bind_active_runtime
+    bind_active_runtime(rt)
+
+
+def is_runtime_bound() -> bool:
+    """True when an active Runtime is bound (it owns the credential store)."""
+    return _runtime is not None
 
 
 class CredentialStoreComponent(Component):
@@ -170,6 +177,10 @@ class CredentialStoreComponent(Component):
     def __init__(self) -> None:
         super().__init__()
         self.store: Optional[CredentialStore] = None
+
+    @property
+    def service(self) -> Optional[CredentialStore]:
+        return self.store
 
     def setup(self, rt: "Runtime") -> Optional[Any]:
         self.store = CredentialStore(rt.resolve("engine"), rt.resolve("data_dir") or "data")

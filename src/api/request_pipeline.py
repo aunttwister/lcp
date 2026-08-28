@@ -14,6 +14,7 @@ from typing import Callable, TypeVar
 
 from .circuit_breaker import get_circuit_breaker
 from .cost_plugins import get_registry
+from .runtime import resolve_service
 from .exceptions import (
     AllProvidersFailedError,
     ConfigError,
@@ -181,7 +182,7 @@ def capture_reasoning_from_response(response_body: dict) -> None:
                if tc.get("id", tc.get("tool_call_id"))]
         if ids and reasoning:
             from .reasoning_store import get_reasoning_store
-            get_reasoning_store().capture(ids, reasoning)
+            resolve_service("reasoning_store", fallback=get_reasoning_store).capture(ids, reasoning)
     except Exception:
         pass
 
@@ -219,7 +220,7 @@ def capture_reasoning_from_sse(raw_bytes: bytes) -> None:
                         tool_ids.append(tc_id)
         if tool_ids and reasoning_buf:
             from .reasoning_store import get_reasoning_store
-            get_reasoning_store().capture(tool_ids, "".join(reasoning_buf))
+            resolve_service("reasoning_store", fallback=get_reasoning_store).capture(tool_ids, "".join(reasoning_buf))
     except Exception:
         pass
 
@@ -260,7 +261,7 @@ def ensure_thinking_reasoning_content(messages: list[dict], model: str,
     # Layer 1: reattach genuinely captured reasoning content (by tool_call_id)
     try:
         from .reasoning_store import get_reasoning_store
-        messages = get_reasoning_store().rehydrate(messages)
+        messages = resolve_service("reasoning_store", fallback=get_reasoning_store).rehydrate(messages)
     except Exception:
         pass
 
@@ -389,7 +390,7 @@ def calculate_cost(provider: str, model: str, body: dict, response_body: dict | 
     }
 
     # Try plugin registry first
-    plugin_cost = get_registry().calculate_cost(provider, model, usage_for_plugin)
+    plugin_cost = resolve_service("pricing", fallback=get_registry).calculate_cost(provider, model, usage_for_plugin)
     if plugin_cost is not None:
         return {
             "prompt_tokens": prompt_tokens,
@@ -428,7 +429,7 @@ def forward_request(provider_cfg: dict, body: dict, config):
     provider_name = provider_cfg["provider"]
     # 1. Encrypted credential stored via the UI (sole source for provider keys)
     from .credential_store import get_credential_store
-    store = get_credential_store()
+    store = resolve_service("credential_store", fallback=get_credential_store)
     api_key = ""
     if store is not None:
         api_key = store.get(provider_name) or ""
@@ -571,7 +572,7 @@ def _has_healthy_alternative(cb, chain: list[dict], profile_name: str,
 
 def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple[dict, int, str, str]:
     """Try each provider in the chain. Returns (response, status, provider, model)."""
-    cb = get_circuit_breaker()
+    cb = resolve_service("circuit_breaker", fallback=get_circuit_breaker)
     # Work on a COPY of the chain — a dynamic-router override must never mutate
     # the profile config in place, or every later request would use the rerouted
     # model permanently.
@@ -599,7 +600,7 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
     # ── Dynamic router: reorder chain so best (provider, model) step is first ─
     # Per-profile gating: a profile override (routing_enabled:<profile>) wins,
     # then the global toggle. select_step re-reads policy/rules per profile.
-    router = get_dynamic_router()
+    router = resolve_service("dynamic_router", fallback=get_dynamic_router)
     if router.is_enabled(config, profile_name) and chain_len > 0:
         reordered = router.select_step(
             messages=body.get("messages", []),
@@ -665,7 +666,7 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
         # provider's API model ID when the provider's plugin overrides
         # get_api_model() (e.g. Command Code's prefixed catalog IDs).
         body["model"] = model
-        plugin = get_registry().for_provider(provider_name)
+        plugin = resolve_service("pricing", fallback=get_registry).for_provider(provider_name)
         if plugin is not None:
             api_model = plugin.get_api_model(model)
             if api_model != model:
@@ -831,7 +832,7 @@ def record_cost(engine, profile: str, model: str, provider: str, cost_info: dict
     # If the provider has a plugin, let it record the tokens (e.g. llama.cpp
     # local tracking, or future plugins that need request-level callbacks).
     if success:
-        plugin = get_registry().for_provider(provider)
+        plugin = resolve_service("pricing", fallback=get_registry).for_provider(provider)
         if plugin is not None and hasattr(plugin, "record_tokens"):
             try:
                 plugin.record_tokens(

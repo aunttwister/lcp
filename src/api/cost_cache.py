@@ -781,6 +781,8 @@ def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so the cost-cache facades delegate to it."""
     global _runtime
     _runtime = rt
+    from .runtime import bind_active_runtime
+    bind_active_runtime(rt)
 
 
 class SettingsComponent(Component):
@@ -793,6 +795,10 @@ class SettingsComponent(Component):
     def __init__(self) -> None:
         super().__init__()
         self.store: Optional[SettingsStore] = None
+
+    @property
+    def service(self) -> Optional[SettingsStore]:
+        return self.store
 
     def setup(self, rt: "Runtime") -> Optional[Any]:
         self.store = SettingsStore(rt.resolve("engine"))
@@ -809,6 +815,10 @@ class CostCacheComponent(Component):
     def __init__(self) -> None:
         super().__init__()
         self.cache: Optional[CostPluginCache] = None
+
+    @property
+    def service(self) -> Optional[CostPluginCache]:
+        return self.cache
 
     def setup(self, rt: "Runtime") -> Optional[Any]:
         self.cache = CostPluginCache(rt.resolve("engine"))
@@ -832,11 +842,18 @@ class RefresherComponent(Component):
         self._kwargs = kwargs
         self.refresher: Optional[CacheRefresher] = None
 
+    @property
+    def service(self) -> Optional[CacheRefresher]:
+        return self.refresher
+
     def setup(self, rt: "Runtime") -> Optional[Any]:
         from .cost_plugins import get_registry
+        # Resolve the PROVIDED objects (the cache + store), not the component
+        # instances — the refresher calls .is_stale()/.get()/.set() and
+        # .get_ttl_minutes() on them at scrape time.
         self.refresher = CacheRefresher(
-            rt.resolve("cost_cache"),
-            rt.resolve("settings"),
+            rt.resolve("cost_cache").cache,
+            rt.resolve("settings").store,
             registry_getter=get_registry,
             **self._kwargs,
         )

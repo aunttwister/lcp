@@ -2155,6 +2155,8 @@ def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_dynamic_router()`` delegates to it."""
     global _runtime
     _runtime = rt
+    from .runtime import bind_active_runtime
+    bind_active_runtime(rt)
 
 
 class RouterComponent(Component):
@@ -2177,6 +2179,10 @@ class RouterComponent(Component):
         self._cost_bias = cost_bias
         self.router: Optional[CapabilityRouter] = None
 
+    @property
+    def service(self) -> Optional[CapabilityRouter]:
+        return self.router
+
     def setup(self, rt: "Runtime") -> Optional[Any]:
         self.router = CapabilityRouter(
             enabled=self._enabled, db_path=self._db_path,
@@ -2184,7 +2190,7 @@ class RouterComponent(Component):
         )
         # Re-apply the persisted UI toggle (settings store) if present.
         try:
-            settings = rt.resolve("settings")
+            settings = rt.resolve("settings").store
             override = settings.get_routing_enabled(default=None)
             if override is not None:
                 self.router.enabled = override

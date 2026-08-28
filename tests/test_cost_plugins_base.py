@@ -230,6 +230,23 @@ class TestSingleton:
         import src.api.cost_plugins.base as base_mod
         base_mod._registry = None
 
+    def teardown_method(self):
+        # Restore the populated baseline AFTER each test. A plain `_registry =
+        # None` leaves later test files an EMPTY registry (the built-ins only
+        # auto-register on the package's first import), so get_registry() would
+        # miss deepseek/opencode/etc. — a cross-file test-isolation landmine.
+        import src.api.cost_plugins.base as base_mod
+        from src.api.cost_plugins.commandcode import CommandCodeCostPlugin
+        from src.api.cost_plugins.deepseek import DeepSeekCostPlugin
+        from src.api.cost_plugins.llamacpp import LlamaCppCostPlugin
+        from src.api.cost_plugins.opencode import OpenCodeCostPlugin
+        reg = base_mod.PluginRegistry()
+        reg.register(DeepSeekCostPlugin())
+        reg.register(OpenCodeCostPlugin())
+        reg.register(LlamaCppCostPlugin())
+        reg.register(CommandCodeCostPlugin())
+        base_mod._registry = reg
+
     def test_get_registry_creates_on_first_call(self):
         reg = get_registry()
         assert isinstance(reg, PluginRegistry)

@@ -213,3 +213,48 @@ class Runtime:
             c for c in self._components.values()
             if any(r in provided for r in c.requires)
         ]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Active-runtime accessor (Phase F)
+# ═══════════════════════════════════════════════════════════════════════════
+# Every module facade's ``bind_runtime(rt)`` also records the runtime here, so
+# "the runtime" is a single concept instead of one ``_runtime`` global per
+# module. The request path resolves services through :func:`get_runtime` /
+# :func:`resolve_service` and falls back to the legacy module singletons when
+# no runtime is bound (tests, standalone).
+_active_runtime: Optional["Runtime"] = None
+
+
+def bind_active_runtime(rt: "Runtime") -> None:
+    """Record *rt* as the active runtime (called by every facade's bind)."""
+    global _active_runtime
+    _active_runtime = rt
+
+
+def get_runtime() -> Optional["Runtime"]:
+    """Return the active Runtime, or None when none is bound."""
+    return _active_runtime
+
+
+def resolve_service(key: str, fallback: Any = None) -> Any:
+    """Resolve a provided key's published SERVICE from the active runtime.
+
+    Returns the component's ``service`` (the object it publishes, e.g. the
+    breaker, the settings store, the key manager) when a runtime is bound and
+    that component is active. Otherwise returns *fallback* — invoked lazily
+    when it is callable, returned as-is otherwise.
+
+    The request path uses this so it reads the runtime-owned instance when one
+    is active and the legacy module singleton otherwise — identical behavior to
+    the ``get_*()`` facades, but explicit about the source.
+    """
+    rt = _active_runtime
+    if rt is not None:
+        try:
+            return rt.resolve(key).service
+        except Exception:  # noqa: BLE001 — inactive/unbound/attr → fallback
+            pass
+    if callable(fallback):
+        return fallback()
+    return fallback

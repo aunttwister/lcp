@@ -344,6 +344,8 @@ def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_alert_manager()`` delegates to it."""
     global _runtime
     _runtime = rt
+    from .runtime import bind_active_runtime
+    bind_active_runtime(rt)
 
 
 class AlertManagerComponent(Component):
@@ -360,6 +362,10 @@ class AlertManagerComponent(Component):
     def __init__(self) -> None:
         super().__init__()
         self.manager: Optional[AlertManager] = None
+
+    @property
+    def service(self) -> Optional[AlertManager]:
+        return self.manager
 
     def setup(self, rt: "Runtime") -> Optional[Any]:
         self.manager = AlertManager(rt.resolve("engine"))

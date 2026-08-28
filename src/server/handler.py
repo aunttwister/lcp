@@ -23,6 +23,7 @@ from ..api.prompt_cache import get_prompt_cache
 from ..api.token_verifier import get_token_verifier
 from ..api.key_manager import get_key_manager
 from ..api.alert_manager import get_alert_manager
+from ..api.runtime import resolve_service
 from ..api.models import Budget, ApiKey, get_session
 from sqlalchemy import or_
 from ..api.exceptions import (
@@ -88,7 +89,7 @@ def _resolve_pricing(config, provider: str, model: str) -> dict | None:
         pass
     try:
         from ..api.cost_plugins import get_registry
-        p = get_registry().get_pricing(provider, model)
+        p = resolve_service("pricing", fallback=get_registry).get_pricing(provider, model)
         if p is not None:
             return p
     except Exception:
@@ -508,7 +509,7 @@ class LCPHandler(
                                    profile=profile, client_ip=self.client_address[0])
                     raise AuthError("API key required for this profile. Use Authorization: Bearer <key>")
                 raw_key = auth_header[7:]
-                km = get_key_manager()
+                km = resolve_service("key_manager", fallback=get_key_manager)
                 if km:
                     key_info = km.validate_key(raw_key)
                     if key_info is None:
@@ -586,7 +587,7 @@ class LCPHandler(
                 }
 
             # Prompt cache check (skip cache for streaming requests - cached JSON cannot satisfy SSE)
-            cache = get_prompt_cache()
+            cache = resolve_service("prompt_cache", fallback=get_prompt_cache)
             primary_model = profile_cfg["chain"][0]["model"]
             cached = cache.get(profile, primary_model, body) if not body.get("stream", False) else None
             if cached is not None:
@@ -704,7 +705,7 @@ class LCPHandler(
             cache.set(profile, model, body, response_body)
 
             # Token verification
-            verifier = get_token_verifier()
+            verifier = resolve_service("token_verifier", fallback=get_token_verifier)
             verification = verifier.verify(body.get("messages", []), response_body.get("usage", {}))
             if verification["suspicious"]:
                 self._pending_headers["X-LCP-Token-Warning"] = (
@@ -932,7 +933,7 @@ class LCPHandler(
     def _track_budget_spend(self, profile: str, cost: float, key_id: int | None = None) -> None:
         """Increment budgets and fire alerts for any threshold breaches."""
         breaches = self._increment_budget_spend(profile, cost, key_id)
-        am = get_alert_manager()
+        am = resolve_service("alert_manager", fallback=get_alert_manager)
         for breach in breaches:
             severity = "critical" if breach["spend_pct"] >= 100 else "warning" if breach["spend_pct"] >= 80 else "info"
             am.fire(

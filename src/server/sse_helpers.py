@@ -2,6 +2,8 @@
 
 import json
 
+from ..api.runtime import resolve_service
+
 
 def extract_last_sse_chunk(raw_bytes):
     """Parse the last data chunk from an SSE response buffer."""
@@ -30,7 +32,7 @@ def estimate_cost_from_tokens(provider, model, cost_info, config):
         "prompt_cache_hit_tokens": cost_info.get("cache_hit_tokens", 0),
         "prompt_cache_miss_tokens": cost_info.get("cache_miss_tokens", 0),
     }
-    plugin_cost = get_registry().calculate_cost(provider, model, usage_for_plugin)
+    plugin_cost = resolve_service("pricing", fallback=get_registry).calculate_cost(provider, model, usage_for_plugin)
     if plugin_cost is not None:
         return round(plugin_cost, 8)
 

@@ -286,6 +286,13 @@ def bind_runtime(rt: "Runtime") -> None:
     """Bind an active Runtime so ``get_key_manager()`` delegates to it."""
     global _runtime
     _runtime = rt
+    from .runtime import bind_active_runtime
+    bind_active_runtime(rt)
+
+
+def is_runtime_bound() -> bool:
+    """True when an active Runtime is bound (it owns the key manager)."""
+    return _runtime is not None
 
 
 class KeyManagerComponent(Component):
@@ -302,6 +309,10 @@ class KeyManagerComponent(Component):
     def __init__(self) -> None:
         super().__init__()
         self.manager: Optional[KeyManager] = None
+
+    @property
+    def service(self) -> Optional[KeyManager]:
+        return self.manager
 
     def setup(self, rt: "Runtime") -> Optional[Any]:
         self.manager = KeyManager(rt.resolve("engine"), rt.resolve("data_dir") or "data")

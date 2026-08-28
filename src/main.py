@@ -1,12 +1,11 @@
-"""LCP gateway — entry point. Loads env, boots server."""
+"""LCP gateway — entry point. Loads env, boots the component runtime, serves."""
 
 import os
 import time
 
 from .api.logging_config import setup_logging, get_logger
 from .api.models import get_engine, Base
-from .api.circuit_breaker import get_circuit_breaker
-from .api.alert_manager import init_alert_manager
+from .api.runtime import Runtime
 from .server import create_server
 
 logger = get_logger("lcp.main")
@@ -19,8 +18,86 @@ def _startup_step(name: str, t0: float) -> float:
     return t1
 
 
+def build_runtime(engine, config, db_path: str, data_dir: str) -> Runtime:
+    """Construct, register, bind, and start the component runtime.
+
+    The runtime owns every module singleton the legacy 16-step bootstrap used
+    to hand-sequence:
+
+    * ``settings`` / ``cost_cache`` / ``refresher`` (cost_cache.py)
+    * ``circuit_breaker`` (circuit_breaker.py)
+    * ``key_manager`` / ``credential_store``
+    * ``alert_manager``
+    * ``dynamic_router`` (router.py — settings-toggle folded into setup)
+    * ``memory`` (memory/__init__.py — best-effort, never blocks boot)
+    * ``cost_plugins`` (cost_plugins/base.py — engine at construction)
+    * dep-free leaves ``prompt_cache`` / ``token_verifier`` / ``reasoning_store``
+
+    Components are topologically ordered by ``requires``/``provides`` at
+    ``start()``; each module facade is bound so the existing ``get_*()``
+    accessors delegate to the runtime instead of the legacy singletons.
+    """
+    from .api import (
+        alert_manager as alert_manager_mod,
+        circuit_breaker as circuit_breaker_mod,
+        cost_cache as cost_cache_mod,
+        cost_plugins as cost_plugins_mod,
+        credential_store as credential_store_mod,
+        key_manager as key_manager_mod,
+        memory as memory_mod,
+        prompt_cache as prompt_cache_mod,
+        reasoning_store as reasoning_store_mod,
+        router as router_mod,
+        runtime as runtime_mod,
+        token_verifier as token_verifier_mod,
+    )
+
+    # Referenced through the module (not the module-level import) so tests can
+    # patch ``src.api.runtime.Runtime`` and observe the wiring.
+    rt = runtime_mod.Runtime(config=config, engine=engine, data_dir=data_dir)
+
+    # Baseline routing flags from config.dynamic_routing (mirrors the legacy
+    # init_router call). The RouterComponent folds in the persisted UI toggle
+    # during setup, so the post-init sync is no longer needed at boot.
+    dr = {}
+    try:
+        dr = config.dynamic_routing or {}
+        if not isinstance(dr, dict):
+            dr = {}
+    except Exception:  # noqa: BLE001 — mocked/partial configs fall back to disabled
+        dr = {}
+
+    rt.register(cost_cache_mod.SettingsComponent())
+    rt.register(cost_cache_mod.CostCacheComponent())
+    rt.register(cost_cache_mod.RefresherComponent())
+    rt.register(circuit_breaker_mod.CircuitBreakerComponent())
+    rt.register(key_manager_mod.KeyManagerComponent())
+    rt.register(credential_store_mod.CredentialStoreComponent())
+    rt.register(alert_manager_mod.AlertManagerComponent())
+    rt.register(router_mod.RouterComponent(
+        db_path=db_path,
+        enabled=bool(dr.get("enabled", False)),
+        cost_bias=float(dr.get("cost_bias", 0.15)),
+    ))
+    rt.register(memory_mod.MemoryComponent())
+    rt.register(cost_plugins_mod.CostPluginsComponent())
+    rt.register(prompt_cache_mod.PromptCacheComponent())
+    rt.register(token_verifier_mod.TokenVerifierComponent())
+    rt.register(reasoning_store_mod.ReasoningStoreComponent())
+
+    # Bind the runtime to each module facade so the get_*() accessors delegate
+    # to the runtime's components instead of the legacy module singletons.
+    for _mod in (circuit_breaker_mod, cost_cache_mod, cost_plugins_mod,
+                 key_manager_mod, credential_store_mod, alert_manager_mod,
+                 router_mod, memory_mod):
+        _mod.bind_runtime(rt)
+
+    rt.start()
+    return rt
+
+
 def main():
-    """Entry point — start the HTTP server."""
+    """Entry point — start the HTTP server via the component runtime."""
     _boot = time.monotonic()
     t0 = _boot
 
@@ -57,23 +134,19 @@ def main():
     t0 = _startup_step("config_load", t0)
     logger.info("config_loaded_db")
 
-    get_circuit_breaker(config)
-    t0 = _startup_step("circuit_breaker_init", t0)
-    logger.info("circuit_breaker_initialized")
+    # ── Component runtime: config/engine/data_dir roots, topo-ordered setup,
+    #    LIFO teardown. Every module singleton from the legacy bootstrap is
+    #    owned here.
+    data_dir = os.path.dirname(db_path) if db_path else "data"
+    rt = build_runtime(engine, config, db_path, data_dir)
+    t0 = _startup_step("runtime_start", t0)
 
-    # Initialize the dynamic router (benchmark-driven model selection) with
-    # the config's enabled/cost_bias. Disabled when not configured.
-    from .api.router import init_router
+    # The refresher owns ALL live cost scraping; start its background thread
+    # (the component's disposer stops it on shutdown).
     try:
-        dr = config.dynamic_routing or {}
-        if not isinstance(dr, dict):
-            dr = {}
-    except Exception:  # noqa: BLE001 — mocked/partial configs fall back to disabled
-        dr = {}
-    init_router(db_path, enabled=bool(dr.get("enabled", False)),
-                cost_bias=float(dr.get("cost_bias", 0.15)))
-    t0 = _startup_step("router_init", t0)
-    logger.info("dynamic_router_initialized", enabled=bool(dr.get("enabled", False)))
+        rt.resolve("refresher").refresher.start()
+    except Exception:  # noqa: BLE001 — never block boot
+        logger.warning("refresher_start_failed", error=True)
 
     # Recover benchmark runs left queued/running by a previous process.
     try:
@@ -83,50 +156,6 @@ def main():
             logger.info("benchmark_recovered", count=recovered)
     except Exception as exc:  # noqa: BLE001 — never block boot
         logger.warning("benchmark_recovery_failed", error=str(exc))
-
-    # Initialize cost tracking plugins (imports auto-register via __init__.py)
-    from .api.cost_plugins import init_plugins
-    init_plugins(engine=engine)
-    t0 = _startup_step("cost_plugins_init", t0)
-    logger.info("cost_plugins_initialized")
-
-    # Initialize the cost-plugin cache + background refresher. The refresher
-    # owns ALL live scraping; the HTTP endpoints read the cache only.
-    from .api.cost_cache import init_cost_cache, init_refresher
-    cache = init_cost_cache(engine)
-    refresher = init_refresher(cache, settings)
-    refresher.start()
-    t0 = _startup_step("cost_cache_init", t0)
-    logger.info("cost_cache_initialized", ttl_minutes=settings.get_ttl_minutes())
-
-    # The UI toggle (settings.routing_enabled) overrides the DB config's
-    # baseline — re-sync the router's enabled state so boot reflects it.
-    try:
-        from .api.router import sync_router_enabled_from_settings
-        effective = sync_router_enabled_from_settings()
-        logger.info("dynamic_router_synced", enabled=effective)
-    except Exception:  # noqa: BLE001 — never block boot
-        logger.warning("dynamic_router_sync_failed", error=True)
-
-    # Initialize alert manager with DB engine for persistence
-    init_alert_manager(engine)
-    t0 = _startup_step("alert_manager_init", t0)
-    logger.info("alert_manager_initialized")
-
-    # Attach engine to circuit breaker so failover events persist to DB
-    get_circuit_breaker().attach_engine(engine)
-    t0 = _startup_step("circuit_breaker_engine", t0)
-    logger.info("circuit_breaker_engine_attached")
-
-    # Initialize the memory plugin (LanceDB + embedder). Never blocks boot:
-    # when the module isn't installed or is disabled, endpoints return 501.
-    try:
-        from .api.memory import init_memory
-        memory_active = init_memory(config)
-        t0 = _startup_step("memory_init", t0)
-        logger.info("memory_initialized", active=memory_active)
-    except Exception as exc:  # noqa: BLE001 — never block boot
-        logger.warning("memory_init_failed", error=str(exc))
 
     server = create_server(config, engine, port)
     t0 = _startup_step("server_create", t0)
@@ -142,13 +171,10 @@ def main():
         logger.info("shutdown_requested")
         server.shutdown()
     finally:
-        from .api.cost_cache import stop_refresher
-        stop_refresher()
-        try:
-            from .api.memory import shutdown_memory
-            shutdown_memory()
-        except Exception:  # noqa: BLE001 — best-effort shutdown
-            pass
+        # Runtime.shutdown replays component disposers in LIFO order (reverse
+        # of setup) — this stops the refresher, releases memory, runs plugin
+        # on_shutdown (llamacpp persist), etc.
+        rt.shutdown()
 
 
 if __name__ == "__main__":

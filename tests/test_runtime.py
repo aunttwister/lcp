@@ -165,3 +165,71 @@ def test_runtime_setup_failure_marks_inactive_continues():
     rt.start()  # must not raise; 'a' inactive, 'b' active
     assert rt.is_active("a") is False
     assert rt.is_active("b") is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Active-runtime accessor (Phase F) — get_runtime() / resolve_service()
+# ═══════════════════════════════════════════════════════════════════════════
+
+class _ServiceComp:
+    """Stub component that publishes a service via a ``service`` property."""
+
+    def __init__(self, name, requires=(), provides=(), service=None):
+        self.name = name
+        self.requires = list(requires)
+        self.provides = list(provides)
+        self.service = service
+
+    def setup(self, rt):
+        return None
+
+
+def test_get_runtime_unbound_returns_none():
+    from src.api.runtime import get_runtime
+    assert get_runtime() is None
+
+
+def test_bind_active_runtime_records_single_runtime():
+    from src.api.runtime import bind_active_runtime, get_runtime
+    rt = Runtime()
+    assert get_runtime() is None
+    bind_active_runtime(rt)
+    assert get_runtime() is rt
+
+
+def test_resolve_service_returns_service_from_runtime():
+    from src.api.runtime import bind_active_runtime, resolve_service
+    svc = object()
+    rt = Runtime()
+    rt.register(_ServiceComp("a", provides=["thing"], service=svc))
+    rt.start()
+    bind_active_runtime(rt)
+    assert resolve_service("thing") is svc
+
+
+def test_resolve_service_falls_back_when_unbound():
+    from src.api.runtime import resolve_service
+    calls = []
+
+    def _fallback():
+        calls.append(1)
+        return "legacy"
+
+    assert resolve_service("thing", fallback=_fallback) == "legacy"
+    assert calls == [1]
+
+
+def test_resolve_service_falls_back_when_inactive():
+    from src.api.runtime import bind_active_runtime, resolve_service
+    rt = Runtime()
+    rt.register(_ServiceComp("a", requires=["missing"], provides=["thing"],
+                             service=object()))
+    rt.start()  # 'a' is inactive (unsatisfied dep)
+    bind_active_runtime(rt)
+    assert resolve_service("thing", fallback=lambda: "legacy") == "legacy"
+
+
+def test_resolve_service_returns_fallback_value_as_is():
+    from src.api.runtime import resolve_service
+    sentinel = object()
+    assert resolve_service("nope", fallback=sentinel) is sentinel
