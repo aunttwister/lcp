@@ -15,11 +15,18 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from ..logging_config import get_logger
 from .base import MemoryBackend
 from .embeddings import EmbeddingModel, embedder_from_config
+
+if TYPE_CHECKING:  # pragma: no cover — runtime import only for type hints
+    from ..component import Component
+    from ..runtime import Runtime
+else:
+    from ..component import Component
+    from ..runtime import Runtime
 
 logger = get_logger("lcp.memory")
 
@@ -182,7 +189,12 @@ def _noop_embed(texts: list[str]) -> list[list[float]]:
 
 
 def get_memory() -> Optional[MemoryBackend]:
-    """Return the active memory backend (or None when unavailable)."""
+    """Return the active memory backend (or None when unavailable).
+
+    The MemoryComponent's setup() delegates to init_memory(), which sets the
+    module-level ``_backend`` — so this accessor is unchanged and correct for
+    both the legacy boot path and the runtime path.
+    """
     return _backend
 
 
@@ -261,3 +273,32 @@ def shutdown_memory() -> None:
     global _backend
     _backend = None
     logger.info("memory_shutdown")
+
+
+# ── Component-runtime adapter (Phase C) ────────────────────────────────────
+_runtime: Optional["Runtime"] = None
+
+
+def bind_runtime(rt: "Runtime") -> None:
+    """Bind an active Runtime so ``get_memory()`` delegates to it."""
+    global _runtime
+    _runtime = rt
+
+
+class MemoryComponent(Component):
+    """The memory backend as a runtime component.
+
+    ``requires=["config"]``. ``setup`` reuses the existing ``init_memory``
+    (which preserves the baked-cache + lean-build sys.path fallback); the
+    disposer is ``shutdown_memory``. Best-effort: a missing/disabled module
+    leaves the component active but with ``get_memory() -> None`` (endpoints
+    report 501), matching boot behavior.
+    """
+
+    name = "memory"
+    requires = ["config"]
+    provides = ["memory"]
+
+    def setup(self, rt: "Runtime") -> Optional[Any]:
+        init_memory(rt.resolve("config"))
+        return shutdown_memory

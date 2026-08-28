@@ -96,3 +96,14 @@ _token_verifier = TokenVerifier()
 
 def get_token_verifier() -> TokenVerifier:
     return _token_verifier
+
+
+# ── Component-runtime adapter (Phase C) ──────────────────────────────
+# Dep-free leaf: no requires, no teardown.
+class TokenVerifierComponent:
+    name = "token_verifier"
+    requires = []
+    provides = ["token_verifier"]
+
+    def setup(self, rt):
+        return None

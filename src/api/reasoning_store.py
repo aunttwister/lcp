@@ -138,3 +138,14 @@ def get_reasoning_store() -> ReasoningStore:
     if _reasoning_store is None:
         _reasoning_store = ReasoningStore()
     return _reasoning_store
+
+
+# ── Component-runtime adapter (Phase C) ──────────────────────────────
+# Dep-free leaf: no requires, no teardown.
+class ReasoningStoreComponent:
+    name = "reasoning_store"
+    requires = []
+    provides = ["reasoning_store"]
+
+    def setup(self, rt):
+        return None

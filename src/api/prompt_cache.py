@@ -93,3 +93,15 @@ _prompt_cache = PromptCache()
 
 def get_prompt_cache() -> PromptCache:
     return _prompt_cache
+
+
+# ── Component-runtime adapter (Phase C) ──────────────────────────────
+# Dep-free leaf: no requires, no teardown. Registered so Phase D's uniform
+# runtime boot can own it alongside the rest.
+class PromptCacheComponent:
+    name = "prompt_cache"
+    requires = []
+    provides = ["prompt_cache"]
+
+    def setup(self, rt):
+        return None
