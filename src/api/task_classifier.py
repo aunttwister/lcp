@@ -263,13 +263,15 @@ def get_semantic_classifier() -> Optional[SemanticClassifier]:
         if not router_cfg.get("enabled", True):
             logger.info("semantic_classifier_disabled_by_config")
             return None
-        # The router deps are ``pip install --target``ed into <LCP_MODULES_DIR>
-        # /router (by the Docker build or the Setup page). Make that dir
-        # importable IN-PROCESS so sentence-transformers resolves without a
-        # container restart (PYTHONPATH only affects fresh interpreters).
+        # The router deps are baked into the image GLOBALLY (Dockerfile
+        # WITH_ROUTER=1). For lean images (WITH_ROUTER=0) a runtime
+        # `pip install --target <LCP_MODULES_DIR>/router` install is a fallback.
+        # APPEND the site dir (do NOT prepend): a broken/partial --target copy
+        # must never shadow the good global install, which is exactly the bug
+        # that made the classifier report 'not installed' in the container.
         site = router_cfg.get("site") or router_site()
         if site and site not in sys.path:
-            sys.path.insert(0, site)
+            sys.path.append(site)
         # The router embedder caches weights in the router module's own models
         # dir so it is independent from the memory plugin's install.
         models_dir = router_cfg.get("models_dir") or router_models()

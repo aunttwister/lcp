@@ -25,8 +25,10 @@ services:
       - LCP_MODULES_DIR=/opt/lcp-modules
       # Make module dependencies importable: LiveBench deps (site) + the
       # livebench package (<repo-root>/livebench) + memory module deps
-      # ($LCP_MODULES_DIR/memory) + semantic routing deps
-      # ($LCP_MODULES_DIR/router).
-      - PYTHONPATH=/opt/lcp-modules/site:/opt/lcp-modules/livebench:/opt/lcp-modules/memory:/opt/lcp-modules/router
+      # ($LCP_MODULES_DIR/memory). NOTE: semantic-routing deps are baked into
+      # the image GLOBALLY (WITH_ROUTER=1), so $LCP_MODULES_DIR/router is
+      # deliberately NOT here — a stale/partial runtime install there would
+      # shadow the good baked-in copy.
+      - PYTHONPATH=/opt/lcp-modules/site:/opt/lcp-modules/livebench:/opt/lcp-modules/memory
       # Provider API keys and the OpenCode cookie are managed via the dashboard
       # UI — they're encrypted with LCP_SECRET_KEY and stored in SQLite.

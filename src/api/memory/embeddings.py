@@ -43,9 +43,11 @@ class EmbeddingModel:
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
+            # Surface the UNDERLYING failure (usually torch missing from a
+            # shadowing --target copy) instead of a misleading 'not installed'.
             raise MemoryError(
-                "sentence-transformers is not installed — install the memory "
-                "module from the Setup page"
+                "sentence-transformers import failed: "
+                f"{exc} — install the semantic routing module"
             ) from exc
         kwargs: dict = {"device": self.device}
         if self.cache_dir:
