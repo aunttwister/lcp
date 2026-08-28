@@ -646,7 +646,13 @@ _router_lock = threading.Lock()
 _router_install: Optional[dict] = None  # in-flight {status, progress, detail, log, ...}
 _router_last: Optional[dict] = None     # terminal result (done/failed) for the UI
 
-ROUTER_PACKAGES = ["sentence-transformers>=3.0"]
+ROUTER_PACKAGES = [
+    "sentence-transformers>=3.0",
+    # transformers (a sentence-transformers dep) requires tokenizers in
+    # [0.22.0, 0.23.0]; pip otherwise resolves 0.23.1 and sentence-transformers
+    # refuses to import ("tokenizers>=0.22.0,<=0.23.0 is required").
+    "tokenizers==0.23.0",
+]
 ROUTER_MODEL = "BAAI/bge-small-en-v1.5"
 
 

@@ -72,6 +72,7 @@ RUN if [ "$WITH_MEMORY" = "1" ]; then \
 ARG WITH_ROUTER=1
 RUN if [ "$WITH_ROUTER" = "1" ]; then \
         pip install --no-cache-dir sentence-transformers \
+            "tokenizers==0.23.0" \
         && mkdir -p /app/models/router \
         && python3 -c \
             "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5', cache_folder='/app/models/router')" ; \
