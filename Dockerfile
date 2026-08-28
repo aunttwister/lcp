@@ -59,20 +59,22 @@ RUN if [ "$WITH_MEMORY" = "1" ]; then \
 
 # ── Semantic routing (REQUIRED — embedding task classification) ──────────────
 # The semantic task classifier (src/api/task_classifier.py) is the SOLE task
-# classifier (no keyword fallback), so its deps are baked in by default:
-# sentence-transformers + torch --target installed into $LCP_MODULES_DIR/router,
-# and the bge-small-en-v1.5 weights pre-downloaded into the persistent models
-# dir so the first request never hits the HuggingFace Hub.
+# classifier (no keyword fallback), so its deps are baked in by default.
+#
+# IMPORTANT: install sentence-transformers GLOBALLY (image site-packages) and
+# cache the bge-small weights under /app/models/router — NOT under
+# $LCP_MODULES_DIR or /app/data. Both of those are bind-mounted at runtime
+# (docker-compose.yml), so any content baked there in the image is shadowed by
+# the host volume and invisible to the running container.
 #
 # Set the build arg WITH_ROUTER=0 for a lean image (classification then degrades
 # to the structural heuristics until the module is installed from the Setup page).
 ARG WITH_ROUTER=1
 RUN if [ "$WITH_ROUTER" = "1" ]; then \
-        mkdir -p "${LCP_MODULES_DIR}/router" "${LCP_MODULES_DIR}/models/router" \
-        && pip install --no-cache-dir --target "${LCP_MODULES_DIR}/router" \
-            sentence-transformers \
-        && PYTHONPATH="${LCP_MODULES_DIR}/router" python3 -c \
-            "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5', cache_folder='${LCP_MODULES_DIR}/models/router')" ; \
+        pip install --no-cache-dir sentence-transformers \
+        && mkdir -p /app/models/router \
+        && python3 -c \
+            "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5', cache_folder='/app/models/router')" ; \
     fi
 
 # ── Application code ──

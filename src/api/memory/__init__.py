@@ -57,7 +57,17 @@ def router_site() -> str:
 
 
 def router_models() -> str:
-    """Return the directory used to cache the router embedding model weights."""
+    """Return the directory used to cache the router embedding model weights.
+
+    Prefers the baked image path (``/app/models/router``, populated by the
+    Docker build's WITH_ROUTER=1 step) when present; otherwise falls back to
+    the persistent modules dir used by the Setup-page runtime installer. The
+    image path matters because ``/opt/lcp-modules`` and ``/app/data`` are
+    bind-mounted at runtime and shadow any image content baked there.
+    """
+    baked = "/app/models/router"
+    if os.path.isdir(baked):
+        return baked
     root = os.environ.get("LCP_MODULES_DIR", "").strip() or "/opt/lcp-modules"
     return os.path.join(root, "models", "router")
 
