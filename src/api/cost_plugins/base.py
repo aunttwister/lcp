@@ -1,7 +1,16 @@
 """Abstract base class and registry for cost tracking plugins."""
 
 from abc import ABC, abstractmethod
-from typing import Optional, Any
+from typing import TYPE_CHECKING, Optional, Any
+
+if TYPE_CHECKING:  # pragma: no cover — runtime import only for type hints
+    from ..component import Component
+    from ..runtime import Runtime
+else:
+    # Imported at module load — no cycle: component/runtime import only
+    # logging_config, not cost_plugins.
+    from ..component import Component
+    from ..runtime import Runtime
 
 
 class CostPlugin(ABC):
@@ -299,7 +308,21 @@ _registry: Optional[PluginRegistry] = None
 
 
 def get_registry() -> PluginRegistry:
-    """Return the global plugin registry singleton."""
+    """Return the active plugin registry.
+
+    When a Runtime is bound AND its ``cost_plugins`` component is active, this
+    returns the runtime's registry (engine injected via the component's
+    constructor). Otherwise it returns the legacy module-level singleton —
+    preserving the boot/tests path until main.py is rewired to the runtime.
+    """
+    global _runtime
+    if _runtime is not None:
+        try:
+            comp = _runtime.resolve("cost_plugins")
+        except Exception:  # noqa: BLE001 — inactive/unbound → legacy
+            comp = None
+        if comp is not None and getattr(comp, "registry", None) is not None:
+            return comp.registry
     global _registry
     if _registry is None:
         _registry = PluginRegistry()
@@ -348,3 +371,71 @@ def init_plugins(extra_plugins: Optional[list[CostPlugin]] = None,
             _registry.register(p)
 
     return _registry
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Component-runtime adapter (Phase B pilot)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# When an active Runtime is bound, the get_registry() facade delegates to the
+# runtime's CostPluginsComponent instead of the legacy module singleton. The
+# component builds a FRESH registry with engine injected at construction
+# (constructor injection — no set_engine probing), and returns a disposer that
+# runs each plugin's on_shutdown() (e.g. llamacpp persists its usage cache).
+_runtime: Optional["Runtime"] = None
+
+
+def bind_runtime(rt: "Runtime") -> None:
+    """Bind an active Runtime so ``get_registry()`` delegates to it."""
+    global _runtime
+    _runtime = rt
+
+
+class CostPluginsComponent(Component):
+    """The cost-plugin registry as a runtime component.
+
+    ``requires=["engine"]`` — engine is declared, not probed via
+    ``hasattr(plugin, "set_engine")``. ``setup`` constructs the built-in
+    plugins with engine injected at construction and returns a disposer that
+    calls each plugin's ``on_shutdown`` (in LIFO order via the runtime).
+    """
+
+    name = "cost_plugins"
+    requires = ["engine"]
+    provides = ["cost_plugins", "pricing"]
+
+    def __init__(self, extra_plugins: Optional[list[CostPlugin]] = None):
+        super().__init__()
+        self._extra_plugins = extra_plugins or []
+        self._registry: Optional[PluginRegistry] = None
+
+    @property
+    def registry(self) -> PluginRegistry:
+        if self._registry is None:
+            raise RuntimeError("cost_plugins component has not been set up")
+        return self._registry
+
+    def setup(self, rt: "Runtime") -> Optional[Any]:
+        from .deepseek import DeepSeekCostPlugin
+        from .opencode import OpenCodeCostPlugin
+        from .llamacpp import LlamaCppCostPlugin
+        from .commandcode import CommandCodeCostPlugin
+
+        engine = rt.resolve("engine")
+        registry = PluginRegistry()
+        registry.register(DeepSeekCostPlugin())
+        registry.register(OpenCodeCostPlugin(engine=engine))
+        registry.register(LlamaCppCostPlugin())
+        registry.register(CommandCodeCostPlugin(engine=engine))
+        for p in self._extra_plugins:
+            registry.register(p)
+        self._registry = registry
+
+        def _dispose() -> None:
+            for plugin in registry.all:
+                try:
+                    plugin.on_shutdown()
+                except Exception:  # noqa: BLE001 — teardown must never break
+                    pass
+
+        return _dispose

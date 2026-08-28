@@ -11,7 +11,14 @@ Included plugins:
   - commandcode  : Command Code billing API + gateway DB cost tracking
 """
 
-from .base import CostPlugin, PluginRegistry, get_registry, init_plugins
+from .base import (
+    CostPlugin,
+    CostPluginsComponent,
+    PluginRegistry,
+    bind_runtime,
+    get_registry,
+    init_plugins,
+)
 
 # Import plugins to trigger registration
 from . import deepseek
@@ -21,7 +28,9 @@ from . import commandcode
 
 __all__ = [
     "CostPlugin",
+    "CostPluginsComponent",
     "PluginRegistry",
+    "bind_runtime",
     "get_registry",
     "init_plugins",
 ]
