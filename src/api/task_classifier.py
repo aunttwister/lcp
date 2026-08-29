@@ -61,6 +61,16 @@ TASK_EXEMPLARS: dict[str, list[str]] = {
         "Implement a sorting algorithm in Python.",
         "Write a function that implements this algorithm.",
         "Implement the binary search algorithm in code.",
+        # Plan-mode → implementation-mode transition. The user approved the
+        # plan and is now telling the agent to WRITE the code — this is
+        # code generation, not planning. These short imperatives exist so
+        # "start implementation" / "go ahead and implement it" stop landing on
+        # the planning centroid (which must NOT contain implement/build verbs).
+        "Start the implementation now.",
+        "Go ahead and implement it.",
+        "Implement this change.",
+        "Let's implement this feature.",
+        "Proceed with writing the code.",
     ],
     "debugging": [
         "Why does this code throw a KeyError? Here is the traceback.",
@@ -85,10 +95,14 @@ TASK_EXEMPLARS: dict[str, list[str]] = {
         "How should I structure this microservice codebase?",
         "Create a roadmap and data model for this new feature.",
         "Plan the tech stack and schema for this application.",
-        # "make a plan to implement X" / "plan for X" is planning, not codegen.
-        "Make a plan for implementing this feature.",
-        "Plan out the steps to build this component.",
-        "Let's plan how to implement this change.",
+        # Planning = produce a PLAN / design / roadmap. Deliberately NO
+        # "implement"/"build"/"write the code" verbs: the plan-mode →
+        # implementation-mode handoff ("start implementation", "go ahead and
+        # implement it") must classify as code_generation, not stay pinned to
+        # planning through the word "implement".
+        "Create a step-by-step plan for this feature.",
+        "Plan out the approach for this component.",
+        "Let's plan the strategy for this change.",
     ],
     "casual_chat": [
         "hello",

@@ -67,6 +67,19 @@ class TestSemanticClassifier:
     def test_classify_casual(self, classifier):
         assert classifier.classify("hello there") == "casual_chat"
 
+    def test_plan_mode_to_implementation_handoff(self, classifier):
+        """'Start implementation' after a plan is CODE GENERATION, not planning.
+
+        The planning centroid must not contain implement/build verbs, and the
+        code_generation centroid must carry implementation-start imperatives —
+        otherwise the plan-mode → implementation-mode handoff stays pinned to
+        planning (the routing bug observed live: 'start implementation' after
+        'plan this' kept routing to the planning model).
+        """
+        assert classifier.classify("go ahead and implement it") == "code_generation"
+        assert classifier.classify("make a plan for this feature") == "planning"
+        assert classifier.classify("let's plan the strategy") == "planning"
+
     def test_low_confidence_returns_none(self, classifier):
         clf = SemanticClassifier(embed=fake_embed, min_score=0.99)
         assert clf.classify("zzz qqq unknown") is None
@@ -91,6 +104,25 @@ class TestExemplars:
                      "debugging", "research_deep", "reasoning_chain",
                      "planning", "casual_chat"):
             assert TASK_EXEMPLARS[task], f"{task} has no exemplars"
+
+    def test_planning_exemplars_have_no_implementation_verbs(self):
+        """Planning is 'produce a plan', never 'implement/build/write code'.
+
+        An implement/build verb inside a planning exemplar drags the planning
+        centroid toward code vocabulary, so 'start implementation' after a plan
+        keeps classifying as planning instead of code_generation.
+        """
+        for exemplar in TASK_EXEMPLARS["planning"]:
+            norm = exemplar.lower()
+            assert "implement" not in norm, f"planning exemplar leaks 'implement': {exemplar!r}"
+            assert "build" not in norm, f"planning exemplar leaks 'build': {exemplar!r}"
+            assert "write the code" not in norm, f"planning exemplar leaks 'write the code': {exemplar!r}"
+
+    def test_code_generation_has_implementation_start_exemplars(self):
+        """The plan-mode → implementation-mode handoff must be represented."""
+        joined = " ".join(TASK_EXEMPLARS["code_generation"]).lower()
+        assert "start the implementation" in joined
+        assert "go ahead and implement" in joined
 
 
 class TestGetClassifier:
