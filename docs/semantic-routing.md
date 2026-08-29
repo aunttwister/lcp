@@ -29,6 +29,28 @@ request ──► classify_task ──► task type ──► CapabilityRouter �
 The classifier emits the same task strings the router has always consumed, so
 the two halves are fully decoupled.
 
+### Dependency: benchmark capabilities (LiveBench)
+
+**Semantic routing is only as good as the capability scores it routes by.** It
+classifies *what* the task is; the router then needs per-task capability
+grades to pick the best `(provider, model)`. Those grades come from the
+benchmark capability matrix:
+
+- **LiveBench module** — the primary producer. Running benchmarks grades your
+  provider models into `model_capabilities` (`source="lcp_benchmark"`).
+- **Bundled leaderboard snapshot** — `seed_capabilities` imports the shipped
+  LiveBench leaderboard (`source="livebench"`) into the same matrix without
+  running benchmarks (see
+  [Seeding scores without running benchmarks](../README.md#seeding-scores-without-running-benchmarks)).
+
+Because of this dependency, the **Setup page blocks installing the Semantic
+routing module until LiveBench is installed** (`blocked_reason` in the
+manifest; the install API enforces it server-side too). This keeps users from
+activating meaning-based classification before there is any graded capability
+data for it to route against. (If you have already seeded the capability
+matrix from the bundled snapshot, semantic routing can still route — but the
+Setup wizard still treats LiveBench as the prerequisite install step.)
+
 ## 2. Task taxonomy
 
 The classifier produces one of eight task types:

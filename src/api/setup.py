@@ -204,13 +204,34 @@ def memory_step() -> dict:
     }
 
 
+def router_install_blocked_reason() -> Optional[str]:
+    """Return why the Semantic routing module can't be installed (or None).
+
+    Semantic routing classifies a prompt by MEANING into a task type, but the
+    router then routes by the model's benchmark-graded capability scores for
+    that task. The Setup-path producer of those scores is the LiveBench
+    module — so without it, semantic routing has nothing to route by. Block
+    its install until LiveBench is installed.
+    """
+    from .benchmark import benchmark_status
+
+    if benchmark_status().get("available"):
+        return None
+    return (
+        "Requires the LiveBench module first — LiveBench grades the capability "
+        "matrix that semantic routing routes by. Install LiveBench from the "
+        "Setup page, then install Semantic routing."
+    )
+
+
 def router_step() -> dict:
     """Build the SEMANTIC ROUTING module manifest entry (grouped with LiveBench).
 
     The embedding-based task classifier powers dynamic routing: it picks the
     task type by MEANING (not keywords), which LiveBench's capability scores
     then route to the best-fit model. Install sentence-transformers into its
-    own deps dir, independent of the memory plugin.
+    own deps dir, independent of the memory plugin. Install is blocked
+    (``blocked_reason``) until LiveBench is installed.
     """
     from .memory import router_status
 
@@ -225,13 +246,17 @@ def router_step() -> dict:
         "description": (
             "Embedding-based task classification for the dynamic router — "
             "classifies prompts by meaning so they route to the best-fit "
-            "model. Install sentence-transformers at runtime."
+            "model. Requires LiveBench (capability grades). Install "
+            "sentence-transformers at runtime."
         ),
         "required": False,
         "installed": bool(status.get("available")),
         # Same baked vs runtime-installed distinction as the memory module:
         # baked-in deps can't be removed, so no Remove button in the UI.
         "baked": bool(status.get("available")) and not bool(status.get("removable")),
+        # Install is gated on LiveBench (benchmark capabilities are a
+        # dependency of semantic routing). None when installable.
+        "blocked_reason": None if bool(status.get("available")) else router_install_blocked_reason(),
         "status": status,
         "install_path": router_site(),
         "installing": installing,

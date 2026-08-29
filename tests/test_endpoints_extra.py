@@ -266,6 +266,29 @@ class TestSetupEndpoints:
         setup_ep._serve_setup_install_api("bogus", "nope")
         assert setup_ep._send_json.call_args[0][1] == 404
 
+    def test_setup_install_router_blocked_without_livebench(self, setup_ep):
+        """Router install refused server-side when LiveBench isn't installed."""
+        with patch("src.api.setup.router_install_blocked_reason",
+                   return_value="Requires the LiveBench module first"), \
+             patch("src.api.setup.start_router_install") as mock_start:
+            setup_ep._serve_setup_install_api("module", "router")
+        body = setup_ep._send_json.call_args[0][0]
+        assert setup_ep._send_json.call_args[0][1] == 400
+        assert "LiveBench" in body["error"]
+        mock_start.assert_not_called()
+
+    def test_setup_install_router_allowed_with_livebench(self, setup_ep):
+        """Router install proceeds once LiveBench is installed."""
+        with patch("src.api.setup.router_install_blocked_reason", return_value=None), \
+             patch("src.api.setup.start_router_install",
+                   return_value={"status": "queued"}) as mock_start:
+            setup_ep._serve_setup_install_api("module", "router")
+        body = setup_ep._send_json.call_args[0][0]
+        # Single positional arg, no status code → 200; ok is True.
+        assert len(setup_ep._send_json.call_args[0]) == 1
+        assert body.get("ok") is True
+        mock_start.assert_called_once_with(setup_ep.engine)
+
     def test_setup_remove_provider(self, setup_ep):
         with patch("src.api.setup.remove_provider", return_value={"removed": True, "provider": "deepseek"}):
             setup_ep._serve_setup_remove_api("provider", "deepseek")

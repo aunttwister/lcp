@@ -27,12 +27,22 @@ def temp_db():
 
 @pytest.fixture(autouse=True)
 def _reset_mem_state():
-    """Reset the module-level in-flight/terminal install state between tests."""
-    setup_mod._mem_install = None
-    setup_mod._mem_last = None
+    """Reset the module-level in-flight/terminal install state between tests.
+
+    Includes the router/livebench install state too: tests here assign
+    ``_router_install``/``_mem_install`` directly and terminal tests leave
+    ``_router_last``/``_mem_last``/``_bench_last`` populated, which leaks into
+    other test files (e.g. the setup progress endpoint reads them).
+    """
+    for attr in ("_mem_install", "_mem_last",
+                 "_router_install", "_router_last",
+                 "_bench_install", "_bench_last"):
+        setattr(setup_mod, attr, None)
     yield
-    setup_mod._mem_install = None
-    setup_mod._mem_last = None
+    for attr in ("_mem_install", "_mem_last",
+                 "_router_install", "_router_last",
+                 "_bench_install", "_bench_last"):
+        setattr(setup_mod, attr, None)
 
 
 @pytest.fixture
@@ -129,6 +139,49 @@ class TestMemoryStep:
             step = setup_mod.router_step()
         assert step["installed"] is True
         assert step["baked"] is False
+
+    def test_router_step_blocked_without_livebench(self, monkeypatch):
+        """Not installed + LiveBench missing -> install blocked with a reason."""
+        with patch("src.api.memory.router_status",
+                   return_value={"available": False, "removable": False}), \
+             patch("src.api.benchmark.benchmark_status",
+                   return_value={"available": False}):
+            step = setup_mod.router_step()
+        assert step["installed"] is False
+        assert step["blocked_reason"] is not None
+        assert "LiveBench" in step["blocked_reason"]
+
+    def test_router_step_not_blocked_when_livebench_installed(self, monkeypatch):
+        """Not installed but LiveBench present -> install is unblocked."""
+        with patch("src.api.memory.router_status",
+                   return_value={"available": False, "removable": False}), \
+             patch("src.api.benchmark.benchmark_status",
+                   return_value={"available": True}):
+            step = setup_mod.router_step()
+        assert step["installed"] is False
+        assert step["blocked_reason"] is None
+
+    def test_router_step_not_blocked_when_installed(self, monkeypatch):
+        """Already installed (baked or runtime) -> never blocked."""
+        with patch("src.api.memory.router_status",
+                   return_value={"available": True, "removable": True}), \
+             patch("src.api.benchmark.benchmark_status",
+                   return_value={"available": False}):
+            step = setup_mod.router_step()
+        assert step["installed"] is True
+        assert step["blocked_reason"] is None
+
+
+class TestRouterInstallBlockedReason:
+    def test_blocked_when_livebench_unavailable(self, monkeypatch):
+        with patch("src.api.benchmark.benchmark_status",
+                   return_value={"available": False}):
+            assert setup_mod.router_install_blocked_reason() is not None
+
+    def test_unblocked_when_livebench_available(self, monkeypatch):
+        with patch("src.api.benchmark.benchmark_status",
+                   return_value={"available": True}):
+            assert setup_mod.router_install_blocked_reason() is None
 
 
 class TestMemoryInstallCoordinator:

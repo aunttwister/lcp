@@ -2971,6 +2971,11 @@ class SetupEndpoints:
             elif kind == "module" and name == "livebench":
                 result = setup_mod.start_livebench_install(self.engine)
             elif kind == "module" and name == "router":
+                # Semantic routing depends on benchmark capabilities (LiveBench).
+                # Enforce the gate server-side too, not just in the UI.
+                reason = setup_mod.router_install_blocked_reason()
+                if reason:
+                    raise setup_mod.SetupError(reason)
                 result = setup_mod.start_router_install(self.engine)
             elif kind == "module" and name == "memory":
                 result = setup_mod.start_memory_install(self.engine)

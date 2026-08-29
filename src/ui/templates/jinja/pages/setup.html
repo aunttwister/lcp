@@ -149,12 +149,17 @@ function stepCard(step) {
     ? removeBtn  // baked modules are removable from the running container
     : (state === 'running'
       ? '<span class="muted" style="font-size:0.7rem">installing…</span>'
-      : '<button class="btn btn-outline btn-sm" data-install="' + step.kind + ':' + esc(step.name) + '">Install</button>');
+      : (step.blocked_reason
+        ? '<button class="btn btn-outline btn-sm" disabled title="' + esc(step.blocked_reason) + '" style="cursor:not-allowed;opacity:0.6">Install — requires LiveBench</button>'
+        : '<button class="btn btn-outline btn-sm" data-install="' + step.kind + ':' + esc(step.name) + '">Install</button>'));
+  const blockedNote = step.blocked_reason
+    ? '<div class="muted" style="font-size:0.7rem;color:var(--warning)">' + esc(step.blocked_reason) + '</div>'
+    : '';
   return '<div class="setup-step" id="step-' + step.kind + '-' + step.name + '">' +
     '<div class="setup-step-main">' +
       '<div class="setup-step-title">' + esc(step.title || step.name) + statusBadge(step) + '</div>' +
       '<div class="setup-step-desc muted">' + esc(step.description || '') + '</div>' +
-      bar + detail +
+      blockedNote + bar + detail +
     '</div>' +
     '<div class="setup-step-actions">' + action + logBtn + '</div>' +
   '</div>';
