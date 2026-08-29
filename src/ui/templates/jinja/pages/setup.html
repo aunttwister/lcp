@@ -217,6 +217,15 @@ async function loadSetup() {
 
 // ── Live log panel ────────────────────────────────────────────────────────
 
+// Auto-follow the log's bottom while installing — but only while the user is
+// already at the bottom. If they scroll UP to read earlier lines, stop
+// yanking the viewport down; re-follow when they return to the bottom.
+let _setupLogPinned = true;
+
+function _setupLogAtBottom(pre) {
+  return pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+}
+
 function renderLog() {
   const panel = document.getElementById('setupLogPanel');
   if (!panel) return;
@@ -229,8 +238,16 @@ function renderLog() {
   panel.style.display = 'block';
   const pre = document.getElementById('setupLogLines');
   if (pre) {
+    // Follow the bottom when the user is at (or hasn't left) the bottom;
+    // otherwise preserve their scroll position so they can read the history.
+    const follow = _setupLogAtBottom(pre) || _setupLogPinned;
     pre.textContent = log.join('\n');
-    pre.scrollTop = pre.scrollHeight;
+    if (follow) {
+      pre.scrollTop = pre.scrollHeight;
+      _setupLogPinned = true;
+    } else {
+      _setupLogPinned = false;
+    }
   }
 }
 
@@ -341,5 +358,15 @@ async function confirmInstall() {
 }
 
 loadSetup();
+
+// Pause auto-follow while the user reads earlier log lines; resume when they
+// scroll back to the bottom.
+(function () {
+  const pre = document.getElementById('setupLogLines');
+  if (!pre) return;
+  pre.addEventListener('scroll', () => {
+    _setupLogPinned = _setupLogAtBottom(pre);
+  });
+})();
 </script>
 {% endblock %}

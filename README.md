@@ -495,6 +495,20 @@ lean image by default**):
 |---|---|
 | **`sentence-transformers` + `torch`** | The embedding model powering semantic task classification (router module) and semantic memory recall (memory module). Installed per-module into `<LCP_MODULES_DIR>/<module>`; bake in with `WITH_ROUTER=1` / `WITH_MEMORY=1`. |
 | **`lancedb`** | Embedded vector store (memory module only) — columnar storage + ANN indexing, no separate service. |
+| **LiveBench** (`git clone` + pip) | The benchmark runner (benchmark module) — a checkout under `<LCP_MODULES_DIR>/livebench`; bake in with `WITH_BENCH=1` (optionally with the `coding`-grading extras). See [Benchmarking (LiveBench)](#benchmarking-livebench). |
+
+The three modules map to one **build flag** each. The flags are Docker build
+args (image build time, not runtime env vars) that decide whether a module's
+deps ship in the image — all default to `0` (lean, runtime-install):
+
+| Flag | Bakes into the image | Powers |
+|---|---|---|
+| `WITH_ROUTER=1` | `sentence-transformers`/`tokenizers`/`torch` + pre-downloaded `bge-small` model | Semantic task classification |
+| `WITH_MEMORY=1` | `lancedb` (+ shared `sentence-transformers`/`torch`) | Memory plugin (LanceDB vector bank) |
+| `WITH_BENCH=1` | A LiveBench checkout + its eval deps | Benchmark-driven routing grades |
+
+Baking makes a module available instantly (larger image); with the flag unset,
+the same module installs on demand from the Setup page.
 
 Dev-only dependencies (`pip install .[dev]`):
 
