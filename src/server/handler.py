@@ -438,6 +438,9 @@ class LCPHandler(
         elif self.path == "/api/models/capability/manual":
             self._serve_capability_manual_api()
             return
+        elif self.path == "/api/models/capability/seed":
+            self._serve_capability_seed_api()
+            return
         elif self.path == "/api/models/capability/import":
             self._serve_capability_import_api()
             return

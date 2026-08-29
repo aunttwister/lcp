@@ -38,18 +38,25 @@ benchmark capability matrix:
 
 - **LiveBench module** — the primary producer. Running benchmarks grades your
   provider models into `model_capabilities` (`source="lcp_benchmark"`).
-- **Bundled leaderboard snapshot** — `seed_capabilities` imports the shipped
+- **Bundled leaderboard snapshot** — `seed_livebench` imports the shipped
   LiveBench leaderboard (`source="livebench"`) into the same matrix without
   running benchmarks (see
   [Seeding scores without running benchmarks](../README.md#seeding-scores-without-running-benchmarks)).
 
-Because of this dependency, the **Setup page blocks installing the Semantic
-routing module until LiveBench is installed** (`blocked_reason` in the
-manifest; the install API enforces it server-side too). This keeps users from
-activating meaning-based classification before there is any graded capability
-data for it to route against. (If you have already seeded the capability
-matrix from the bundled snapshot, semantic routing can still route — but the
-Setup wizard still treats LiveBench as the prerequisite install step.)
+The **Setup page gates Semantic routing install on graded capability data**
+(the matrix having rows), not on the LiveBench module being installed:
+
+| State | Semantic routing install |
+|---|---|
+| Capability matrix has scores | installable |
+| No scores + LiveBench installed | blocked — "run a benchmark (or seed the snapshot)" |
+| No scores + no LiveBench | blocked — "install LiveBench and run a benchmark, or seed the snapshot" |
+
+The LiveBench card shows the current matrix state ("N models · M tasks graded"
+or "No graded scores yet") and a one-click **"Seed baseline scores"** action
+(`POST /api/models/capability/seed`) that imports the bundled snapshot
+instantly — the exit from the gate. The install API enforces the same check
+server-side, so it can't be bypassed by calling the endpoint directly.
 
 ## 2. Task taxonomy
 

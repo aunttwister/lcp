@@ -34,6 +34,18 @@ def _credential_store_for(handler):
     )
 
 
+def _engine_db_path(engine) -> str:
+    """Return the SQLite file path backing *engine* (fallback ``data/costs.db``)."""
+    try:
+        if getattr(engine, "url", None) is not None:
+            path = str(engine.url.database)
+            if path and path != ":memory:":
+                return path
+    except Exception:  # noqa: BLE001 — duck-typed engines in tests
+        pass
+    return "data/costs.db"
+
+
 def _fmt_params(n: int) -> str:
     """Format parameter count: 27320697856 → '27.3B'"""
     if n >= 1_000_000_000:
@@ -2320,6 +2332,23 @@ class DashboardEndpoints:
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
+    def _serve_capability_seed_api(self):
+        """POST /api/models/capability/seed — seed the bundled LiveBench leaderboard.
+
+        Imports the shipped leaderboard snapshot into ``model_capabilities``
+        (``source="livebench"``) WITHOUT running benchmarks — the instant
+        "give semantic routing capability data to route by" action surfaced by
+        the Setup page when no scores exist yet.
+        """
+        from ..api.seed_capabilities import seed_livebench
+
+        db_path = _engine_db_path(self.engine)
+        try:
+            count = seed_livebench(db_path)
+            self._send_json({"ok": True, "materialized": count})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _serve_capability_manual_api(self):
         """POST /api/models/capability/manual — upsert user-entered scores.
 
@@ -2948,7 +2977,7 @@ class SetupEndpoints:
 
         try:
             self._send_json({
-                "manifest": setup_mod.manifest(self.config),
+                "manifest": setup_mod.manifest(self.config, self.engine),
                 "state": setup_mod.load_state(self.engine),
                 "complete": setup_mod.is_complete(self.engine, self.config),
             })
@@ -2971,9 +3000,9 @@ class SetupEndpoints:
             elif kind == "module" and name == "livebench":
                 result = setup_mod.start_livebench_install(self.engine)
             elif kind == "module" and name == "router":
-                # Semantic routing depends on benchmark capabilities (LiveBench).
-                # Enforce the gate server-side too, not just in the UI.
-                reason = setup_mod.router_install_blocked_reason()
+                # Semantic routing depends on graded capability data (LiveBench
+                # runs or the bundled-snapshot seed). Enforce server-side too.
+                reason = setup_mod.router_install_blocked_reason(_engine_db_path(self.engine))
                 if reason:
                     raise setup_mod.SetupError(reason)
                 result = setup_mod.start_router_install(self.engine)

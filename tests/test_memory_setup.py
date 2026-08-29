@@ -152,14 +152,16 @@ class TestMemoryStep:
         assert "LiveBench" in step["blocked_reason"]
 
     def test_router_step_not_blocked_when_livebench_installed(self, monkeypatch):
-        """Not installed but LiveBench present -> install is unblocked."""
+        """Not installed + LiveBench present but NO db_path to verify the
+        matrix -> conservatively blocked with 'run a benchmark' guidance."""
         with patch("src.api.memory.router_status",
                    return_value={"available": False, "removable": False}), \
              patch("src.api.benchmark.benchmark_status",
                    return_value={"available": True}):
             step = setup_mod.router_step()
         assert step["installed"] is False
-        assert step["blocked_reason"] is None
+        assert step["blocked_reason"] is not None
+        assert "no models are graded" in step["blocked_reason"]
 
     def test_router_step_not_blocked_when_installed(self, monkeypatch):
         """Already installed (baked or runtime) -> never blocked."""
@@ -178,10 +180,67 @@ class TestRouterInstallBlockedReason:
                    return_value={"available": False}):
             assert setup_mod.router_install_blocked_reason() is not None
 
-    def test_unblocked_when_livebench_available(self, monkeypatch):
+    def test_blocked_without_db_path_even_if_livebench_installed(self, monkeypatch):
+        """No db_path to verify the matrix -> conservative block (run benchmark)."""
         with patch("src.api.benchmark.benchmark_status",
                    return_value={"available": True}):
-            assert setup_mod.router_install_blocked_reason() is None
+            reason = setup_mod.router_install_blocked_reason()
+        assert reason is not None
+        assert "no models are graded" in reason
+
+    def test_unblocked_when_matrix_has_scores(self, monkeypatch):
+        """Graded capability data exists -> installable, regardless of LiveBench."""
+        monkeypatch.setattr("src.api.seed_capabilities.load_capability_matrix",
+                            lambda db: {"code_generation": {"m": 0.9}})
+        with patch("src.api.benchmark.benchmark_status",
+                   return_value={"available": False}):
+            assert setup_mod.router_install_blocked_reason("/tmp/x.db") is None
+
+    def test_blocked_matrix_empty_livebench_installed(self, monkeypatch):
+        monkeypatch.setattr("src.api.seed_capabilities.load_capability_matrix",
+                            lambda db: {})
+        with patch("src.api.benchmark.benchmark_status",
+                   return_value={"available": True}):
+            reason = setup_mod.router_install_blocked_reason("/tmp/x.db")
+        assert reason is not None
+        assert "no models are graded" in reason
+
+    def test_blocked_matrix_empty_no_livebench(self, monkeypatch):
+        monkeypatch.setattr("src.api.seed_capabilities.load_capability_matrix",
+                            lambda db: {})
+        with patch("src.api.benchmark.benchmark_status",
+                   return_value={"available": False}):
+            reason = setup_mod.router_install_blocked_reason("/tmp/x.db")
+        assert reason is not None
+        assert "No graded capability data" in reason
+
+
+class TestCapabilityMatrixStats:
+    def test_empty_without_db(self):
+        assert setup_mod.capability_matrix_stats(None) == {"models": 0, "tasks": 0}
+
+    def test_counts_models_and_tasks(self, monkeypatch):
+        matrix = {
+            "code_generation": {"m1": 0.9, "m2": 0.8},
+            "debugging": {"m1": 0.7},
+        }
+        monkeypatch.setattr("src.api.seed_capabilities.load_capability_matrix",
+                            lambda db: matrix)
+        assert setup_mod.capability_matrix_stats("/tmp/x.db") == {"models": 2, "tasks": 2}
+
+    def test_empty_on_error(self, monkeypatch):
+        def _boom(db):
+            raise RuntimeError("no db")
+        monkeypatch.setattr("src.api.seed_capabilities.load_capability_matrix", _boom)
+        assert setup_mod.capability_matrix_stats("/tmp/x.db") == {"models": 0, "tasks": 0}
+
+    def test_benchmark_step_includes_capability(self, monkeypatch):
+        monkeypatch.setattr(setup_mod, "capability_matrix_stats",
+                            lambda db: {"models": 3, "tasks": 4})
+        with patch("src.api.benchmark.benchmark_status",
+                   return_value={"available": True}):
+            step = setup_mod.benchmark_step()
+        assert step["capability"] == {"models": 3, "tasks": 4}
 
 
 class TestMemoryInstallCoordinator:

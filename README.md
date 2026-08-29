@@ -418,9 +418,11 @@ memory and LiveBench — the default image is lean and installs it at runtime;
 gracefully to heuristic classification.
 
 **It depends on benchmark capabilities.** Semantic routing classifies *what*
-the task is; the router then routes by the model's per-task capability grades,
-which the **LiveBench** module produces. Because of this, the Setup page
-disables installing Semantic routing until LiveBench is installed.
+the task is; the router then routes by the model's per-task capability grades.
+The Setup page therefore blocks installing Semantic routing until **graded
+capability data exists** — produced either by a LiveBench run or by the
+one-click **"Seed baseline scores"** action (imports the bundled LiveBench
+leaderboard snapshot, no benchmarks run).
 
 See [Semantic Dynamic Routing](docs/semantic-routing.md) for the full
 classifier, config, and module-lifecycle details.

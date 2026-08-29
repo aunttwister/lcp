@@ -175,6 +175,22 @@ class TestManualScoreEdges:
             assert rows[0].score == 0.85
 
 
+# ── Endpoint: bundled leaderboard seed (semantic-routing gate exit) ─────────
+
+class TestCapabilitySeedEndpoint:
+    def test_seed_bundled_leaderboard(self, temp_db):
+        """POST /api/models/capability/seed imports the bundled snapshot."""
+        from tests.test_server import TestHandler
+        from src.api.models import get_session, ModelCapability
+        h = TestHandler(path="/api/models/capability/seed", method="POST",
+                        engine=temp_db, body="{}")
+        h.do_POST()
+        assert h.send_response.call_args[0][0] == 200
+        with get_session(temp_db) as s:
+            rows = s.query(ModelCapability).filter(ModelCapability.source == "livebench").all()
+            assert len(rows) > 0
+
+
 # ── Endpoint: registry upsert quantization + update ─────────────────────────
 
 class TestRegistryUpsertEdges:

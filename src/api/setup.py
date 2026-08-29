@@ -115,6 +115,18 @@ def router_models_dir() -> str:
     return os.path.join(modules_dir(), "models", "router")
 
 
+def _db_path_from_engine(engine) -> Optional[str]:
+    """Return the SQLite file path backing *engine* (or None)."""
+    try:
+        if getattr(engine, "url", None) is not None:
+            path = str(engine.url.database)
+            if path and path != ":memory:":
+                return path
+    except Exception:  # noqa: BLE001 — duck-typed engines in tests
+        pass
+    return None
+
+
 # ── Manifest ────────────────────────────────────────────────────────────────
 
 def provider_steps(config) -> list[dict]:
@@ -148,7 +160,7 @@ def provider_steps(config) -> list[dict]:
     return steps
 
 
-def benchmark_step() -> dict:
+def benchmark_step(engine=None) -> dict:
     """Build the LiveBench benchmark module manifest entry."""
     from .benchmark import benchmark_status
 
@@ -170,6 +182,10 @@ def benchmark_step() -> dict:
         "required": False,
         "installed": bool(status.get("available")),
         "status": status,
+        # What semantic routing actually consumes: the graded capability matrix.
+        # Surfaced on the card so the user sees the real prerequisite state
+        # (installing LiveBench alone doesn't grade anything).
+        "capability": capability_matrix_stats(_db_path_from_engine(engine)),
         "install_path": livebench_root(),
         "installing": installing,
     }
@@ -204,34 +220,73 @@ def memory_step() -> dict:
     }
 
 
-def router_install_blocked_reason() -> Optional[str]:
+def router_install_blocked_reason(db_path: Optional[str] = None) -> Optional[str]:
     """Return why the Semantic routing module can't be installed (or None).
 
     Semantic routing classifies a prompt by MEANING into a task type, but the
     router then routes by the model's benchmark-graded capability scores for
-    that task. The Setup-path producer of those scores is the LiveBench
-    module — so without it, semantic routing has nothing to route by. Block
-    its install until LiveBench is installed.
-    """
-    from .benchmark import benchmark_status
+    that task. So the real prerequisite is GRADED CAPABILITY DATA in the
+    matrix — not the LiveBench module itself. LiveBench (runs) and the bundled
+    leaderboard snapshot (``seed_livebench``) are the two producers.
 
+    With *db_path* the gate keys on the matrix actually having rows, and the
+    reason is tailored to the state:
+
+    * matrix non-empty            -> None (installable)
+    * empty + LiveBench installed -> "no models graded yet — run a benchmark"
+    * empty + no LiveBench        -> "install LiveBench and run a benchmark,
+                                      or seed the bundled leaderboard"
+
+    Without *db_path* (e.g. no engine in tests) it falls back to the
+    LiveBench-installed check.
+    """
+    if db_path:
+        try:
+            from .seed_capabilities import load_capability_matrix
+            if load_capability_matrix(db_path):
+                return None
+        except Exception:  # noqa: BLE001 — DB may be unavailable; fall back below
+            pass
+
+    from .benchmark import benchmark_status
     if benchmark_status().get("available"):
-        return None
+        return (
+            "LiveBench is installed but no models are graded yet — run a "
+            "benchmark (or seed the bundled leaderboard snapshot) so semantic "
+            "routing has capability scores to route by."
+        )
     return (
-        "Requires the LiveBench module first — LiveBench grades the capability "
-        "matrix that semantic routing routes by. Install LiveBench from the "
-        "Setup page, then install Semantic routing."
+        "No graded capability data. Install LiveBench and run a benchmark, or "
+        "seed the bundled leaderboard snapshot, then install Semantic routing."
     )
 
 
-def router_step() -> dict:
+def capability_matrix_stats(db_path: Optional[str] = None) -> dict:
+    """Return a compact summary of the ACTIVE capability matrix for the UI.
+
+    ``{"models": N, "tasks": M}`` — counts the distinct models and task types
+    the router actually consumes. ``{"models": 0, "tasks": 0}`` when there are
+    no graded rows yet (or the DB is unavailable).
+    """
+    if not db_path:
+        return {"models": 0, "tasks": 0}
+    try:
+        from .seed_capabilities import load_capability_matrix
+        matrix = load_capability_matrix(db_path)
+    except Exception:  # noqa: BLE001 — DB may be unavailable
+        return {"models": 0, "tasks": 0}
+    models = {m for scores in matrix.values() for m in scores}
+    return {"models": len(models), "tasks": len(matrix)}
+
+
+def router_step(engine=None) -> dict:
     """Build the SEMANTIC ROUTING module manifest entry (grouped with LiveBench).
 
     The embedding-based task classifier powers dynamic routing: it picks the
-    task type by MEANING (not keywords), which LiveBench's capability scores
-    then route to the best-fit model. Install sentence-transformers into its
-    own deps dir, independent of the memory plugin. Install is blocked
-    (``blocked_reason``) until LiveBench is installed.
+    task type by MEANING (not keywords), which capability scores then route to
+    the best-fit model. Install sentence-transformers into its own deps dir,
+    independent of the memory plugin. Install is blocked (``blocked_reason``)
+    until GRADED CAPABILITY DATA exists (LiveBench run or bundled-snapshot seed).
     """
     from .memory import router_status
 
@@ -239,6 +294,7 @@ def router_step() -> dict:
     installing = _router_install
     if installing is None and _router_last is not None and _router_last.get("status") == "failed":
         installing = _router_last
+    db_path = _db_path_from_engine(engine)
     return {
         "kind": "module",
         "name": "router",
@@ -246,28 +302,28 @@ def router_step() -> dict:
         "description": (
             "Embedding-based task classification for the dynamic router — "
             "classifies prompts by meaning so they route to the best-fit "
-            "model. Requires LiveBench (capability grades). Install "
-            "sentence-transformers at runtime."
+            "model. Requires graded capability data (LiveBench run or bundled "
+            "snapshot seed). Install sentence-transformers at runtime."
         ),
         "required": False,
         "installed": bool(status.get("available")),
         # Same baked vs runtime-installed distinction as the memory module:
         # baked-in deps can't be removed, so no Remove button in the UI.
         "baked": bool(status.get("available")) and not bool(status.get("removable")),
-        # Install is gated on LiveBench (benchmark capabilities are a
-        # dependency of semantic routing). None when installable.
-        "blocked_reason": None if bool(status.get("available")) else router_install_blocked_reason(),
+        # Install is gated on graded capability data (semantic routing's real
+        # dependency). None when installable.
+        "blocked_reason": None if bool(status.get("available")) else router_install_blocked_reason(db_path),
         "status": status,
         "install_path": router_site(),
         "installing": installing,
     }
 
 
-def manifest(config) -> dict:
+def manifest(config, engine=None) -> dict:
     """Return the full setup manifest (provider steps + benchmark + modules)."""
     return {
         "steps": provider_steps(config),
-        "modules": [benchmark_step(), router_step(), memory_step()],
+        "modules": [benchmark_step(engine), router_step(engine), memory_step()],
     }
 
 
