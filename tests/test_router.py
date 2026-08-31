@@ -1712,6 +1712,35 @@ def test_summarize_preserves_trailing_user_request_instruction():
     assert detail.intent_text == "let's now plan for the  feature"
 
 
+def test_summarize_preserves_leading_user_request_instruction():
+    """Regression (judge replay NOINTENT storm): the real VS Code wrapper has
+    <userRequest> at the START, followed by long trailing <context>/
+    <editorContext>/<reminderInstructions> blocks. Trimming to keep a physical
+    END preserved the trailing context and dropped the instruction, so replay
+    found no intent. The summary must canonicalize to JUST the instruction."""
+    from src.api.router import _summarize_conversation, _extract_intent_text, classify_task_detail
+    trailing = (
+        "<context>The current date is 2026-08-29.\nTerminals: bash\n</context>\n"
+        "<editorContext>The user's current file is /x/y.py.\n</editorContext>\n"
+        "<reminderInstructions>When using replace_string_in_file...\n</reminderInstructions>"
+    )
+    user_msg = "<userRequest>Start implementation</userRequest>\n\n" + trailing * 20
+    msgs = [
+        {"role": "system", "content": "You are an expert AI programming assistant."},
+        {"role": "user", "content": user_msg},
+    ]
+    summarized = _summarize_conversation(msgs, max_content=200, max_total=4000)
+    # Only the instruction survives — the trailing context is dropped entirely.
+    assert summarized[1]["content"] == "<userRequest>Start implementation</userRequest>"
+    # Replaying recovers the instruction and classifies it as CODE GENERATION
+    # (the plan→implement handoff fix), not planning and not NOINTENT.
+    assert _extract_intent_text(summarized)[0] == "Start implementation"
+    detail = classify_task_detail(summarized)
+    assert detail.task == "code_generation"
+    assert detail.path == "semantic"
+    assert detail.intent_text == "Start implementation"
+
+
 def test_record_decision_persists_rationale_and_conversation(registry_db):
     import json
     from src.api.router import CapabilityRouter, classify_task_detail, _extract_intent_text
@@ -1939,3 +1968,40 @@ def test_build_chain_for_model_all_drained_keeps_chain_order(registry_db, monkey
     out = router._build_chain_for_model(chain, "deepseek-v4-flash", config=cfg)
     # Ties preserve original chain order (deterministic, no providers dropped).
     assert [s["provider"] for s in out[:2]] == ["commandcode", "opencode"]
+
+
+def test_build_chain_for_model_sorts_fallbacks_by_credit(registry_db, monkeypatch):
+    """Regression (live): when the router's chosen head (e.g. llama.cpp/Qwen)
+    FAILS, the FALLBACK steps must also be credit/health-ordered — a funded
+    fallback (deepseek-v4-flash via opencode) is tried BEFORE a drained one
+    (commandcode), instead of blindly walking the raw chain into a provider
+    that 400s on 'insufficient credits'."""
+    from src.api.router import CapabilityRouter
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    chain = [
+        {"provider": "llamacpp", "model": "qwen3.8-27b", "base_url": "http://localhost:8080/v1"},
+        {"provider": "commandcode", "model": "deepseek-v4-flash", "base_url": "https://cc/v1"},
+        {"provider": "opencode", "model": "deepseek-v4-flash", "base_url": "https://oc/v1"},
+    ]
+    cfg = _prov_config({
+        "llamacpp": {"models": ["qwen3.8-27b"]},
+        "commandcode": {"models": ["deepseek-v4-flash"]},
+        "opencode": {"models": ["deepseek-v4-flash"]},
+    })
+
+    class FakeCache:
+        def get(self, provider, kind):
+            if kind == "subscription" and provider == "commandcode":
+                return {"payload": {"monthly_credits_remaining": 0.12}}
+            if kind == "subscription" and provider == "opencode":
+                return {"payload": {"monthly_pct": 100}}
+            if kind == "balance" and provider == "opencode":
+                return {"payload": {"available_credits": 7.81, "balance": 7.81}}
+            return None
+    monkeypatch.setattr("src.api.cost_cache.get_cost_cache", lambda: FakeCache())
+
+    out = router._build_chain_for_model(chain, "qwen3.8-27b", config=cfg)
+    providers = [s["provider"] for s in out]
+    # Target head first; the FUNDED opencode fallback before drained commandcode.
+    assert providers[0] == "llamacpp"
+    assert providers.index("opencode") < providers.index("commandcode")

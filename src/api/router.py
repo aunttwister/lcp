@@ -889,16 +889,25 @@ def _summarize_conversation(
         content = msg.get("content")
         if isinstance(content, str):
             if content.strip():
-                # Client-context wrappers carry the real instruction at the END
-                # (<userRequest>...</userRequest>), so keep the END intact when
-                # trimming — but ONLY when a genuine trailing instruction exists
-                # (_context_tail finds one). A truncated/unclosed wrapper whose
-                # tail is just attachment body must keep the DEFAULT head-trim,
-                # else the body leaks back in as intent. Every other message
-                # keeps its head (so leading tool-result markers survive).
+                # Client-context wrappers: the real instruction lives INSIDE
+                # <userRequest>...</userRequest>, which can sit at the START or
+                # the END of the wrapper, surrounded by <attachments>/
+                # <context>/<editorContext>/<reminderInstructions> blocks.
+                # Trimming to keep a physical END is wrong: it preserves the
+                # trailing client-context blocks and drops the instruction, so
+                # judge replay finds no intent (or worse, treats the context as
+                # intent). Canonicalize the wrapper to JUST the instruction when
+                # one exists, so the stored summary replays to exactly what live
+                # classification saw.
                 tail = _context_tail(content) if (msg.get("role") == "user" and _is_client_context(content)) else None
-                keep_end = bool(tail and tail.lower().lstrip() not in _CONTINUATIONS)
-                out["content"] = _trim(content, max_content, from_end=not keep_end)
+                if tail and tail.lower().lstrip() not in _CONTINUATIONS:
+                    out["content"] = f"<userRequest>{tail}</userRequest>"
+                else:
+                    # No genuine instruction (attachment-only / truncated
+                    # wrapper, or a non-wrapper message) -> keep the DEFAULT
+                    # head-trim so leading tool-result markers survive; replay
+                    # skips the wrapper and walks back to a real user message.
+                    out["content"] = _trim(content, max_content, from_end=True)
         elif isinstance(content, list):
             blocks = []
             for b in content[:8]:
@@ -1638,6 +1647,13 @@ class CapabilityRouter:
                 self._provider_credit_rank(s["provider"]),
             )
         target_steps.sort(key=_key)
+        # Also order the FALLBACK steps by health/credit so a drained provider
+        # (e.g. commandcode with no credits) isn't tried before a funded one
+        # when the target head fails — the router should prefer the best
+        # fallback (e.g. the previously-preferred deepseek-v4-flash) over a
+        # provider that will 400 on "insufficient credits". Stable sort keeps
+        # the profile's original order within each band.
+        fallbacks.sort(key=_key)
         return target_steps + fallbacks
 
     # ── Routing rules (UI-defined overrides) ─────────────────────────────

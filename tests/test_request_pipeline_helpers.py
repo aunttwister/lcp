@@ -451,14 +451,28 @@ class TestForwardRequestStreaming:
         assert out == [b"data: {}\n\n", b"data: {}\n\n"]
         mock_resp.close.assert_called_once()
 
-    def test_api_key_from_config_when_env_missing(self, mock_config):
-        """When no key is in the credential store, ConfigError is raised."""
+    def test_api_key_required_for_keyed_provider(self, mock_config):
+        """A known API-keyed provider (deepseek) with no stored key raises
+        ConfigError — but a keyless provider (llamacpp) must NOT."""
         body = {"messages": [], "stream": False}
         mock_config.get_provider_key.return_value = None
-        # With an empty credential store (no keys), expect ConfigError
         with _cred_patch(fallback=None):
             with pytest.raises(ConfigError, match="No API key found"):
-                forward_request(self._cfg(), body, mock_config)
+                forward_request(self._cfg(provider="deepseek"), body, mock_config)
+
+    def test_keyless_local_provider_proceeds_without_key(self, mock_config):
+        """llama.cpp (local) needs no API key — the request proceeds with NO
+        Authorization header instead of a ConfigError."""
+        body = {"messages": [], "stream": False}
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"ok": true}'
+        with _cred_patch(fallback=None):
+            with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+                result, status = forward_request(self._cfg(provider="llamacpp"), body, mock_config)
+        assert status == 200
+        req = mock_open.call_args[0][0]
+        assert "Authorization" not in req.headers
 
     def test_http_400_raises_bad_request(self, mock_config):
         import urllib.error
@@ -572,11 +586,11 @@ class TestForwardRequestStreaming:
             assert req.headers["Authorization"] == "Bearer sk-stored"
 
     def test_no_credential_store_raises_config_error(self, mock_config):
-        """When credential store has no key, ConfigError is raised."""
+        """When credential store has no key for an API-keyed provider, ConfigError is raised."""
         body = {"messages": [], "stream": False}
         with _cred_patch(fallback=None):
             with pytest.raises(ConfigError, match="No API key found for provider"):
-                forward_request(self._cfg(), body, mock_config)
+                forward_request(self._cfg(provider="deepseek"), body, mock_config)
 
 
 # ── strip_forbidden_tools ───────────────────────────────────────────────
@@ -711,6 +725,32 @@ class TestTryChainErrorPaths:
         assert h["status"] == "healthy"
         assert h["consecutive_failures"] == 0
         assert h["last_failure"] is None
+
+    def test_config_error_does_not_trip_circuit_breaker(self, chain_config):
+        """A ConfigError (missing API key) is a CONFIG problem, not a provider
+        outage — it must not mark the provider degraded/dead, else a
+        misconfigured local/keyless provider gets breaker-marked for a config
+        issue (and stays broken after the key is added)."""
+        from src.api.circuit_breaker import get_circuit_breaker
+        cb = get_circuit_breaker()
+
+        good_resp = MagicMock()
+        good_resp.status = 200
+        good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
+
+        def fake_forward(provider_cfg, body, config):
+            if provider_cfg["provider"] == "first":
+                raise ConfigError("missing api_key_env")
+            return json.loads(good_resp.read()), 200
+
+        with patch("src.api.request_pipeline.forward_request", side_effect=fake_forward):
+            result_body, status, provider, model = try_chain(
+                "l2", chain_config.profiles["l2"], self._body(), chain_config)
+        # Fell back to the second provider, but the first is NOT breaker-marked.
+        assert provider == "second"
+        h = cb.get_health("first", "https://first.com/v1", "l2")
+        assert h["status"] == "healthy"
+        assert h["consecutive_failures"] == 0
 
     def test_credits_error_trips_circuit_breaker_and_falls_back(self, chain_config):
         """ProviderCreditsError (insufficient balance) MUST trip the circuit breaker

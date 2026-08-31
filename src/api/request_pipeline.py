@@ -433,7 +433,13 @@ def forward_request(provider_cfg: dict, body: dict, config):
     api_key = ""
     if store is not None:
         api_key = store.get(provider_name) or ""
-    if not api_key:
+    # Local / self-hosted providers (e.g. llama.cpp, or any user-added endpoint)
+    # run KEYLESS — the request is sent without an Authorization header. Only
+    # the known API-keyed providers hard-require a stored key; a genuinely
+    # keyed upstream without one then surfaces as a real ProviderAuthError
+    # (a 401 from the upstream) instead of a synthetic ConfigError.
+    from .setup import _provider_needs_key
+    if not api_key and _provider_needs_key(provider_name):
         raise ConfigError(
             f"No API key found for provider '{provider_name}'. "
             f"Add it in the dashboard (Providers → Configuration)."
@@ -445,9 +451,10 @@ def forward_request(provider_cfg: dict, body: dict, config):
     data = json.dumps(body).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
         "User-Agent": "LLMControlPlane/1.0",
     }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
@@ -772,11 +779,11 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
                 next=chain[i + 1]["provider"] if i + 1 < chain_len else "none",
             )
         except ConfigError as e:
-            # Provider config problem (e.g. missing API key env var) — this
-            # provider can't work, but the next one might. Fall back.
-            cb.record_failure(provider_name, base_url, profile_name,
-                              error_type="ConfigError",
-                              error_reason=str(e))
+            # Provider config problem (e.g. missing API key) — this provider
+            # can't work, but it is NOT a provider outage, so it must NOT trip
+            # the circuit breaker: a misconfigured local/keyless provider would
+            # otherwise be marked degraded/dead for a config issue. Log the
+            # failover (observability) and fall through to the next provider.
             errors.append(f"{provider_name}: {e}")
             if i + 1 < chain_len:
                 next_provider = chain[i + 1]["provider"]
