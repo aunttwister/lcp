@@ -63,3 +63,18 @@ class TestSecretKeyResolution:
             k2 = crypto.get_secret_key(temp_data_dir)
             assert k1 == k2  # persisted and reused
             assert _osp.exists(_osp.join(temp_data_dir, ".lcp_secret_key"))
+
+    def test_fallback_key_leading_whitespace_byte_roundtrips(self, temp_data_dir):
+        """Regression: os.urandom(32) may start with an ASCII whitespace byte
+        (\r, \n, \t, space, ...). read_bytes().strip() removed it on read-back,
+        so the persisted key did not equal the generated key (flaky failure).
+        The raw bytes must survive the round-trip untouched."""
+        import os
+        import os.path as _osp
+        key = b"\r\n\t " + b"x" * 28  # leading whitespace bytes
+        os.makedirs(temp_data_dir, exist_ok=True)
+        path = _osp.join(temp_data_dir, ".lcp_secret_key")
+        with open(path, "wb") as fh:
+            fh.write(key)
+        with patch.dict(os.environ, {}, clear=True):
+            assert crypto.get_secret_key(temp_data_dir) == key

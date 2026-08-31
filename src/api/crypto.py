@@ -47,7 +47,11 @@ def _load_or_create_fallback_key(data_dir: str | Path) -> bytes | None:
     path = Path(data_dir) / Path(_FALLBACK_KEY_FILE).name
     try:
         if path.exists():
-            return path.read_bytes().strip()
+            # Read the EXACT bytes: the writer stores raw os.urandom(32), and
+            # the first/last byte can legitimately be whitespace (\r, \n, \t,
+            # space). Stripping would corrupt such keys and break round-trip
+            # (the persisted key would differ from the one first generated).
+            return path.read_bytes()
         key = os.urandom(32)
         path.parent.mkdir(parents=True, exist_ok=True)
         # Write with 0o600 so only the owner can read it.
