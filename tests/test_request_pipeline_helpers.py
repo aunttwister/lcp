@@ -876,6 +876,26 @@ class TestTryChainErrorPaths:
         assert provider == "second"
         assert status == 200
 
+    def test_request_too_large_for_all_models_raises_413(self, chain_config):
+        """When the request exceeds EVERY model's context window, try_chain
+        raises RequestTooLargeError (413) instead of forwarding to a provider
+        that will 400 on exceed_context_size."""
+        from src.api.exceptions import RequestTooLargeError
+        # Both chain models have a small context; the request is huge.
+        chain_config.model_limits = {
+            "m1": {"context_window": 4096},
+            "m2": {"context_window": 8192},
+        }
+        chain_config.providers = {
+            "first": {"api_key_env": "KEY", "base_url": "https://first.com/v1", "models": ["m1"]},
+            "second": {"api_key_env": "KEY", "base_url": "https://second.com/v1", "models": ["m2"]},
+        }
+        big_body = {"messages": [{"role": "user", "content": "x" * 40000}]}
+        with patch("src.api.request_pipeline.forward_request") as mock_fwd:
+            with pytest.raises(RequestTooLargeError):
+                try_chain("l2", chain_config.profiles["l2"], big_body, chain_config)
+        mock_fwd.assert_not_called()
+
     def test_commandcode_model_translated_before_forward(self, chain_config):
         """Command Code's bare model names are translated to prefixed API IDs
         (e.g. deepseek-v4-pro → deepseek/deepseek-v4-pro) before forwarding."""

@@ -24,6 +24,7 @@ from .exceptions import (
     ProviderInternalError,
     ProviderRateLimitError,
     ProviderTimeoutError,
+    RequestTooLargeError,
 )
 from .logging_config import get_logger
 from .models import get_session, Request as RequestModel
@@ -619,6 +620,33 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
         )
         if reordered:
             chain = reordered  # apply to the local copy only
+
+    # ── Context pre-flight: never send a request bigger than ANY model in the
+    #    chain can hold. The router already excludes too-small models per
+    #    request; this is the final guarantee that a request which exceeds the
+    #    profile's largest routable context fails cleanly (413) instead of
+    #    hitting a provider 400 "exceed_context_size".
+    try:
+        from .cost_estimator import count_tokens as _count_tokens
+        from .router import (
+            _CONTEXT_OUTPUT_RESERVE as _CTX_OUTPUT_RESERVE,
+            _strip_client_context_from_messages,
+        )
+        request_tokens = _count_tokens(
+            _strip_client_context_from_messages(body.get("messages", [])),
+            body.get("tools"),
+        )
+        if request_tokens > 0:
+            max_ctx = router._max_routable_context(chain, config)
+            if request_tokens + _CTX_OUTPUT_RESERVE > max_ctx:
+                raise RequestTooLargeError(
+                    f"Request ({request_tokens} tokens) exceeds the largest "
+                    f"model context ({max_ctx}) in profile '{profile_name}'."
+                )
+    except RequestTooLargeError:
+        raise
+    except Exception:  # noqa: BLE001 — never let the guard break routing
+        pass
 
     for i, step in enumerate(chain):
         provider_name = step["provider"]

@@ -986,6 +986,14 @@ _HEALTH_BONUS: dict[str, float] = {
 # Score penalty when a provider's cached usage suggests it is running low.
 _LOW_CREDIT_PENALTY = -0.10
 
+# Context-awareness: never route a request to a model whose context window
+# can't hold the request (plus an output reserve). When a model has no
+# ``model_limits.context_window`` entry we default conservatively so a
+# too-large request is NOT sent to an unknown-capacity local model — it falls
+# to a known-capacity model instead (or 413s cleanly when none fit).
+_DEFAULT_CONTEXT_WINDOW = 128000
+_CONTEXT_OUTPUT_RESERVE = 8192   # headroom for the response (tokens)
+
 
 # ── Model registry — DB-backed, explicit, no runtime name parsing ────────────
 #
@@ -1476,13 +1484,89 @@ class CapabilityRouter:
             task, bias=bias,
         )
 
+    # ── Context-awareness ─────────────────────────────────────────────────
+    # The router must never pick a model whose context window can't hold the
+    # request (the live llama.cpp/Qwen overflow: 205k-token request routed to a
+    # ~200k-context model → 400 exceed_context_size). We estimate the request
+    # size, look up each candidate's context_window (model_limits), and EXCLUDE
+    # any model that can't fit request + an output reserve. The client advert
+    # is "max routable context": a request up to that size is guaranteed to be
+    # servable because the max is, by definition, a routable model.
+
+    @staticmethod
+    def _coerce_context(ctx) -> Optional[int]:
+        """Return *ctx* as an int when it is a genuine number, else None.
+
+        Deliberately rejects non-scalar values: ``int(MagicMock())`` returns 1
+        and ``bool`` is 0/1, so a duck-typed config must never yield a bogus
+        tiny context (which would 413 every request).
+        """
+        if isinstance(ctx, bool):
+            return None
+        if isinstance(ctx, (int, float)) and not isinstance(ctx, bool):
+            try:
+                return int(ctx)
+            except (TypeError, ValueError):
+                return None
+        if isinstance(ctx, str) and ctx.strip().lstrip("-").isdigit():
+            try:
+                return int(ctx)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _context_window_for(self, logical_model: str,
+                            config: Optional[object] = None) -> int:
+        """Return a model's served context window (tokens).
+
+        Reads ``config.model_limits[model].context_window``; falls back to a
+        conservative default so an unknown-capacity local model is never sent a
+        request it can't hold.
+        """
+        try:
+            if config is not None:
+                limits = (config.model_limits or {}).get(logical_model) or {}
+                ctx = self._coerce_context(limits.get("context_window"))
+                if ctx:
+                    return ctx
+        except Exception:  # noqa: BLE001 — duck-typed configs
+            pass
+        return _DEFAULT_CONTEXT_WINDOW
+
+    def _fits_context(self, logical_model: str, request_tokens: int,
+                      config: Optional[object] = None) -> bool:
+        """True when *logical_model*'s context can hold *request_tokens* + reserve."""
+        if request_tokens <= 0:
+            return True
+        return (request_tokens + _CONTEXT_OUTPUT_RESERVE
+                <= self._context_window_for(logical_model, config))
+
+    def _max_routable_context(self, chain: list,
+                              config: Optional[object] = None) -> int:
+        """Largest context window among the chain's logical models.
+
+        Used to (a) advertise an honest max context and (b) decide when NO
+        model can serve a request (→ 413). Unknown-capacity models count as
+        their conservative default.
+        """
+        ctxs = []
+        for step in chain:
+            logical = logical_model_name(step["model"], self.db_path)
+            ctxs.append(self._context_window_for(logical, config))
+        return max(ctxs) if ctxs else _DEFAULT_CONTEXT_WINDOW
+
     def _candidate_models(self, chain: list, blocked_models: set,
-                          config: Optional[object] = None) -> set:
+                          config: Optional[object] = None,
+                          request_tokens: int = 0) -> set:
         """All logical models choosable from the (available, unblocked) chain.
 
         Enumerates the models on the chain steps plus each provider's declared
         ``models`` list, minus blocked models. Provider-agnostic — the same
         candidate set regardless of how the provider is eventually resolved.
+
+        Context gate: with ``request_tokens > 0``, models whose context window
+        can't hold the request (+ output reserve) are EXCLUDED — the router must
+        never pick a model that will 400 on ``exceed_context_size``.
         """
         cand: set[str] = set()
         try:
@@ -1496,7 +1580,10 @@ class CapabilityRouter:
                 pcfg = providers.get(step["provider"]) or {}
                 for m in pcfg.get("models") or []:
                     cand.add(logical_model_name(m, self.db_path))
-        return cand - blocked_models
+        cand -= blocked_models
+        if request_tokens > 0:
+            cand = {m for m in cand if self._fits_context(m, request_tokens, config)}
+        return cand
 
     def _choose_target_model(self, candidates: set, task: str, policy: str,
                              min_score: float, bias: Optional[float],
@@ -1609,7 +1696,8 @@ class CapabilityRouter:
     def _build_chain_for_model(self, chain: list, target_model: str,
                                preferred_provider: Optional[str] = None,
                                profile: Optional[str] = None,
-                               config: Optional[object] = None) -> list:
+                               config: Optional[object] = None,
+                               request_tokens: int = 0) -> list:
         """Build the DETERMINISTIC chain for *target_model*.
 
         Walks the ORIGINAL chain in order, emitting one step per provider that
@@ -1621,6 +1709,10 @@ class CapabilityRouter:
 
         This is the SINGLE resolver shared by the prefer path and the scoring
         path — so both yield the same provider for the same target model.
+
+        Context gate: with ``request_tokens > 0``, fallback steps whose model
+        can't hold the request (+ reserve) are dropped so a drained/dead head
+        never falls through to a too-small-context model that 400s.
         """
         target_steps: list[dict] = []
         seen_providers: set[str] = set()
@@ -1639,6 +1731,15 @@ class CapabilityRouter:
         target_tuples = {(s["provider"], s["model"]) for s in target_steps}
         fallbacks = [dict(s) for s in chain
                      if (s["provider"], s["model"]) not in target_tuples]
+        if request_tokens > 0:
+            # Drop fallback models whose context can't hold the request — a
+            # fallback that would 400 on exceed_context_size is worse than
+            # skipping it (the next fitting fallback is tried instead).
+            fallbacks = [
+                s for s in fallbacks
+                if self._fits_context(logical_model_name(s["model"], self.db_path),
+                                      request_tokens, config)
+            ]
 
         def _key(s):
             return (
@@ -1987,6 +2088,11 @@ class CapabilityRouter:
             policy, min_score = self._effective_policy(config)
         detail = classify_task_detail(messages, tools, max_tokens)
         task = detail.task
+        # Context-aware routing: the request's token count (from the classifier,
+        # which strips client-injected context). Models whose context window
+        # can't hold request + output reserve are excluded from selection so a
+        # too-large request never 400s on exceed_context_size.
+        request_tokens = detail.token_count or 0
 
         # The circuit breaker only GATES PROVIDERS; the router owns model
         # selection and ordering. Drop steps whose provider is currently
@@ -2013,6 +2119,18 @@ class CapabilityRouter:
         # 4. prefer -> target model / provider tiebreak.
         target_model, preferred_provider, fired_prefer = self._resolve_prefer(
             chain, task, profile or "", config)
+        # A prefer rule can name a model whose context can't hold this request.
+        # Treat it as NOT served (fall through to scoring) so we don't route an
+        # oversized request to a too-small context model.
+        if target_model is not None and request_tokens > 0 \
+                and not self._fits_context(target_model, request_tokens, config):
+            fired_prefer.append({
+                "action": "prefer_context_excluded",
+                "provider": preferred_provider or "*",
+                "model": target_model,
+                "request_tokens": request_tokens,
+            })
+            target_model, preferred_provider = None, None
         fired_desc = [f["action"] for f in fired_blocks] + [f["action"] for f in fired_prefer]
 
         # Audit: why didn't a rule fire? Surfaces silent rule misses in the
@@ -2037,13 +2155,21 @@ class CapabilityRouter:
         prefer_fired = "prefer" in fired_desc
 
         # 4b. No prefer mandate -> score candidate MODELS (provider-agnostic).
+        #    Context gate: models that can't hold request + output reserve are
+        #    excluded, so the router picks the next-best model that FITS rather
+        #    than sending an oversized request to a too-small context.
         if target_model is None:
             default_logical = logical_model_name(chain[0]["model"], self.db_path)
-            candidates = self._candidate_models(chain, blocked_models, config)
+            candidates = self._candidate_models(
+                chain, blocked_models, config, request_tokens)
             target_model = self._choose_target_model(
                 candidates, task, policy, min_score, bias, default_logical)
             if target_model is None:
-                # Best model below min_score -> keep the static chain.
+                # Best model below min_score (or no candidate fits the context)
+                # -> keep the static chain. The caller's pre-flight already
+                # 413s when NO model in the chain can fit, so reaching here
+                # with a too-large request means a fitting model exists but was
+                # breaker-blocked/min-scored — degrade to the static chain.
                 head_score = self._score_model(default_logical, task, bias)
                 self._record_decision({
                     **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
@@ -2055,7 +2181,8 @@ class CapabilityRouter:
 
         # 5. resolve the provider ONCE (rule path == scoring path).
         result = self._build_chain_for_model(
-            chain, target_model, preferred_provider, profile, config)
+            chain, target_model, preferred_provider, profile, config,
+            request_tokens=request_tokens)
         if not result:
             return None
         head = result[0]

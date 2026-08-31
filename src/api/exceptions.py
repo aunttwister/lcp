@@ -137,3 +137,19 @@ class ToolBlockedError(LCPError):
     """Requested tool is blocked by profile policy."""
     code = "LCP-4002"
     status_code = 403
+
+
+class RequestTooLargeError(LCPError):
+    """Request exceeds every routable model's context window.
+
+    Raised before forwarding when the token count of the request (plus an
+    output reserve) is larger than the largest context window among the
+    models the profile can route to — so no model could ever serve it.
+    The client should compact/truncate or use a longer-context profile.
+    """
+    code = "LCP-4003"
+    status_code = 413
+    client_message = (
+        "Request is too large for any model in this profile's context window. "
+        "Compact or shorten the conversation and retry."
+    )

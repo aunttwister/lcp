@@ -4,6 +4,12 @@
 **Status:** draft (pre-implementation research complete)
 **Last updated:** 2026-08-19 — implementation plan added below (Tier 1 activation)
 
+> **Context-aware routing** (implemented 2026-08-31): the router now enforces
+> the FILTER step's "context window" rule from the start — a model whose
+> `context_window` can't hold the request (+ an output reserve) is excluded,
+> and a request larger than every chain model's context returns `413`. See
+> [Semantic Dynamic Routing → Context-aware routing](../docs/semantic-routing.md#context-aware-routing).
+
 ---
 
 ## Implementation Plan (2026-08-19) — activate benchmark-driven routing

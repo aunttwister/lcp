@@ -424,6 +424,13 @@ capability data exists** — produced either by a LiveBench run or by the
 one-click **"Seed baseline scores"** action (imports the bundled LiveBench
 leaderboard snapshot, no benchmarks run).
 
+**The router is context-aware.** A model whose context window can't hold the
+request is excluded and routing falls to the next-best model that fits — so a
+205k-token request never 400s against a 200k-context model. `/v1/models`
+advertises the profile's *maximum* routable context (honest, because the
+router guarantees a fitting model for any request up to that size), and a
+request larger than every chain model's context returns a clean `413`.
+
 See [Semantic Dynamic Routing](docs/semantic-routing.md) for the full
 classifier, config, and module-lifecycle details.
 

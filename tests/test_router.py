@@ -2005,3 +2005,83 @@ def test_build_chain_for_model_sorts_fallbacks_by_credit(registry_db, monkeypatc
     # Target head first; the FUNDED opencode fallback before drained commandcode.
     assert providers[0] == "llamacpp"
     assert providers.index("opencode") < providers.index("commandcode")
+
+
+# ── Context-aware routing ──────────────────────────────────────────────────
+
+class _CtxCfg:
+    """Duck-typed config with providers + model_limits for context tests."""
+
+    def __init__(self, providers, model_limits):
+        self.providers = providers
+        self.model_limits = model_limits
+        self.dynamic_routing = {}
+
+
+def test_context_window_for_known_and_unknown(registry_db):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    cfg = _CtxCfg({}, {
+        "deepseek-v4-pro": {"context_window": 1000000},
+        "deepseek-v4-flash": {"context_window": 1000000},
+    })
+    assert router._context_window_for("deepseek-v4-pro", cfg) == 1000000
+    # Unknown model → conservative default (never oversized into a local model).
+    assert router._context_window_for("qwen3.8-27b", cfg) == 128000
+
+
+def test_fits_context_and_output_reserve(registry_db):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    cfg = _CtxCfg({}, {"deepseek-v4-pro": {"context_window": 1000000}})
+    assert router._fits_context("deepseek-v4-pro", 200000, cfg) is True
+    # 200k request on a 200k-context model with 8k reserve does NOT fit.
+    cfg2 = _CtxCfg({}, {"qwen3.8-27b": {"context_window": 200192}})
+    assert router._fits_context("qwen3.8-27b", 205120, cfg2) is False
+
+
+def test_candidate_models_excludes_too_small_context(registry_db):
+    """A model whose context can't hold the request is dropped from candidates,
+    so scoring picks the next-best model that FITS instead of 400ing."""
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    cfg = _CtxCfg(
+        {"llamacpp": {"models": ["qwen3.8-27b"]},
+         "deepseek": {"models": ["deepseek-v4-flash"]}},
+        {"qwen3.8-27b": {"context_window": 200192},
+         "deepseek-v4-flash": {"context_window": 1000000}},
+    )
+    chain = [{"provider": "llamacpp", "model": "qwen3.8-27b"},
+             {"provider": "deepseek", "model": "deepseek-v4-flash"}]
+    # 205k request: the qwen model (200k) is excluded; flash (1M) remains.
+    cand = router._candidate_models(chain, set(), cfg, request_tokens=205120)
+    assert "qwen3.8-27b" not in cand
+    assert "deepseek-v4-flash" in cand
+
+
+def test_build_chain_drops_too_small_fallbacks(registry_db):
+    """Fallback steps whose model can't hold the request are dropped, so a dead
+    head never falls through to a too-small-context model that 400s."""
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    cfg = _CtxCfg(
+        {"llamacpp": {"models": ["qwen3.8-27b"]},
+         "deepseek": {"models": ["deepseek-v4-flash"]}},
+        {"qwen3.8-27b": {"context_window": 200192},
+         "deepseek-v4-flash": {"context_window": 1000000}},
+    )
+    chain = [{"provider": "deepseek", "model": "deepseek-v4-flash"},
+             {"provider": "llamacpp", "model": "qwen3.8-27b"}]
+    # Target flash (1M) fits; the qwen FALLBACK (200k) can't hold 205k → dropped.
+    out = router._build_chain_for_model(chain, "deepseek-v4-flash", config=cfg,
+                                        request_tokens=205120)
+    models = [s["model"] for s in out]
+    assert "deepseek-v4-flash" in models
+    assert "qwen3.8-27b" not in models
+
+
+def test_max_routable_context(registry_db):
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    cfg = _CtxCfg({}, {
+        "deepseek-v4-pro": {"context_window": 1000000},
+        "deepseek-v4-flash": {"context_window": 1000000},
+    })
+    chain = [{"provider": "deepseek", "model": "deepseek-v4-pro"},
+             {"provider": "deepseek", "model": "deepseek-v4-flash"}]
+    assert router._max_routable_context(chain, cfg) == 1000000

@@ -55,6 +55,47 @@ def _fmt_params(n: int) -> str:
     return str(n)
 
 
+def _auto_learn_model_contexts(config, provider: str, api_base: str) -> int:
+    """Best-effort: record each discovered model's served context window.
+
+    Calls the provider's ``discover_models`` (llama.cpp returns ``meta.n_ctx``,
+    the SERVED context, e.g. 200192) and upserts ``context_window`` into
+    ``config.model_limits`` so BOTH the context-aware router and ``/v1/models``
+    advertise the model's true capacity instead of the 128000 default.
+
+    Returns the number of models whose context was learned. Never raises.
+    """
+    try:
+        registry = resolve_service("pricing", fallback=get_registry)
+        plugin = registry.for_provider(provider)
+        if plugin is None or not hasattr(plugin, "discover_models"):
+            return 0
+        models = plugin.discover_models(api_base)
+        if not models:
+            return 0
+        learned = 0
+        limits = config.raw.setdefault("model_limits", {})
+        for m in models:
+            if not isinstance(m, dict):
+                continue
+            mid = (m.get("id") or "").strip()
+            ctx = m.get("context_length") or m.get("n_ctx")
+            if not mid or not ctx:
+                continue
+            try:
+                ctx_int = int(ctx)
+            except (TypeError, ValueError):
+                continue
+            entry = limits.setdefault(mid, {})
+            entry["context_window"] = ctx_int
+            learned += 1
+        if learned:
+            config.save()
+        return learned
+    except Exception:  # noqa: BLE001 — discovery must never break provider CRUD
+        return 0
+
+
 def _sync_dynamic_routing_enabled(settings, enabled: bool) -> None:
     """Update the DB-backed ``dynamic_routing`` config section's ``enabled``.
 
@@ -738,6 +779,9 @@ class ProviderEndpoints:
         }
         cfg.raw.setdefault("providers", {})[name] = provider_data
         cfg.save()
+        # Best-effort: learn each model's real served context window so the
+        # context-aware router + /v1/models know the true capacity.
+        _auto_learn_model_contexts(cfg, name, provider_data.get("api_base", ""))
         # Store the API key (if provided) encrypted in the credential store —
         # never in the git-tracked gateway.yaml.
         if body.get("api_key"):
@@ -779,6 +823,8 @@ class ProviderEndpoints:
         if "models" in body:
             pdata["models"] = body["models"]
         cfg.save()
+        # Best-effort: refresh the models' served context windows.
+        _auto_learn_model_contexts(cfg, name, pdata.get("api_base", ""))
         # See create: request a background cache refresh for this provider.
         from ..api.cost_cache import get_refresher
         refresher = resolve_service("refresher", fallback=get_refresher)

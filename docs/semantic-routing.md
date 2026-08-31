@@ -29,6 +29,43 @@ request ──► classify_task ──► task type ──► CapabilityRouter �
 The classifier emits the same task strings the router has always consumed, so
 the two halves are fully decoupled.
 
+### Context-aware routing
+
+**The router never selects a model whose context window can't hold the
+request.** This is a hard guarantee, layered on top of model selection:
+
+1. **Request size** — the classifier already computes the request's token
+   count (stripped of client-injected context); `select_step` carries it
+   through selection.
+2. **Context gate** — a candidate model is excluded when
+   `request_tokens + output_reserve` exceeds its served `context_window`
+   (read from `model_limits`; 8k reserve for the response). A `prefer` rule
+   that names a too-small model is skipped, and fallback steps that can't fit
+   are dropped from the chain — so a request routes to the **next-best model
+   that fits** instead of failing upstream with `exceed_context_size`.
+3. **Honest advertisement** — `/v1/models` reports the profile's **maximum
+   routable context** (the largest `context_window` among chain models). The
+   router guarantees any request up to that size is servable — if the
+   best-scored model is too small, it falls to a larger one. This is the
+   honest contract: "N tokens" means "a model with ≥ N context will serve it."
+4. **413 fallback** — when a request exceeds *every* model in the chain, the
+   gateway returns a clean `413 Request Too Large` (`RequestTooLargeError`)
+   instead of forwarding to a provider that will 400.
+
+**Context source.** A model's `context_window` comes from
+`config.model_limits`. When a provider is added (or updated) via the UI, the
+gateway **auto-learns** each model's served context from the provider's
+`/models` metadata (`discover_models` — llama.cpp exposes `meta.n_ctx`, the
+served context, e.g. 200192) and upserts it into `model_limits`. Models with
+no entry default to a conservative `128000` so an unknown-capacity local model
+is never sent an oversized request.
+
+**Why advertise the max, not the min.** With per-request context gating, the
+router can always fall to the largest model in the chain, so advertising the
+max is truthful and lets clients use the profile's full long-context capacity
+— while small requests still route to cheaper/smaller models. (Advertising the
+min would be safe but wastefully shrink every client's usable window.)
+
 ### Dependency: benchmark capabilities (LiveBench)
 
 **Semantic routing is only as good as the capability scores it routes by.** It
