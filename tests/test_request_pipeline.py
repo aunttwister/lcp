@@ -189,7 +189,7 @@ class TestTryChainRetry:
         }
         body = {"messages": [{"role": "user", "content": "hi"}]}
 
-        def fake_forward(step, body, config):
+        def fake_forward(step, body, config, session_id=None):
             if step["provider"] == "bad":
                 raise ProviderInternalError("503 from bad")
             return {"choices": []}, 200
@@ -220,7 +220,7 @@ class TestTryChainRetry:
         }
         body = {"messages": [{"role": "user", "content": "hi"}]}
 
-        def fake_forward(step, body, config):
+        def fake_forward(step, body, config, session_id=None):
             raise ProviderInternalError("503 from bad")
 
         with patch("src.api.request_pipeline.forward_request", side_effect=fake_forward) as m:
@@ -338,7 +338,7 @@ class TestTryChainErrorReasonTracked:
         }
         body = {"messages": [{"role": "user", "content": "hi"}]}
 
-        def fake_forward(step, body, config):
+        def fake_forward(step, body, config, session_id=None):
             if step["provider"] == "bad":
                 raise ProviderInternalError("HTTP 503 Service Unavailable")
             return {"choices": []}, 200

@@ -419,12 +419,18 @@ def calculate_cost(provider: str, model: str, body: dict, response_body: dict | 
 
 # ── Request Forwarding ───────────────────────────────────────────────────────
 
-def forward_request(provider_cfg: dict, body: dict, config):
+def forward_request(provider_cfg: dict, body: dict, config, session_id: str | None = None):
     """Forward a request to a provider.
 
     If body['stream'] is True, returns (chunk_iterable, status_code) where
     chunk_iterable yields raw bytes as they arrive from the upstream.
     Otherwise returns (response_body_dict, status_code).
+
+    ``session_id`` (optional): a stable per-conversation identifier forwarded as
+    the ``x-opencode-session`` header. OpenCode requires this header to optimize
+    its service; requests missing it may error (from 2026-09-06). The caller
+    (handler) passes the client's header when present, else a stable per-profile
+    ID so every outbound request carries it.
     """
     api_key = ""
     provider_name = provider_cfg["provider"]
@@ -454,6 +460,8 @@ def forward_request(provider_cfg: dict, body: dict, config):
         "Content-Type": "application/json",
         "User-Agent": "LLMControlPlane/1.0",
     }
+    if session_id:
+        headers["x-opencode-session"] = session_id
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -578,8 +586,19 @@ def _has_healthy_alternative(cb, chain: list[dict], profile_name: str,
     return False
 
 
-def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple[dict, int, str, str]:
-    """Try each provider in the chain. Returns (response, status, provider, model)."""
+def try_chain(profile_name: str, profile_cfg: dict, body: dict, config,
+               warning_sink: list | None = None,
+               session_id: str | None = None) -> tuple[dict, int, str, str]:
+    """Try each provider in the chain. Returns (response, status, provider, model).
+
+    ``warning_sink`` (optional): a list that receives human-readable warnings
+    (e.g. contextual near-limit notices) so the caller can surface them to the
+    client without failing the request. Near-limit requests are NOT hard-413'd
+    — the agent gets a signal instead of a silently truncated history.
+
+    ``session_id`` (optional): stable per-conversation identifier forwarded
+    upstream as ``x-opencode-session`` (see forward_request).
+    """
     cb = resolve_service("circuit_breaker", fallback=get_circuit_breaker)
     # Work on a COPY of the chain — a dynamic-router override must never mutate
     # the profile config in place, or every later request would use the rerouted
@@ -639,10 +658,18 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
         if request_tokens > 0:
             max_ctx = router._max_routable_context(chain, config)
             if request_tokens + _CTX_OUTPUT_RESERVE > max_ctx:
-                raise RequestTooLargeError(
-                    f"Request ({request_tokens} tokens) exceeds the largest "
-                    f"model context ({max_ctx}) in profile '{profile_name}'."
+                logger.warning(
+                    "context_near_limit",
+                    profile=profile_name,
+                    request_tokens=request_tokens,
+                    max_ctx=max_ctx,
                 )
+                if warning_sink is not None:
+                    warning_sink.append(
+                        f"[lcp] request {request_tokens} tokens is at/near the "
+                        f"{max_ctx}-token context limit for profile '{profile_name}'; "
+                        f"history may be truncated and the model may forget earlier turns"
+                    )
     except RequestTooLargeError:
         raise
     except Exception:  # noqa: BLE001 — never let the guard break routing
@@ -748,7 +775,7 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config) -> tuple
         try:
             t0 = time.time()
             resp, status = call_with_retry(
-                lambda: forward_request(step_with_key, body, config),
+                lambda: forward_request(step_with_key, body, config, session_id=session_id),
                 retry_cfg,
             )
             hop_ms = int((time.time() - t0) * 1000)

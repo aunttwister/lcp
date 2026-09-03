@@ -474,6 +474,33 @@ class TestForwardRequestStreaming:
         req = mock_open.call_args[0][0]
         assert "Authorization" not in req.headers
 
+    def test_session_id_adds_opencode_session_header(self, mock_config):
+        """When session_id is provided, forward_request must send it upstream
+        as x-opencode-session (OpenCode requirement, enforced from 2026-09-06)."""
+        body = {"messages": [], "stream": False}
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"ok": true}'
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+                forward_request(self._cfg(), body, mock_config,
+                                session_id="conv_abc123")
+        req = mock_open.call_args[0][0]
+        # urllib capitalizes header names in the Request object
+        assert req.headers.get("X-opencode-session") == "conv_abc123"
+
+    def test_no_session_id_omits_header(self, mock_config):
+        """Backward compatible: without session_id, no x-opencode-session header."""
+        body = {"messages": [], "stream": False}
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"ok": true}'
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+                forward_request(self._cfg(), body, mock_config)
+        req = mock_open.call_args[0][0]
+        assert req.headers.get("x-opencode-session") is None
+
     def test_http_400_raises_bad_request(self, mock_config):
         import urllib.error
         body = {"messages": [], "stream": False}
@@ -738,7 +765,7 @@ class TestTryChainErrorPaths:
         good_resp.status = 200
         good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
 
-        def fake_forward(provider_cfg, body, config):
+        def fake_forward(provider_cfg, body, config, session_id=None):
             if provider_cfg["provider"] == "first":
                 raise ConfigError("missing api_key_env")
             return json.loads(good_resp.read()), 200
@@ -762,7 +789,7 @@ class TestTryChainErrorPaths:
         good_resp.status = 200
         good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
 
-        def fake_forward(provider_cfg, body, config):
+        def fake_forward(provider_cfg, body, config, session_id=None):
             if provider_cfg["provider"] == "first":
                 raise ProviderCreditsError("out of credits: Insufficient balance")
             return json.loads(good_resp.read()), 200
@@ -792,7 +819,7 @@ class TestTryChainErrorPaths:
         good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
         captured = {}
 
-        def fake_forward(provider_cfg, body, config):
+        def fake_forward(provider_cfg, body, config, session_id=None):
             captured["messages"] = list(body.get("messages", []))
             return json.loads(good_resp.read()), 200
 
@@ -825,7 +852,7 @@ class TestTryChainErrorPaths:
         good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
         captured = {}
 
-        def fake_forward(provider_cfg, body, config):
+        def fake_forward(provider_cfg, body, config, session_id=None):
             captured["messages"] = list(body.get("messages", []))
             return json.loads(good_resp.read()), 200
 
@@ -846,7 +873,7 @@ class TestTryChainErrorPaths:
         good_resp.status = 200
         good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
 
-        def fake_forward(provider_cfg, body, config):
+        def fake_forward(provider_cfg, body, config, session_id=None):
             if provider_cfg["provider"] == "first":
                 raise ConfigError("missing api_key_env")
             return json.loads(good_resp.read()), 200
@@ -864,7 +891,7 @@ class TestTryChainErrorPaths:
         good_resp.status = 200
         good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
 
-        def fake_forward(provider_cfg, body, config):
+        def fake_forward(provider_cfg, body, config, session_id=None):
             if provider_cfg["provider"] == "first":
                 from src.api.exceptions import ProviderTimeoutError
                 raise ProviderTimeoutError("unreachable")
@@ -876,11 +903,14 @@ class TestTryChainErrorPaths:
         assert provider == "second"
         assert status == 200
 
-    def test_request_too_large_for_all_models_raises_413(self, chain_config):
-        """When the request exceeds EVERY model's context window, try_chain
-        raises RequestTooLargeError (413) instead of forwarding to a provider
-        that will 400 on exceed_context_size."""
-        from src.api.exceptions import RequestTooLargeError
+    def test_request_too_large_for_all_models_warns_near_limit(self, chain_config):
+        """When the request is near/over EVERY model's context window, try_chain
+        NO LONGER raises RequestTooLargeError — it logs a context_near_limit
+        warning and appends to the warning_sink (surfaced to the client as an
+        X-LCP-Context-Warning header) instead of failing the request before the
+        provider can respond. Acceptance: the agent gets a signal before
+        history is silently truncated, instead of a hard 413."""
+        from unittest.mock import MagicMock
         # Both chain models have a small context; the request is huge.
         chain_config.model_limits = {
             "m1": {"context_window": 4096},
@@ -891,10 +921,12 @@ class TestTryChainErrorPaths:
             "second": {"api_key_env": "KEY", "base_url": "https://second.com/v1", "models": ["m2"]},
         }
         big_body = {"messages": [{"role": "user", "content": "x" * 40000}]}
+        sink: list[str] = []
         with patch("src.api.request_pipeline.forward_request") as mock_fwd:
-            with pytest.raises(RequestTooLargeError):
-                try_chain("l2", chain_config.profiles["l2"], big_body, chain_config)
-        mock_fwd.assert_not_called()
+            mock_fwd.return_value = ({"choices": [{"message": {"role": "assistant", "content": "ok"}}]}, 200)
+            try_chain("l2", chain_config.profiles["l2"], big_body, chain_config, warning_sink=sink)
+        assert sink, "expected a context near-limit warning in the sink"
+        assert "context limit" in sink[0]
 
     def test_commandcode_model_translated_before_forward(self, chain_config):
         """Command Code's bare model names are translated to prefixed API IDs
@@ -906,7 +938,7 @@ class TestTryChainErrorPaths:
         good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
         captured = {}
 
-        def fake_forward(provider_cfg, body, config):
+        def fake_forward(provider_cfg, body, config, session_id=None):
             captured["model"] = body.get("model")
             return json.loads(good_resp.read()), 200
 
@@ -955,7 +987,7 @@ class TestTryChainDynamicRouter:
         good_resp.status = 200
         good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
 
-        def fake_forward(provider_cfg, body, config):
+        def fake_forward(provider_cfg, body, config, session_id=None):
             return json.loads(good_resp.read()), 200
 
         fake_router = MagicMock()
@@ -984,7 +1016,7 @@ class TestTryChainDynamicRouter:
         good_resp.status = 200
         good_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
 
-        def fake_forward(provider_cfg, body, config):
+        def fake_forward(provider_cfg, body, config, session_id=None):
             return json.loads(good_resp.read()), 200
 
         fake_router = MagicMock()

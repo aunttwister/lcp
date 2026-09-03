@@ -617,10 +617,19 @@ class LCPHandler(
 
             streaming = body.get("stream", False)
 
+            # OpenCode requires a stable per-conversation header (`x-opencode-session`).
+            # Forward the client's header when present (Hermes ≥0.21 sends one); else
+            # fall back to a stable per-profile ID so outbound requests always carry it.
+            session_id = self.headers.get("x-opencode-session") or f"lcp-{profile}"
+
             # Try provider chain
+            _warning_sink: list[str] = []
             response_body, status, provider, model = try_chain(
-                profile, profile_cfg, body, self.config
+                profile, profile_cfg, body, self.config, warning_sink=_warning_sink,
+                session_id=session_id,
             )
+            if _warning_sink:
+                self._pending_headers["X-LCP-Context-Warning"] = " | ".join(_warning_sink)
 
             latency_ms = int((time.time() - t0) * 1000)
 
@@ -632,6 +641,8 @@ class LCPHandler(
                 self.send_header("Connection", "close")
                 self.send_header("X-LCP-Cache", "MISS")
                 self.send_header("X-Estimated-Cost", str(estimation["estimated_total_cost"]))
+                if _warning_sink:
+                    self.send_header("X-LCP-Context-Warning", " | ".join(_warning_sink))
                 self.end_headers()
 
                 sse_parts = []
