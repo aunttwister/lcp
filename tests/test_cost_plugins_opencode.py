@@ -399,3 +399,39 @@ class TestOpenCodeFetchSubscription:
         assert result == mock_data
         # Verify the store cookie was passed through
         assert m.call_args[0][0] == "auth=store-cookie"
+
+    def test_no_subscription_surfaces_reason(self, plugin):
+        """Classified no-subscription → error payload says renew, not cookie."""
+        from src.api.cost_plugins.opencode_api import OpenCodeSubscriptionUnavailable
+        store = MagicMock()
+        store.get_cookie.return_value = "auth=test-cookie"
+        with patch("src.api.credential_store.get_credential_store", return_value=store):
+            with patch(
+                "src.api.cost_plugins.opencode_api.fetch_subscription_dict",
+                side_effect=OpenCodeSubscriptionUnavailable(
+                    "no_subscription",
+                    "No active OpenCode subscription (expired or not renewed). Renew at opencode.ai.",
+                ),
+            ):
+                result = plugin.fetch_subscription()
+        assert result is not None
+        assert result["_error"] == "no_subscription"
+        assert "renew" in result["detail"].lower()
+
+    def test_auth_wall_surfaces_auth_failed(self, plugin):
+        """Classified auth → still auth_failed but with specific detail."""
+        from src.api.cost_plugins.opencode_api import OpenCodeSubscriptionUnavailable
+        store = MagicMock()
+        store.get_cookie.return_value = "auth=test-cookie"
+        with patch("src.api.credential_store.get_credential_store", return_value=store):
+            with patch(
+                "src.api.cost_plugins.opencode_api.fetch_subscription_dict",
+                side_effect=OpenCodeSubscriptionUnavailable(
+                    "auth",
+                    "OpenCode session is invalid or expired — refresh the auth cookie in the Usage tab.",
+                ),
+            ):
+                result = plugin.fetch_subscription()
+        assert result is not None
+        assert result["_error"] == "auth_failed"
+        assert "cookie" in result["detail"].lower()

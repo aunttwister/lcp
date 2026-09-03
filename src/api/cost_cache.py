@@ -681,7 +681,9 @@ class CacheRefresher:
         if isinstance(payload, dict) and payload.get("_error"):
             error_kind = payload.get("_error")
             detail = payload.get("detail") or error_kind
-            transient = error_kind != "auth_failed"
+            # Stable conditions (bad cookie, no subscription) do NOT self-heal —
+            # wait until the entry is stale again instead of backing off/hammering.
+            transient = error_kind not in ("auth_failed", "no_subscription")
             self._record_failure(key, error_kind, detail, transient=transient)
             return
         # Success — persist and reset retry state.
