@@ -902,8 +902,9 @@ def test_apply_rules_prefer_min_score_gate(registry_db, monkeypatch):
     assert fired and fired[0]["action"] == "prefer_skipped_low_score"
 
 def test_apply_rules_model_only_prefer(registry_db, monkeypatch):
-    """A rule with only a model (provider '*' wildcard) expands to every
-    provider that serves the model, in chain order."""
+    """A rule with only a model (provider '*' wildcard) expands to every chain
+    step that uses the model, in chain order. The chain is the source of truth:
+    a provider whose chain step uses a different model is NOT expanded."""
     router = _rule_router(registry_db, monkeypatch,
                           [{"task": "*", "action": "prefer",
                             "provider": "*", "model": "deepseek-v4-pro"}])
@@ -911,8 +912,9 @@ def test_apply_rules_model_only_prefer(registry_db, monkeypatch):
              {"provider": "deepseek", "model": "deepseek-v4-pro"}]
     candidates, fired = router._apply_rules(chain, "code_generation", "l2",
                                             _prov_config(REAL_PROVIDERS))
+    # Only deepseek's chain step is pro → deepseek leads; opencode (flash) stays.
     assert candidates[0]["model"] == "deepseek-v4-pro"
-    assert candidates[0]["provider"] == "opencode"  # chain order: opencode first
+    assert candidates[0]["provider"] == "deepseek"
     assert fired and fired[0]["action"] == "prefer"
 
 def test_apply_rules_model_only_block(registry_db, monkeypatch):
@@ -959,9 +961,11 @@ def test_apply_rules_prefer_first_match_wins(registry_db, monkeypatch):
     assert [f["action"] for f in fired] == ["prefer"]
 
 def test_apply_rules_prefer_expands_across_providers(registry_db, monkeypatch):
-    """A prefer rule expands the preferred model to EVERY provider that serves
+    """A prefer rule expands the preferred model to EVERY chain step that uses
     it, in chain order, before the chain's other models. So a degraded provider
-    falls to the NEXT provider of the SAME model — not to a cheaper one."""
+    falls to the NEXT provider of the SAME model — not to a cheaper one. The
+    chain is the source of truth: a provider whose chain step uses a different
+    model (deepseek/flash here) is NOT expanded."""
     router = _rule_router(registry_db, monkeypatch,
                           [{"task": "*", "action": "prefer",
                             "provider": "*", "model": "deepseek-v4-pro"}])
@@ -974,19 +978,19 @@ def test_apply_rules_prefer_expands_across_providers(registry_db, monkeypatch):
     candidates, fired = router._apply_rules(chain, "planning", "coder",
                                             _prov_config(REAL_PROVIDERS))
     models = [c["model"] for c in candidates]
-    # commandcode-pro, deepseek-pro, opencode-pro, then fallbacks.
+    # commandcode-pro, opencode-pro (both pro chain steps), then fallbacks.
     assert models == ["deepseek/deepseek-v4-pro", "deepseek-v4-pro",
-                      "deepseek-v4-pro", "deepseek-v4-flash", "ox-alpha-free"]
+                      "deepseek-v4-flash", "ox-alpha-free"]
     assert [c["provider"] for c in candidates] == [
-        "commandcode", "deepseek", "opencode", "deepseek", "opencode",
+        "commandcode", "opencode", "deepseek", "opencode",
     ]
     assert fired[0]["action"] == "prefer"
-    assert fired[0].get("steps") == 3
+    assert fired[0].get("steps") == 2
 
 def test_select_step_prefer_is_mandatory(registry_db, monkeypatch):
-    """A fired prefer expands the preferred model across providers: even if
-    scoring favors flash, the router returns the preferred model first, tried on
-    every provider that serves it, before any other model."""
+    """A fired prefer expands the preferred model across chain steps that use
+    it: even if scoring favors flash, the router returns the preferred model
+    first, tried on every chain step that uses it, before any other model."""
     rules = [{"task": "planning", "profile": "*", "action": "prefer",
               "provider": "*", "model": "deepseek-v4-pro"}]
     router = _rule_router(registry_db, monkeypatch, rules)
@@ -1001,12 +1005,11 @@ def test_select_step_prefer_is_mandatory(registry_db, monkeypatch):
     out = router.select_step([{"role": "user", "content": "design the architecture"}],
                              chain=chain, profile="coder", config=cfg)
     assert out is not None
-    # pro first on deepseek (chain order), then pro on commandcode, then flash.
-    assert out[0]["provider"] == "deepseek"
-    assert out[0]["model"] == "deepseek-v4-pro"
-    assert out[1]["provider"] == "commandcode"
-    assert out[1]["model"] == "deepseek/deepseek-v4-pro"
-    assert out[2]["model"] == "deepseek-v4-flash"
+    # pro on commandcode (the only pro chain step), then flash fallback.
+    assert out[0]["provider"] == "commandcode"
+    assert out[0]["model"] == "deepseek/deepseek-v4-pro"
+    assert out[1]["provider"] == "deepseek"
+    assert out[1]["model"] == "deepseek-v4-flash"
     dec = router.recent_decisions()[-1]
     assert dec["action"] == "prefer"
     assert dec["rules"] == ["prefer"]
@@ -1054,8 +1057,9 @@ def test_select_step_agentic_system_prompt_still_fires_planning_prefer(registry_
     out = router.select_step(msgs, chain=chain, profile="coder",
                              config=_prov_config(REAL_PROVIDERS))
     assert out is not None
-    # Preferred model expanded: deepseek-pro first (chain order), not flash.
-    assert out[0]["model"] == "deepseek-v4-pro"
+    # Preferred model pinned: commandcode's pro chain step leads (not flash).
+    from src.api.router import logical_model_name
+    assert logical_model_name(out[0]["model"], registry_db) == "deepseek-v4-pro"
     dec = router.recent_decisions()[-1]
     assert dec["task"] == "planning"
     assert dec["action"] == "prefer"
@@ -1064,13 +1068,13 @@ def test_select_step_agentic_system_prompt_still_fires_planning_prefer(registry_
 def test_select_step_filters_unavailable_provider(registry_db, monkeypatch):
     """The circuit breaker only gates PROVIDERS: when a provider is unavailable,
     the router drops its steps entirely, so the ordering never proposes it — and
-    a prefer rule still expands the preferred model across the remaining
-    providers."""
+    a prefer rule still expands the preferred model across the remaining chain
+    steps that use it."""
     rules = [{"task": "planning", "profile": "*", "action": "prefer",
               "provider": "*", "model": "deepseek-v4-pro"}]
     router = _rule_router(registry_db, monkeypatch, rules)
     monkeypatch.setattr(router, "_effective_policy", lambda config: ("eager", 0.0))
-    # commandcode unavailable → its pro step is dropped; deepseek + opencode pro survive.
+    # commandcode unavailable → its pro step is dropped; opencode pro survives.
     monkeypatch.setattr(router, "_provider_available",
                         lambda step, profile=None, config=None:
                         step["provider"] != "commandcode")
@@ -1083,9 +1087,10 @@ def test_select_step_filters_unavailable_provider(registry_db, monkeypatch):
     out = router.select_step(msgs, chain=chain, profile="coder",
                              config=_prov_config(REAL_PROVIDERS))
     assert out is not None
-    # commandcode dropped; pro expanded to deepseek + opencode, then flash.
-    assert [s["provider"] for s in out] == ["deepseek", "opencode", "deepseek"]
-    assert [s["model"] for s in out] == ["deepseek-v4-pro", "deepseek-v4-pro", "deepseek-v4-flash"]
+    # commandcode dropped; pro expanded to opencode (the only pro chain step),
+    # then flash fallback.
+    assert [s["provider"] for s in out] == ["opencode", "deepseek"]
+    assert [s["model"] for s in out] == ["deepseek-v4-pro", "deepseek-v4-flash"]
     assert router.recent_decisions()[-1]["action"] == "prefer"
 
 def test_select_step_audit_note_when_rule_matches_scope_but_not_fired(registry_db, monkeypatch):
@@ -1769,7 +1774,8 @@ def test_flash_prefer_and_scoring_agree(registry_db, monkeypatch):
     """HEADLINE: the prefer (rule) path and the scoring (reorder) path must
     resolve the SAME provider for the same target model. Regression for the
     live divergence: prefer picked commandcode/…flash while reorder picked
-    deepseek/…flash."""
+    deepseek/…flash. Under chain-as-source-of-truth, only deepseek's chain step
+    is flash, so BOTH paths resolve flash on deepseek."""
     chain = [
         {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"},
         {"provider": "deepseek", "model": "deepseek-v4-flash"},
@@ -1804,13 +1810,14 @@ def test_flash_prefer_and_scoring_agree(registry_db, monkeypatch):
     # BOTH must resolve the target model on the SAME first provider (chain order).
     assert (rule_out[0]["provider"], rule_out[0]["model"]) == \
            (score_out[0]["provider"], score_out[0]["model"])
-    assert rule_out[0]["provider"] == "commandcode"
-    assert rule_out[0]["model"] == "deepseek/deepseek-v4-flash"
+    assert rule_out[0]["provider"] == "deepseek"
+    assert rule_out[0]["model"] == "deepseek-v4-flash"
 
 
 def test_degraded_target_provider_falls_to_healthy_same_model(registry_db, monkeypatch):
-    """Among providers serving the target model, healthy providers lead a
-    degraded one — but the model stays the same (no cheaper-model fallback)."""
+    """The flash target resolves to deepseek (the only flash chain step); the
+    degraded commandcode (pro) is a FALLBACK and is ordered after the healthy
+    opencode fallback — the model stays flash (no cheaper-model fallback)."""
     from src.api.circuit_breaker import get_circuit_breaker
     get_circuit_breaker({"failures_dead": 5, "dead_cooldown_seconds": 60,
                          "failures_degraded": 3, "degraded_cooldown_seconds": 60})
@@ -1827,8 +1834,7 @@ def test_degraded_target_provider_falls_to_healthy_same_model(registry_db, monke
     out = router.select_step([{"role": "user", "content": "design the architecture"}],
                              chain=chain, profile="l2", config=_prov_config(REAL_PROVIDERS))
     assert out is not None
-    # Flash target expanded across providers; healthy deepseek/opencode lead
-    # the degraded commandcode.
+    # Flash head on deepseek; healthy opencode fallback leads degraded commandcode.
     assert [s["provider"] for s in out[:3]] == ["deepseek", "opencode", "commandcode"]
     assert out[0]["model"] == "deepseek-v4-flash"
 
@@ -1836,7 +1842,7 @@ def test_degraded_target_provider_falls_to_healthy_same_model(registry_db, monke
 def test_provider_only_prefer_is_tiebreak_not_mandate(registry_db, monkeypatch):
     """A provider-only prefer does NOT force a model — it is a provider
     tiebreak: the model is still chosen by scoring, and the provider leads only
-    because it serves the chosen model."""
+    because its chain step uses the chosen model."""
     rules = [{"task": "*", "action": "prefer", "provider": "opencode"}]
     router = _rule_router(registry_db, monkeypatch, rules)
     router._effective_policy = lambda config: ("eager", 0.0)
@@ -1846,12 +1852,13 @@ def test_provider_only_prefer_is_tiebreak_not_mandate(registry_db, monkeypatch):
     chain = [
         {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"},
         {"provider": "deepseek", "model": "deepseek-v4-flash"},
-        {"provider": "opencode", "model": "deepseek-v4-pro"},
+        {"provider": "opencode", "model": "deepseek-v4-flash"},
     ]
     out = router.select_step([{"role": "user", "content": "hi"}], chain=chain,
                              config=_prov_config(REAL_PROVIDERS))
     assert out is not None
-    # Model still chosen by scoring = flash; opencode serves flash so it leads.
+    # Model still chosen by scoring = flash; opencode's chain step is flash so
+    # the provider tiebreak leads it.
     assert out[0]["model"] == "deepseek-v4-flash"
     assert out[0]["provider"] == "opencode"
     assert router.recent_decisions()[-1]["action"] == "prefer"
@@ -1884,9 +1891,11 @@ def test_prefer_model_served_by_no_provider_falls_through(registry_db, monkeypat
 
 
 def test_build_chain_for_model_deterministic_order(registry_db):
-    """The shared chain-builder emits one target-model step per serving
-    provider (chain order), then non-target steps as fallbacks."""
-    from src.api.router import CapabilityRouter, provider_model_name
+    """The shared chain-builder emits one target-model step per chain step that
+    uses the target (chain order), then non-target steps as fallbacks. The
+    chain is the source of truth: commandcode/opencode (pro steps) are NOT
+    flash targets even though their global models list includes flash."""
+    from src.api.router import CapabilityRouter
     router = CapabilityRouter(enabled=True, db_path=registry_db)
     chain = [
         {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro"},
@@ -1896,14 +1905,43 @@ def test_build_chain_for_model_deterministic_order(registry_db):
     ]
     out = router._build_chain_for_model(chain, "deepseek-v4-flash",
                                         config=_prov_config(REAL_PROVIDERS))
-    heads = out[:3]
-    assert [(s["provider"], s["model"]) for s in heads] == [
-        ("commandcode", provider_model_name("deepseek-v4-flash", "commandcode", registry_db)),
+    # Only deepseek's chain step is flash → it is the sole target head.
+    assert [(s["provider"], s["model"]) for s in out[:1]] == [
         ("deepseek", "deepseek-v4-flash"),
-        ("opencode", "deepseek-v4-flash"),
     ]
     # Non-target original steps remain as fallbacks.
-    assert any(s["model"] == "ox-alpha-free" for s in out[3:])
+    assert any(s["model"] == "ox-alpha-free" for s in out[1:])
+
+
+def test_build_chain_for_model_chain_step_is_source_of_truth(registry_db):
+    """Regression (live L2): commandcode's chain step is glm-5.3-flash, NOT
+    deepseek-v4-flash. Even though commandcode's GLOBAL models list includes
+    deepseek-v4-flash, the router must NOT build a commandcode/deepseek-v4-flash
+    target step — commandcode only appears as a fallback for its own model."""
+    from src.api.router import CapabilityRouter
+    router = CapabilityRouter(enabled=True, db_path=registry_db)
+    chain = [
+        {"provider": "opencode", "model": "deepseek-v4-pro"},
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        {"provider": "commandcode", "model": "z-ai/glm-5.3-flash"},
+        {"provider": "llamacpp", "model": "qwen3.8-flash-next"},
+    ]
+    # commandcode's global models list DOES include deepseek-v4-flash — but the
+    # chain step is glm, so commandcode must not be a flash target.
+    cfg = _prov_config({
+        "opencode": {"models": ["deepseek-v4-pro", "deepseek-v4-flash"]},
+        "deepseek": {"models": ["deepseek-v4-pro", "deepseek-v4-flash"]},
+        "commandcode": {"models": ["deepseek-v4-pro", "deepseek-v4-flash", "z-ai/glm-5.3-flash"]},
+        "llamacpp": {"models": ["qwen3.8-flash-next"]},
+    })
+    out = router._build_chain_for_model(chain, "deepseek-v4-flash", config=cfg)
+    # Only deepseek's chain step is flash → sole target head.
+    assert [(s["provider"], s["model"]) for s in out[:1]] == [
+        ("deepseek", "deepseek-v4-flash"),
+    ]
+    # commandcode (glm) and llamacpp (qwen) are fallbacks, never flash targets.
+    assert "commandcode" not in [s["provider"] for s in out[:1]]
+    assert any(s["provider"] == "commandcode" and "glm" in s["model"] for s in out[1:])
 
 
 def test_build_chain_for_model_orders_funded_provider_first(registry_db, monkeypatch):

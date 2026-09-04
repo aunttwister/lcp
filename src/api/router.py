@@ -1384,61 +1384,39 @@ class CapabilityRouter:
         except Exception:  # noqa: BLE001 — gate must never break routing
             return True
 
-    def _provider_serves_model(self, provider: str, logical_model: str,
-                               config: Optional[object] = None) -> bool:
-        """True when *provider* exposes *logical_model* (per gateway.yaml models).
+    def _provider_credit_status(self, provider: str) -> str:
+        """Ask the provider's cost plugin to interpret its cached payloads.
 
-        Providers with no explicit model list are treated as serving the model
-        (optimistic), so a prefer never silently drops a provider just because
-        its model list is unconfigured. Never raises.
+        Returns ``"funded"`` / ``"drained"`` / ``"unknown"``. The router stays
+        provider-agnostic — each plugin owns its own payload shape (opencode
+        monthly%, commandcode monthly+purchased $, deepseek balance $) via
+        ``CostPlugin.credit_status``. Never raises.
         """
         try:
-            pcfg = (config.providers or {}).get(provider, {}) or {}
-            models = pcfg.get("models") or []
-            if not models:
-                return True
-            for m in models:
-                if logical_model_name(m, self.db_path) == logical_model:
-                    return True
+            from .cost_cache import get_cost_cache
+            from .cost_plugins.base import get_registry
+            from .runtime import resolve_service
+            plugin = resolve_service("pricing", fallback=get_registry).for_provider(provider)
+            if plugin is None:
+                return "unknown"
+            cache = get_cost_cache()
+            if cache is None:
+                return "unknown"
+            sub = cache.get(provider, "subscription")
+            bal = cache.get(provider, "balance")
+            sub_payload = (sub or {}).get("payload") if sub else None
+            bal_payload = (bal or {}).get("payload") if bal else None
+            return plugin.credit_status(sub_payload, bal_payload)
         except Exception:  # noqa: BLE001 — never break routing
-            return True
-        return False
+            return "unknown"
 
     def _credit_bonus(self, provider: str) -> float:
         """Penalty when a provider's cached usage suggests low credits.
 
-        Reads the DB cost cache (never scrapes): opencode monthly% >= 95,
-        commandcode remaining credits <= $5, deepseek balance <= $1.
+        Delegates to the provider's cost plugin (``credit_status``) so the
+        per-provider "drained" heuristics live with the plugin, not the router.
         """
-        try:
-            from .cost_cache import get_cost_cache
-            cache = get_cost_cache()
-            if cache is None:
-                return 0.0
-            sub = cache.get(provider, "subscription")
-            if sub:
-                p = sub["payload"] or {}
-                if p.get("_error"):
-                    return _LOW_CREDIT_PENALTY
-                if provider == "opencode":
-                    mpct = p.get("monthly_pct")
-                    if mpct is not None and mpct >= 95:
-                        return _LOW_CREDIT_PENALTY
-                elif provider == "commandcode":
-                    rem = p.get("monthly_credits_remaining")
-                    if rem is not None and rem <= 5.0:
-                        return _LOW_CREDIT_PENALTY
-            bal = cache.get(provider, "balance")
-            if bal:
-                p = bal["payload"] or {}
-                b = p.get("balance")
-                if isinstance(b, dict):
-                    avail = b.get("available")
-                    if avail is not None and avail <= 1.0:
-                        return _LOW_CREDIT_PENALTY
-        except Exception:  # noqa: BLE001 — tiebreaker must never break routing
-            pass
-        return 0.0
+        return _LOW_CREDIT_PENALTY if self._provider_credit_status(provider) == "drained" else 0.0
 
     def score_step(self, step: dict, task: str, profile: Optional[str] = None,
                    config: Optional[object] = None, bias: Optional[float] = None) -> float:
@@ -1560,26 +1538,20 @@ class CapabilityRouter:
                           request_tokens: int = 0) -> set:
         """All logical models choosable from the (available, unblocked) chain.
 
-        Enumerates the models on the chain steps plus each provider's declared
-        ``models`` list, minus blocked models. Provider-agnostic — the same
-        candidate set regardless of how the provider is eventually resolved.
+        Enumerates the models on the chain steps, minus blocked models.
+        Provider-agnostic — the same candidate set regardless of how the
+        provider is eventually resolved. The CHAIN is the source of truth: a
+        model is a candidate only if some chain step uses it (the provider's
+        global ``models`` list is NOT consulted).
 
         Context gate: with ``request_tokens > 0``, models whose context window
         can't hold the request (+ output reserve) are EXCLUDED — the router must
         never pick a model that will 400 on ``exceed_context_size``.
         """
         cand: set[str] = set()
-        try:
-            providers = (config.providers or {}) if config is not None else {}
-        except Exception:  # noqa: BLE001
-            providers = {}
         for step in chain:
             logical = logical_model_name(step["model"], self.db_path)
             cand.add(logical)
-            if providers:
-                pcfg = providers.get(step["provider"]) or {}
-                for m in pcfg.get("models") or []:
-                    cand.add(logical_model_name(m, self.db_path))
         cand -= blocked_models
         if request_tokens > 0:
             cand = {m for m in cand if self._fits_context(m, request_tokens, config)}
@@ -1641,57 +1613,13 @@ class CapabilityRouter:
         drained one when both serve the target model (a drained provider 400s
         with "insufficient credits" and wastes the attempt).
 
-        Unlike ``_credit_bonus`` (scoring penalty) this is BALANCE-FIRST: an
-        explicit available-credit balance overrides the ``monthly_pct >= 95``
-        heuristic. That matters for opencode, which can be at 100% monthly yet
-        still hold real dollars (e.g. $7.81 available) — it must rank as funded.
+        Delegates to the provider's cost plugin (``credit_status``), which is
+        BALANCE-FIRST for opencode: an explicit available-credit balance
+        overrides the ``monthly_pct >= 95`` heuristic — opencode can be at 100%
+        monthly yet still hold real dollars (e.g. $7.81 available) and must
+        rank as funded.
         """
-        try:
-            from .cost_cache import get_cost_cache
-            cache = get_cost_cache()
-            if cache is None:
-                return 0
-            # Strongest signal: explicit available balance → funded.
-            bal = cache.get(provider, "balance")
-            if bal:
-                p = bal["payload"] or {}
-                avail = p.get("available_credits")
-                if avail is not None and avail > 1.0:
-                    return 0
-                b = p.get("balance")
-                if isinstance(b, dict):
-                    a = b.get("available")
-                    if a is not None and a > 1.0:
-                        return 0
-            # Fall back to subscription heuristics (mirrors _credit_bonus).
-            sub = cache.get(provider, "subscription")
-            if sub:
-                p = sub["payload"] or {}
-                if p.get("_error"):
-                    return 1
-                if provider == "opencode":
-                    mpct = p.get("monthly_pct")
-                    if mpct is not None and mpct >= 95:
-                        return 1
-                elif provider == "commandcode":
-                    rem = p.get("monthly_credits_remaining")
-                    if rem is not None and rem <= 5.0:
-                        return 1
-            # Balance present but drained (<= $1) → drained.
-            bal = cache.get(provider, "balance")
-            if bal:
-                p = bal["payload"] or {}
-                b = p.get("balance")
-                if isinstance(b, dict):
-                    a = b.get("available")
-                    if a is not None and a <= 1.0:
-                        return 1
-                avail = p.get("available_credits")
-                if avail is not None and avail <= 1.0:
-                    return 1
-            return 0
-        except Exception:  # noqa: BLE001 — ordering must never break routing
-            return 0
+        return 1 if self._provider_credit_status(provider) == "drained" else 0
 
     def _build_chain_for_model(self, chain: list, target_model: str,
                                preferred_provider: Optional[str] = None,
@@ -1700,12 +1628,14 @@ class CapabilityRouter:
                                request_tokens: int = 0) -> list:
         """Build the DETERMINISTIC chain for *target_model*.
 
-        Walks the ORIGINAL chain in order, emitting one step per provider that
-        serves the target (provider-model form via the registry), then the
-        original non-target steps as fallbacks (tuple-deduped). Target
-        providers are ordered: ``preferred_provider`` first, then healthy
-        before degraded, then funded before drained (credits) — stable by chain
-        order within each band.
+        Walks the ORIGINAL chain in order, emitting one step per chain step
+        whose model IS the target (provider-model form via the registry), then
+        the original non-target steps as fallbacks (tuple-deduped). The CHAIN
+        is the source of truth: a provider is a target provider for a model
+        only when its chain step uses that model — the provider's global
+        ``models`` list is never consulted. Target providers are ordered:
+        ``preferred_provider`` first, then healthy before degraded, then funded
+        before drained (credits) — stable by chain order within each band.
 
         This is the SINGLE resolver shared by the prefer path and the scoring
         path — so both yield the same provider for the same target model.
@@ -1721,7 +1651,12 @@ class CapabilityRouter:
             if p in seen_providers:
                 continue
             logical = logical_model_name(step["model"], self.db_path)
-            if logical == target_model or self._provider_serves_model(p, target_model, config):
+            # Chain-as-source-of-truth: a provider is a TARGET provider for a
+            # model only when its chain step uses that model. The provider's
+            # global ``models`` list is NOT consulted — if the profile's chain
+            # step for commandcode is glm-5.3-flash, commandcode is never tried
+            # for deepseek-v4-flash (it stays a fallback for its own model).
+            if logical == target_model:
                 seen_providers.add(p)
                 s = {"provider": p,
                      "model": provider_model_name(target_model, p, self.db_path)}
@@ -1872,14 +1807,16 @@ class CapabilityRouter:
         """Resolve ``prefer`` rules to ``(target_model, preferred_provider, fired)``.
 
         - A model prefer (provider wildcard or specific) that passes its
-          ``min_score`` gate and has >= 1 chain provider serving it returns the
-          preferred logical model as ``target_model`` — the chain is then built
-          for it by ``_build_chain_for_model`` (the SAME resolver the scoring
-          path uses, so the provider is deterministic).
+          ``min_score`` gate and has >= 1 chain step using the preferred model
+          returns the preferred logical model as ``target_model`` — the chain
+          is then built for it by ``_build_chain_for_model`` (the SAME resolver
+          the scoring path uses, so the provider is deterministic). The chain
+          is the source of truth: only chain steps whose model IS the preferred
+          model count as serving it.
         - A provider-only prefer is a PROVIDER TIEBREAK, not a model mandate:
           the model is still chosen by scoring, and the provider goes first in
-          the built chain only if it serves the chosen model.
-        - A prefer whose model no provider serves falls through to scoring.
+          the built chain only if its chain step uses the chosen model.
+        - A prefer whose model no chain step uses falls through to scoring.
         """
         rules = self._rules(config, profile)
         fired: list[dict] = []
@@ -1906,7 +1843,7 @@ class CapabilityRouter:
                 serving = [
                     s["provider"] for s in chain
                     if (rp in ("*", "") or s["provider"] == rp)
-                    and self._provider_serves_model(s["provider"], pref_logical, config)
+                    and logical_model_name(s["model"], self.db_path) == pref_logical
                 ]
                 if serving:
                     fired.append({
@@ -1962,12 +1899,15 @@ class CapabilityRouter:
                 })
 
         # Pass 2 — prefers (first-match wins). A prefer rule means "this task
-        # must use the preferred model on EVERY provider that serves it, in the
+        # must use the preferred model on EVERY chain step that uses it, in the
         # chain's provider order, before any other model". We EXPAND the rule to
-        # one step per unique provider (deduped, first-seen order) that serves
-        # the preferred model — so a degraded provider falls to the NEXT provider
-        # of the SAME model, not to a cheaper one. Provider-only prefers (no
-        # model) keep the group-to-front behavior. Later prefers are ignored.
+        # one step per unique provider (deduped, first-seen order) whose chain
+        # step model IS the preferred model — so a degraded provider falls to
+        # the NEXT provider of the SAME model, not to a cheaper one. The chain
+        # is the source of truth: a provider whose chain step uses a different
+        # model is NOT expanded (it stays a fallback). Provider-only prefers
+        # (no model) keep the group-to-front behavior. Later prefers are
+        # ignored.
         for rule in rules:
             if rule.get("action") != "prefer" or not self._rule_matches(rule, task, profile):
                 continue
@@ -1991,8 +1931,8 @@ class CapabilityRouter:
                         })
                         continue
 
-                # One preferred step per unique provider (chain order) that
-                # serves the preferred model.
+                # One preferred step per unique provider (chain order) whose
+                # chain step model IS the preferred model.
                 preferred: list[dict] = []
                 pref_keys: set[tuple] = set()
                 seen: set[str] = set()
@@ -2003,7 +1943,10 @@ class CapabilityRouter:
                     seen.add(p)
                     if rp not in ("*", "") and p != rp:
                         continue
-                    if not self._provider_serves_model(p, pref_logical, config):
+                    # Chain-as-source-of-truth: expand only to chain steps whose
+                    # model IS the preferred model (not the provider's global
+                    # models list).
+                    if logical_model_name(s["model"], self.db_path) != pref_logical:
                         continue
                     model_id = provider_model_name(pref_logical, p, self.db_path)
                     step = {"provider": p, "model": model_id}
@@ -2063,7 +2006,9 @@ class CapabilityRouter:
              policy (``eager``/``cost_first``/``explore``), ``min_score`` floor
           5. build the chain for that model ONCE via ``_build_chain_for_model``
              (preferred provider first, healthy before degraded, original order
-             otherwise; non-target steps as fallbacks)
+             otherwise; non-target steps as fallbacks). The CHAIN is the source
+             of truth: only chain steps whose model IS the target are target
+             providers — a provider's global ``models`` list is never consulted.
 
         Because the prefer path and the scoring path share that single
         chain-builder, they ALWAYS agree on the (provider, model) — the rule

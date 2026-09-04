@@ -565,6 +565,26 @@ class TestForwardRequestStreaming:
                 with pytest.raises(ProviderCreditsError):
                     forward_request(self._cfg(), body, mock_config)
 
+    def test_commandcode_insufficient_credits_raises_credits_error(self, mock_config):
+        """Command Code's exact wording 'insufficient credits' (HTTP 400) must map
+        to ProviderCreditsError, NOT ProviderBadRequestError — so the chain falls
+        through to the next provider instead of aborting with all_providers_failed."""
+        import urllib.error
+        body = {"messages": [], "stream": False}
+        err = urllib.error.HTTPError("url", 400, "Bad Request", {}, None)
+        err.read = MagicMock(return_value=(
+            b'{"error":{"message":"You have insufficient credits to make this '
+            b'request. Please purchase more credits to continue using the '
+            b'service.","type":"invalid_request_error","code":"BAD_REQUEST"}}'
+        ))
+        mock_config.get_provider_key.return_value = None
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", side_effect=err):
+                with pytest.raises(ProviderCreditsError) as exc:
+                    forward_request(self._cfg(), body, mock_config)
+        assert "out of credits" in str(exc.value)
+        assert "insufficient credits" in str(exc.value)
+
     def test_plain_401_body_not_credits(self, mock_config):
         """A plain auth rejection (no credits markers, non-402) stays ProviderAuthError."""
         import urllib.error

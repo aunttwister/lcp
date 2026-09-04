@@ -155,6 +155,21 @@ class DeepSeekCostPlugin(CostPlugin):
         get_logger("lcp.cost.deepseek").debug("balance_fetched", balance=result.get("balance"), currency=result.get("currency"))
         return result
 
+    def credit_status(self, subscription: Optional[dict] = None,
+                      balance: Optional[dict] = None) -> str:
+        """Interpret cached DeepSeek payloads into a credit status.
+
+        DeepSeek exposes a flat ``balance`` (USD). Drained when <= $1.
+        """
+        if balance:
+            b = balance.get("balance")
+            if isinstance(b, (int, float)):
+                return "drained" if b <= 1.0 else "funded"
+            avail = balance.get("available_credits")
+            if isinstance(avail, (int, float)):
+                return "drained" if avail <= 1.0 else "funded"
+        return "unknown"
+
     # ── Rich summary — balance + spent credits ─────────────────────────────
 
     def fetch_summary(self) -> Optional[dict]:

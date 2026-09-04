@@ -178,6 +178,25 @@ class CostPlugin(ABC):
         """
         return None
 
+    # ── Credit status (cached payload interpretation) ──────────────────────
+
+    def credit_status(self, subscription: Optional[dict] = None,
+                      balance: Optional[dict] = None) -> str:
+        """Interpret cached subscription/balance payloads into a credit status.
+
+        The router asks this instead of hardcoding per-provider heuristics —
+        each plugin knows its own payload shape. Returns one of:
+
+          - ``"funded"``  — the account has usable credits
+          - ``"drained"`` — the account is out of usable credits (a request
+            would 400 with "insufficient credits")
+          - ``"unknown"`` — no payload data to judge (treated as funded)
+
+        The base returns ``"unknown"``; providers with a credit signal
+        override it.
+        """
+        return "unknown"
+
     # ── Lifecycle hooks (optional) ─────────────────────────────────────────
 
     def on_startup(self) -> None:
