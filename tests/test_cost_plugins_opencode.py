@@ -435,3 +435,26 @@ class TestOpenCodeFetchSubscription:
         assert result is not None
         assert result["_error"] == "auth_failed"
         assert "cookie" in result["detail"].lower()
+
+    # ── credit_status ─────────────────────────────────────────────────────
+
+    def test_credit_status_balance_first_funded(self, plugin):
+        """Explicit available balance (> $1) → funded even at 100% monthly."""
+        assert plugin.credit_status(
+            {"monthly_pct": 100},
+            {"available_credits": 7.81, "balance": 7.81}) == "funded"
+
+    def test_credit_status_monthly_drained_without_balance(self, plugin):
+        """No balance payload; monthly_pct >= 95 → drained."""
+        assert plugin.credit_status({"monthly_pct": 98}, None) == "drained"
+
+    def test_credit_status_balance_drained(self, plugin):
+        """Balance <= $1 → drained."""
+        assert plugin.credit_status(None, {"available_credits": 0.30, "balance": 0.30}) == "drained"
+
+    def test_credit_status_drained_on_error_payload(self, plugin):
+        assert plugin.credit_status({"_error": "auth_failed"}, None) == "drained"
+
+    def test_credit_status_unknown(self, plugin):
+        assert plugin.credit_status(None, None) == "unknown"
+        assert plugin.credit_status({}, {}) == "unknown"

@@ -217,6 +217,28 @@ class TestDeepSeekFetchBalance:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# credit_status
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestDeepSeekCreditStatus:
+    def setup_method(self):
+        self.plugin = DeepSeekCostPlugin()
+
+    def test_funded_when_balance_above_threshold(self):
+        assert self.plugin.credit_status(None, {"balance": 42.50}) == "funded"
+
+    def test_drained_when_balance_low(self):
+        assert self.plugin.credit_status(None, {"balance": 0.30}) == "drained"
+
+    def test_drained_at_threshold(self):
+        assert self.plugin.credit_status(None, {"balance": 1.0}) == "drained"
+
+    def test_unknown_without_balance(self):
+        assert self.plugin.credit_status(None, None) == "unknown"
+        assert self.plugin.credit_status({}, {}) == "unknown"
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # fetch_summary
 # ═══════════════════════════════════════════════════════════════════════
 

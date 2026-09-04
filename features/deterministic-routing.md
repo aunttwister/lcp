@@ -1,7 +1,8 @@
 # Deterministic Routing — unify rule & scoring provider selection
 
 **Created:** 2026-08-25 (plan, Pro-validated)
-**Status:** implemented 2026-08-26 (commit after `845d31b`)
+**Status:** implemented 2026-08-26 (commit after `845d31b`); **updated
+2026-09-04** — chain-as-source-of-truth (see `features/merit-order.md`)
 **Depends on:** `features/routing-observability.md` backend (rationale capture) +
 `features/routing-judgment.md` (replay) — used to verify the fix on hermes-bridge.
 
@@ -34,27 +35,35 @@ When routing is ON:
 2. Drop dead/tripped providers (breaker hard gate, unchanged).
 3. Apply `block` rules (`_apply_blocks`).
 4. Decide the **target logical model** (provider-agnostic):
-   - a `prefer` rule fires (task/profile + `min_score` gate + ≥1 provider
-     serves it) → target = rule's model;
+   - a `prefer` rule fires (task/profile + `min_score` gate + ≥1 chain step
+     uses it) → target = rule's model;
    - otherwise score **candidate models**: `capability + cost_bias×(1−cost_factor)`
      (`_score_model`, NO health/credit), policy (`eager`/`cost_first`/`explore`)
      picks (`_choose_target_model`), `min_score` floor → `None` (static chain).
 5. Build the chain for that model ONCE via `_build_chain_for_model`:
    walk the original chain in order, emit `{provider, provider_model_name(target,
-   provider)}` per serving provider; preferred provider first, then healthy
-   before degraded (chain order within each band); original non-target steps
-   kept as fallbacks.
+   provider)}` per chain step whose model IS the target (**chain-as-source-of-
+   truth** — the provider's global `models` list is NOT consulted); preferred
+   provider first, then healthy before degraded, then funded before drained
+   (chain order within each band); original non-target steps kept as fallbacks.
 
 Both paths now funnel through the same chain-builder → identical (provider,
-model). For the coder chain with `target = deepseek-v4-flash`:
+model). For the coder chain with `target = deepseek-v4-flash`, only chain steps
+whose model is flash become targets:
 
 ```
-[commandcode/deepseek/deepseek-v4-flash,   # link1 serves flash (registry)
- deepseek/deepseek-v4-flash,               # link2
- opencode/deepseek/deepseek-v4-flash]      # link3 serves flash
-+ [commandcode/deepseek/deepseek-v4-pro,    # fallbacks (original non-target)
+[deepseek/deepseek-v4-flash]              # the only flash chain step
++ [commandcode/deepseek/deepseek-v4-pro,   # fallbacks (original non-target)
    opencode/deepseek-v4-pro, opencode/ox-alpha-free]
 ```
+
+> **2026-09-04 change:** previously the builder emitted a target step per
+> provider whose *global models list* contained the target (e.g. commandcode
+> was a flash target because its `models` list included `deepseek-v4-flash`,
+> even though its chain step was `glm-5.3-flash`). That leaked provider
+> knowledge into the router and produced a `commandcode/…flash` head that 400'd
+> on credits. The chain is now the single source of truth. See
+> `features/merit-order.md`.
 
 ## Rule semantics (minimal change)
 
@@ -62,9 +71,9 @@ model). For the coder chain with `target = deepseek-v4-flash`:
   candidate enumeration).
 - **`policy`** — unchanged (overrides before model selection).
 - **provider-only `prefer`** — a **provider tiebreak**, NOT a model mandate:
-  the model is still chosen by scoring; the provider leads *if* it serves the
-  chosen model. (Forcing a model here would re-create the divergence.)
-- Model-prefer whose model **no provider serves** → falls through to scoring,
+  the model is still chosen by scoring; the provider leads *if* its chain step
+  uses the chosen model. (Forcing a model here would re-create the divergence.)
+- Model-prefer whose model **no chain step uses** → falls through to scoring,
   with `prefer_unserved` in the audit trail.
 
 ## Circuit breaker interaction

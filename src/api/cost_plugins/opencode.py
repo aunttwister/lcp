@@ -336,6 +336,41 @@ class OpenCodeCostPlugin(CostPlugin):
             logger.warning("subscription_fetch_failed", error=str(exc))
             return {"_error": "api_error", "detail": str(exc)}
 
+    def credit_status(self, subscription: Optional[dict] = None,
+                      balance: Optional[dict] = None) -> str:
+        """Interpret cached OpenCode payloads into a credit status.
+
+        Balance-first: an explicit available balance means FUNDED even when the
+        monthly% heuristic would say drained — opencode can sit at 100% monthly
+        yet still hold real dollars (e.g. $7.81 available), and must rank as
+        funded. Without a balance, monthly_pct >= 95 is treated as drained.
+        """
+        if balance:
+            avail = balance.get("available_credits")
+            if avail is not None and avail > 1.0:
+                return "funded"
+            b = balance.get("balance")
+            if isinstance(b, dict):
+                a = b.get("available")
+                if a is not None and a > 1.0:
+                    return "funded"
+        if subscription:
+            if subscription.get("_error"):
+                return "drained"
+            mpct = subscription.get("monthly_pct")
+            if mpct is not None and mpct >= 95:
+                return "drained"
+        if balance:
+            b = balance.get("balance")
+            if isinstance(b, dict):
+                a = b.get("available")
+                if a is not None and a <= 1.0:
+                    return "drained"
+            avail = balance.get("available_credits")
+            if avail is not None and avail <= 1.0:
+                return "drained"
+        return "unknown"
+
 
 
 # ── Auto-register ──────────────────────────────────────────────────────────

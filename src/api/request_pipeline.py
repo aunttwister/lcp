@@ -41,6 +41,7 @@ _CREDITS_MARKERS = (
     "creditserror",
     "insufficient balance",
     "insufficient funds",
+    "insufficient credits",
     "out of credits",
     "no credits",
     "billing",

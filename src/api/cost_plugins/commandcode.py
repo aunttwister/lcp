@@ -476,6 +476,30 @@ class CommandCodeCostPlugin(CostPlugin):
             logger.warning("commandcode_subscription_fetch_failed", error=str(exc))
             return {"_error": "api_error", "detail": str(exc)}
 
+    def credit_status(self, subscription: Optional[dict] = None,
+                      balance: Optional[dict] = None) -> str:
+        """Interpret cached Command Code payloads into a credit status.
+
+        Command Code's "insufficient credits" can mean the MONTHLY plan credits
+        are exhausted, the PURCHASED (top-up) credits are exhausted, or both.
+        The account is drained when monthly + purchased remaining is <= $5.
+        Unknown (no credit fields) is NOT drained.
+        """
+        if subscription:
+            if subscription.get("_error"):
+                return "drained"
+            rem = subscription.get("monthly_credits_remaining")
+            purchased = subscription.get("purchased_credits")
+            if rem is None and purchased is None:
+                return "unknown"
+            total = 0.0
+            if isinstance(rem, (int, float)):
+                total += rem
+            if isinstance(purchased, (int, float)):
+                total += purchased
+            return "drained" if total <= 5.0 else "funded"
+        return "unknown"
+
 
 # ── Auto-register ──────────────────────────────────────────────────────────
 _registry = get_registry()

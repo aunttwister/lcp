@@ -313,6 +313,29 @@ class TestBalanceAndSubscription:
                     result = plugin.fetch_subscription()
         assert result["_error"] == "auth_failed"
 
+    # ── credit_status ─────────────────────────────────────────────────────
+
+    def test_credit_status_drained_when_monthly_and_purchased_low(self, plugin):
+        """Monthly + purchased remaining <= $5 → drained (would 400 on credits)."""
+        assert plugin.credit_status(
+            {"monthly_credits_remaining": 0.12, "purchased_credits": 0.0}) == "drained"
+
+    def test_credit_status_drained_when_purchased_exhausted(self, plugin):
+        """Monthly looks fine but purchased is exhausted → still drained."""
+        assert plugin.credit_status(
+            {"monthly_credits_remaining": 3.0, "purchased_credits": 0.0}) == "drained"
+
+    def test_credit_status_funded_when_credits_remain(self, plugin):
+        assert plugin.credit_status(
+            {"monthly_credits_remaining": 40.19, "purchased_credits": 5.0}) == "funded"
+
+    def test_credit_status_drained_on_error_payload(self, plugin):
+        assert plugin.credit_status({"_error": "auth_failed"}) == "drained"
+
+    def test_credit_status_unknown_without_credit_fields(self, plugin):
+        assert plugin.credit_status({}) == "unknown"
+        assert plugin.credit_status(None, None) == "unknown"
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
