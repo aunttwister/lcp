@@ -189,13 +189,15 @@ class TestLlamaNoPath:
 
 class TestPreferUnservedAndExplore:
     def test_model_prefer_provider_not_serving(self, db):
-        # 2006-2007: provider mismatch check passes (rp='*'), model unserved
+        # 1949-1950 + 1958-1959: chain-as-source-of-truth — the preferred
+        # model's logical name must match a chain step's model; a chain
+        # whose models do NOT include the preferred model yields no
+        # expansion, so the chain is left untouched (no prefer fired).
         from src.api.router import CapabilityRouter
         r = CapabilityRouter(enabled=True, db_path=db)
         chain = [{"provider": "p1", "model": "other"}]
         with patch.object(r, "_rules", return_value=[
-                {"action": "prefer", "model": "mm"}]), \
-             patch.object(r, "_provider_serves_model", return_value=False):
+                {"action": "prefer", "model": "mm"}]):
             cands, fired = r._apply_rules(chain, "coding", "l2")
         assert cands == chain and fired == []
 

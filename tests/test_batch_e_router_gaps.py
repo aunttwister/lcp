@@ -13,8 +13,8 @@ Closes helper + CapabilityRouter branches:
   - CapabilityRouter: load_matrix failure, _has_profile_override settings
     crash, _effective_policy TypeError+crash, _record_decision DB failure,
     recent_decisions DB failure, _health_bonus/_provider_available/
-    _provider_health_rank CB crashes, _provider_serves_model empty models,
-    _credit_bonus error branches, _coerce_context, _context_window_for duck
+    _provider_health_rank CB crashes, prefer chain-as-source-of-truth
+    serving, _credit_bonus error branches, _coerce_context, _context_window_for duck
     config, _fits_context, _candidate_models providers-crash, _choose_target
     _model empty/below-min, _provider_credit_rank balance branches, _rules
     crash/config, _rule_matches variants, _apply_blocks prefer-skip branches,
@@ -328,38 +328,48 @@ class TestRouterGatesGaps:
                    side_effect=RuntimeError("cb gone")):
             assert r._provider_available({"provider": "p"}) is True  # 1384-1385
 
-    def test_provider_serves_model_no_list(self, db):
+    def test_provider_serves_model_chain_truth(self, db):
+        # 325d050: chain-as-source-of-truth — a provider "serves" a model
+        # when a chain step uses it; the provider's global models list is
+        # never consulted (a provider with no list still serves via chain).
         r = _rt(db)
-        cfg = MagicMock()
-        cfg.providers = {"p": {}}
-        assert r._provider_serves_model("p", "any", cfg) is True  # 1398-1399
+        chain = [{"provider": "p", "model": "mm"}]
+        with patch.object(r, "_rules", return_value=[
+                {"action": "prefer", "model": "mm"}]):
+            tm, pp, fired = r._resolve_prefer(chain, "t", "l2", None)
+        assert tm == "mm"
+        assert fired[0]["action"] == "prefer"
+        assert fired[0]["steps"] == 1
 
     def test_credit_bonus_branches(self, db):
         r = _rt(db)
+        plugin = MagicMock()
+        fake_reg = MagicMock()
+        fake_reg.for_provider.return_value = plugin
         cache = MagicMock()
-
-        def _get(prov, kind):
-            if kind == "subscription":
-                return {"payload": {"_error": "auth_failed"}}
-            return None
-        cache.get.side_effect = _get
-        with patch("src.api.cost_cache.get_cost_cache", return_value=cache):
-            assert r._credit_bonus("p") < 0                  # 1422
-        cache.get.side_effect = lambda prov, kind: (
-            {"payload": {"monthly_pct": 99}} if kind == "subscription" else None)
-        with patch("src.api.cost_cache.get_cost_cache", return_value=cache):
-            assert r._credit_bonus("opencode") < 0           # 1424-1426
-        cache.get.side_effect = lambda prov, kind: (
-            {"payload": {"monthly_credits_remaining": 1.0}} if kind == "subscription" else None)
-        with patch("src.api.cost_cache.get_cost_cache", return_value=cache):
-            assert r._credit_bonus("commandcode") < 0        # 1428-1430
-        cache.get.side_effect = lambda prov, kind: (
-            {"payload": {"balance": {"available": 0.5}}} if kind == "balance" else None)
-        with patch("src.api.cost_cache.get_cost_cache", return_value=cache):
-            assert r._credit_bonus("deepseek") < 0           # 1435-1438
+        # Drained via the provider's cost plugin → penalty (< 0).
+        plugin.credit_status.return_value = "drained"
+        with patch("src.api.runtime.resolve_service", return_value=fake_reg), \
+             patch("src.api.cost_cache.get_cost_cache", return_value=cache):
+            assert r._credit_bonus("p") < 0                  # 1419
+        # Funded / unknown → no penalty.
+        plugin.credit_status.return_value = "funded"
+        with patch("src.api.runtime.resolve_service", return_value=fake_reg), \
+             patch("src.api.cost_cache.get_cost_cache", return_value=cache):
+            assert r._credit_bonus("p") == 0.0
+        plugin.credit_status.return_value = "unknown"
+        with patch("src.api.runtime.resolve_service", return_value=fake_reg), \
+             patch("src.api.cost_cache.get_cost_cache", return_value=cache):
+            assert r._credit_bonus("p") == 0.0
+        # No plugin for the provider → unknown → no penalty.
+        fake_reg.for_provider.return_value = None
+        with patch("src.api.runtime.resolve_service", return_value=fake_reg), \
+             patch("src.api.cost_cache.get_cost_cache", return_value=cache):
+            assert r._credit_bonus("p") == 0.0
+        # Cache gone → unknown → no penalty.
         with patch("src.api.cost_cache.get_cost_cache",
                    side_effect=RuntimeError("cache gone")):
-            assert r._credit_bonus("p") == 0.0               # 1439-1440
+            assert r._credit_bonus("p") == 0.0
 
     def test_coerce_context_variants(self, db):
         r = _rt(db)
@@ -398,40 +408,33 @@ class TestRouterGatesGaps:
 
     def test_provider_credit_rank_branches(self, db):
         r = _rt(db)
+        plugin = MagicMock()
+        fake_reg = MagicMock()
+        fake_reg.for_provider.return_value = plugin
         cache = MagicMock()
-        with patch("src.api.cost_cache.get_cost_cache", return_value=None):
-            assert r._provider_credit_rank("p") == 0         # 1652-1653
-        cache.get.side_effect = lambda p, k: (
-            {"payload": {"available_credits": 50}} if k == "balance" else None)
-        with patch("src.api.cost_cache.get_cost_cache", return_value=cache):
-            assert r._provider_credit_rank("p") == 0         # 1658-1660
-        cache.get.side_effect = lambda p, k: (
-            {"payload": {"balance": {"available": 9}}} if k == "balance" else None)
-        with patch("src.api.cost_cache.get_cost_cache", return_value=cache):
-            assert r._provider_credit_rank("p") == 0         # 1662-1665
-        cache.get.side_effect = lambda p, k: (
-            {"payload": {"_error": "x"}} if k == "subscription" else None)
-        with patch("src.api.cost_cache.get_cost_cache", return_value=cache):
-            assert r._provider_credit_rank("p") == 1         # 1670-1671
-        cache.get.side_effect = lambda p, k: (
-            {"payload": {"monthly_pct": 97}} if k == "subscription" else None)
-        with patch("src.api.cost_cache.get_cost_cache", return_value=cache):
-            assert r._provider_credit_rank("opencode") == 1  # 1673-1675
-        cache.get.side_effect = lambda p, k: (
-            {"payload": {"monthly_credits_remaining": 2.0}} if k == "subscription" else None)
-        with patch("src.api.cost_cache.get_cost_cache", return_value=cache):
-            assert r._provider_credit_rank("commandcode") == 1  # 1677-1679
-        cache.get.side_effect = lambda p, k: (
-            {"payload": {"balance": {"available": 0.1}}} if k == "balance" else None)
-        with patch("src.api.cost_cache.get_cost_cache", return_value=cache):
-            assert r._provider_credit_rank("p") == 1         # 1685-1688
-        cache.get.side_effect = lambda p, k: (
-            {"payload": {"available_credits": 0.2}} if k == "balance" else None)
-        with patch("src.api.cost_cache.get_cost_cache", return_value=cache):
-            assert r._provider_credit_rank("p") == 1         # 1689-1691
+        # Drained → rank 1 (chain ordering prefers funded providers).
+        plugin.credit_status.return_value = "drained"
+        with patch("src.api.runtime.resolve_service", return_value=fake_reg), \
+             patch("src.api.cost_cache.get_cost_cache", return_value=cache):
+            assert r._provider_credit_rank("p") == 1         # 1622
+        # Funded / unknown → rank 0.
+        plugin.credit_status.return_value = "funded"
+        with patch("src.api.runtime.resolve_service", return_value=fake_reg), \
+             patch("src.api.cost_cache.get_cost_cache", return_value=cache):
+            assert r._provider_credit_rank("p") == 0
+        plugin.credit_status.return_value = "unknown"
+        with patch("src.api.runtime.resolve_service", return_value=fake_reg), \
+             patch("src.api.cost_cache.get_cost_cache", return_value=cache):
+            assert r._provider_credit_rank("p") == 0
+        # No plugin for the provider → unknown → rank 0.
+        fake_reg.for_provider.return_value = None
+        with patch("src.api.runtime.resolve_service", return_value=fake_reg), \
+             patch("src.api.cost_cache.get_cost_cache", return_value=cache):
+            assert r._provider_credit_rank("p") == 0
+        # Cache gone → unknown → rank 0.
         with patch("src.api.cost_cache.get_cost_cache",
                    side_effect=RuntimeError("boom")):
-            assert r._provider_credit_rank("p") == 0         # 1693-1694
+            assert r._provider_credit_rank("p") == 0
 
 
 # ── CapabilityRouter: rules ──────────────────────────────────────────────────
@@ -507,11 +510,10 @@ class TestRouterRulesGaps:
         chain = [{"provider": "p", "model": "m"}]
         with patch.object(r, "_rules", return_value=[
             {"action": "prefer", "model": "target"},
-        ]), patch.object(r, "_provider_serves_model", return_value=False), \
-             patch.object(R, "logical_model_name", return_value="target"):
+        ]):
             tm, pp, fired = r._resolve_prefer(chain, "t", "l2", None)
         assert tm is None
-        assert fired[-1]["action"] == "prefer_unserved"       # 1918-1919
+        assert fired[-1]["action"] == "prefer_unserved"       # 1855-1856
 
     def test_resolve_prefer_provider_only(self, db):
         r = _rt(db)

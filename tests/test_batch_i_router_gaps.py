@@ -146,12 +146,13 @@ class TestApplyRulesNoTarget:
         assert cands == chain and fired == []            # preferred empty → 2016
 
     def test_prefer_base_url_carried(self, db):
-        # 2011: expanded step copies base_url from the chain step
+        # 1953-1954: expanded step copies base_url from the chain step
+        # (chain-as-source-of-truth — the chain's model must be the
+        # preferred logical model for the expansion to happen at all).
         r = _rt(db)
-        chain = [{"provider": "p", "model": "other", "base_url": "https://b/v1"}]
+        chain = [{"provider": "p", "model": "mm", "base_url": "https://b/v1"}]
         with patch.object(r, "_rules", return_value=[
                 {"action": "prefer", "model": "mm"}]), \
-             patch.object(r, "_provider_serves_model", return_value=True), \
              patch("src.api.router.provider_model_name", return_value="api-mm"):
             cands, fired = r._apply_rules(chain, "coding", "l2")
         assert cands[0]["base_url"] == "https://b/v1"
