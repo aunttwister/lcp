@@ -298,7 +298,10 @@ class OpenCodeCostPlugin(CostPlugin):
                     "rolling_pct": 17.0, "rolling_reset_sec": 5944,
                     "weekly_pct": 75.0, "weekly_reset_sec": 278201,
                 }
-            from .opencode_api import fetch_subscription_dict
+            from .opencode_api import (
+                OpenCodeSubscriptionUnavailable,
+                fetch_subscription_dict,
+            )
             cookie = ""
             workspace_id = ""
             # Cookie + workspace ID from the encrypted credential store (UI-managed)
@@ -314,7 +317,17 @@ class OpenCodeCostPlugin(CostPlugin):
             if not cookie:
                 logger.debug("opencode_cookie_not_configured")
                 return {"_error": "auth_failed", "detail": "OpenCode cookie not set — add it in the Usage tab"}
-            data = fetch_subscription_dict(cookie, workspace_id=workspace_id or None)
+            try:
+                data = fetch_subscription_dict(cookie, workspace_id=workspace_id or None)
+            except OpenCodeSubscriptionUnavailable as exc:
+                # Classified absence — surface the specific, actionable reason
+                # (no active subscription vs expired session) to the UI/log.
+                logger.warning(
+                    "opencode_subscription_unavailable",
+                    reason=exc.reason,
+                )
+                error_kind = "auth_failed" if exc.reason == "auth" else exc.reason
+                return {"_error": error_kind, "detail": exc.detail}
             if data is None:
                 logger.warning("subscription_fetch_returned_none")
                 return {"_error": "auth_failed", "detail": "Invalid or expired OpenCode cookie, or API unreachable"}

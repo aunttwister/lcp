@@ -1,10 +1,13 @@
 """Tests for src/api/cost_plugins/opencode_api.py — SSR parser and HTTP client."""
+import pytest
 from unittest.mock import MagicMock, patch
 
 
 from src.api.cost_plugins.opencode_api import (
+    OpenCodeSubscriptionUnavailable,
     SubscriptionSnapshot,
     _base_headers,
+    _classify_subscription_absence,
     _extract_workspace_ids,
     _http_get,
     _parse_ssr_subscription,
@@ -149,6 +152,46 @@ class TestParseSsrSubscription:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# _classify_subscription_absence
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestClassifySubscriptionAbsence:
+    """Tests for _classify_subscription_absence()."""
+
+    def test_detects_no_subscription_null_marker(self):
+        """subscription:null in an authenticated shell → no_subscription."""
+        text = (
+            'window._HY && session.get; '
+            'billing.get[\"wrk_1\"]={"subscription":null,'
+            '"subscriptionID":null,"subscriptionPlan":null}'
+        )
+        reason, detail = _classify_subscription_absence(text)
+        assert reason == "no_subscription"
+        assert "renew" in detail.lower()
+
+    def test_detects_auth_wall_when_no_session_and_login_markers(self):
+        """Signed-out marketing page (no session SSR, login markers) → auth."""
+        text = (
+            '<html data-locale="en">'  
+            '<a href="/login">Sign in</a> © 2026 anoma.ly social-share.png'
+        )
+        reason, detail = _classify_subscription_absence(text)
+        assert reason == "auth"
+        assert "cookie" in detail.lower()
+
+    def test_returns_parse_default_for_garbage(self):
+        reason, detail = _classify_subscription_absence("<html>no data</html>")
+        assert reason == "parse"
+
+    def test_returns_parse_when_session_present_but_no_subscription_marker(self):
+        """Authenticated shell w/o explicit null marker and w/o login markers → parse."""
+        text = 'session.get["wrk_1"]={{"some":"data"}}'
+        reason, _detail = _classify_subscription_absence(text)
+        assert reason == "parse"
+
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # SubscriptionSnapshot
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -279,11 +322,38 @@ class TestFetchSubscription:
             assert fetch_subscription("cookie", workspace_id="wrk_1") is None
 
     def test_parse_failure_returns_none(self):
+        """Unrecognized page content → returns None (not raised)."""
         with patch("src.api.cost_plugins.opencode_api._http_get",
                    return_value="<html>no data</html>"):
             with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
                        return_value=None):
                 assert fetch_subscription("cookie", workspace_id="wrk_1") is None
+
+    def test_no_subscription_page_raises_unavailable(self):
+        """Authenticated shell with subscription:null → raises typed error."""
+        page = (
+            'session.get["wrk_1"]; '
+            'billing.get[\"wrk_1\"]={"subscription":null,'
+            '"subscriptionID":null,"subscriptionPlan":null}'
+        )
+        with patch("src.api.cost_plugins.opencode_api._http_get",
+                   return_value=page):
+            with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                       return_value=None):
+                with pytest.raises(OpenCodeSubscriptionUnavailable) as ei:
+                    fetch_subscription("cookie", workspace_id="wrk_1")
+        assert ei.value.reason == "no_subscription"
+
+    def test_auth_wall_page_raises_unavailable(self):
+        """Signed-out marketing page → raises typed error with auth reason."""
+        page = '<html><a href="/login">Sign in</a> © 2026 anoma.ly</html>'
+        with patch("src.api.cost_plugins.opencode_api._http_get",
+                   return_value=page):
+            with patch("src.api.cost_plugins.opencode_api._parse_ssr_subscription",
+                       return_value=None):
+                with pytest.raises(OpenCodeSubscriptionUnavailable) as ei:
+                    fetch_subscription("cookie", workspace_id="wrk_1")
+        assert ei.value.reason == "auth"
 
     def test_fraction_percentages_scaled(self):
         """Values in (0,1) are treated as fractions and multiplied by 100."""

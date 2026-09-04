@@ -26,14 +26,15 @@ Usage::
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
-logger = logging.getLogger("lcp.cost.commandcode_api")
+from ..logging_config import get_logger
+
+logger = get_logger("lcp.cost.commandcode_api")
 
 _COMMANDCODE_BASE = "https://api.commandcode.ai"
 _WEB_ORIGIN = "https://commandcode.ai"
@@ -343,18 +344,18 @@ def fetch_subscription_snapshot(cookie: Optional[str]) -> Optional[CommandCodeSu
         credits_payload = _http_get_json(credits_url, headers)
     except HTTPError as exc:
         if exc.code in (401, 403):
-            logger.warning("commandcode_auth_failed status=%s", exc.code)
+            logger.warning("commandcode_auth_failed", status=exc.code)
             return None
-        logger.warning("commandcode_credits_http_error status=%s", exc.code)
+        logger.warning("commandcode_credits_http_error", status=exc.code)
         return None
     except (URLError, OSError, json.JSONDecodeError, ValueError) as exc:
-        logger.warning("commandcode_credits_fetch_failed: %s", str(exc))
+        logger.warning("commandcode_credits_fetch_failed", error=str(exc))
         return None
 
     try:
         credits = _parse_credits(credits_payload)
     except Exception as exc:
-        logger.warning("commandcode_credits_parse_failed: %s", str(exc))
+        logger.warning("commandcode_credits_parse_failed", error=str(exc))
         return None
 
     # ── Fetch subscription (best-effort enrichment) ────────────────────
@@ -365,7 +366,7 @@ def fetch_subscription_snapshot(cookie: Optional[str]) -> Optional[CommandCodeSu
         plan_id, plan_status, period_end = _parse_subscription(sub_payload)
     except Exception as exc:
         # Subscription enrichment is optional — credits still usable.
-        logger.warning("commandcode_subscription_fetch_failed: %s", str(exc))
+        logger.warning("commandcode_subscription_fetch_failed", error=str(exc))
 
     # ── Fetch usage totals (best-effort) ───────────────────────────────
     usage_summary: dict = {}
@@ -374,12 +375,12 @@ def fetch_subscription_snapshot(cookie: Optional[str]) -> Optional[CommandCodeSu
         summary_url = _COMMANDCODE_BASE + _USAGE_SUMMARY_PATH
         usage_summary = _parse_usage_summary(_http_get_json(summary_url, headers))
     except Exception as exc:
-        logger.warning("commandcode_usage_summary_fetch_failed: %s", str(exc))
+        logger.warning("commandcode_usage_summary_fetch_failed", error=str(exc))
     try:
         usage_url = _COMMANDCODE_BASE + _USAGE_PATH + "?limit=10"
         recent_runs = _parse_usage_list(_http_get_json(usage_url, headers))
     except Exception as exc:
-        logger.warning("commandcode_usage_list_fetch_failed: %s", str(exc))
+        logger.warning("commandcode_usage_list_fetch_failed", error=str(exc))
 
     # ── Derive monthly usage % ─────────────────────────────────────────
     monthly_pct, monthly_used, monthly_cap = _derive_monthly(

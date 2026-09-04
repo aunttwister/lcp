@@ -734,9 +734,12 @@ function buildPage(providers) {
                     '</div>' +
                     '</div>';
                 if (sub._error) {
-                    var errMsg = sub._error === 'auth_failed'
-                        ? 'OpenCode subscription data unavailable — cookie missing or invalid. Paste the auth cookie above to enable usage progress bars.'
-                        : 'OpenCode subscription API error: ' + (sub.detail || 'unknown');
+                    var errMsg = 'OpenCode subscription API error: ' + (sub.detail || 'unknown');
+                    if (sub._error === 'no_subscription') {
+                        errMsg = 'No active OpenCode subscription — renew at opencode.ai to restore usage progress bars.';
+                    } else if (sub._error === 'auth_failed') {
+                        errMsg = 'OpenCode subscription data unavailable — cookie missing or invalid. Paste the auth cookie above to enable usage progress bars.';
+                    }
                     panelsHtml += '<div class="stat-card" style="border-left:3px solid #f97316;margin-bottom:1rem"><div class="label" style="color:#f97316">⚠ Subscription Status</div><div class="value" style="font-size:0.85rem;font-weight:400">' + errMsg + '</div></div>';
                 }
 

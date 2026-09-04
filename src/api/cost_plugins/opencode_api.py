@@ -15,7 +15,6 @@ Usage::
 
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -23,7 +22,9 @@ from typing import Optional
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
-logger = logging.getLogger("lcp.cost.opencode_api")
+from ..logging_config import get_logger
+
+logger = get_logger("lcp.cost.opencode_api")
 
 _OPENCODE_BASE = "https://opencode.ai"
 
@@ -145,34 +146,74 @@ def _parse_ssr_subscription(text: str) -> Optional[dict]:
     if "rolling_pct" in result and "rolling_reset_sec" in result:
         return result
 
-    # Debug: log a snippet around any usage-like patterns for diagnosis
-    _debug_ssr_failure(block)
     return None
 
 
-def _debug_ssr_failure(text: str) -> None:
-    """Log snippets of the SSR text for diagnosis — inlined into the message
-    because structlog JSON output does not render ``extra`` keys."""
-    for kw in ("rollingUsage", "weeklyUsage", "monthlyUsage", "usagePercent",
-               "resetInSec", "subscription"):
-        idx = text.find(kw)
-        if idx >= 0:
-            start = max(0, idx - 100)
-            end = min(len(text), idx + 300)
-            snippet = text[start:end].replace("\n", "\\n").replace("\r", "")
-            logger.warning(
-                "opencode_ssr_context keyword=%s snippet=%s",
-                kw, snippet[:500],
-            )
-            return
+# ── Absence classification ─────────────────────────────────────────────────
+# When the /go page loads but yields no usage SSR data, these helpers decide
+# WHY, so the caller can log a concise reason (and surface a specific message)
+# instead of dumping the raw page.
 
-    # Nothing found at all — dump first and last chunks of the page.
-    head = text[:1500].replace("\n", "\\n")
-    tail = text[-1500:].replace("\n", "\\n")
-    logger.warning(
-        "opencode_ssr_no_usage_found head=%s tail=%s",
-        head, tail,
+# A rendered (authenticated) workspace shell that has NO active subscription —
+# the subscription object is explicitly null on the OpenCode/Anomaly page.
+_SUBSCRIPTION_NULL_MARKERS = (
+    "subscription:null",
+    "subscriptionid:null",
+    "subscriptionplan:null",
+    '"subscription":null',
+    "litesubscriptionid:null",
+)
+# SolidJS SSR session/user markers present on an authenticated app shell.
+_SSR_SESSION_MARKERS = ("session.get", "useremail", "workspaces[", "_$HY")
+# Markers typical of a signed-out marketing / login wall.
+_LOGIN_PAGE_MARKERS = (
+    "sign in", "log in", "log-in", "login", "anoma.ly", "social-share.png",
+)
+
+
+def _classify_subscription_absence(text: str) -> tuple[str, str]:
+    """Classify why a /go page contained no subscription usage data.
+
+    Returns ``(reason, detail)`` with ``reason`` one of:
+      - ``no_subscription`` — authenticated shell, subscription object is null
+        (expired / not renewed); renew to restore usage bars.
+      - ``auth``            — page looks like a signed-out / login wall; the
+        auth cookie is missing or no longer valid.
+      - ``parse``           — layout drift; nothing we recognise (default).
+    """
+    low = text.lower()
+    if any(m in low for m in _SUBSCRIPTION_NULL_MARKERS):
+        return (
+            "no_subscription",
+            "No active OpenCode subscription (expired or not renewed). "
+            "Renew at opencode.ai to restore usage tracking.",
+        )
+    has_ssr_session = any(m in low for m in _SSR_SESSION_MARKERS)
+    looks_like_login = any(m in low for m in _LOGIN_PAGE_MARKERS)
+    if not has_ssr_session and looks_like_login:
+        return (
+            "auth",
+            "OpenCode session is invalid or expired — refresh the auth "
+            "cookie in the Usage tab.",
+        )
+    return (
+        "parse",
+        "OpenCode changed its usage page layout — subscription usage could "
+        "not be read.",
     )
+
+
+class OpenCodeSubscriptionUnavailable(Exception):
+    """Raised when the /go page loaded but subscription data is absent.
+
+    Carries a machine-readable ``reason`` (``no_subscription`` / ``auth`` /
+    ``parse``) and a user-facing ``detail`` string.
+    """
+
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(detail)
+        self.reason = reason
+        self.detail = detail
 
 
 # ── Billing SSR parsing ────────────────────────────────────────────────────
@@ -283,8 +324,8 @@ def _parse_ssr_billing(text: str) -> Optional[dict]:
 
     if skipped:
         logger.warning(
-            "opencode_billing_skipped_implausible keys=%s",
-            [(k, v) for k, v in skipped],
+            "opencode_billing_skipped_implausible",
+            keys=[(k, v) for k, v in skipped],
         )
 
     available: Optional[float] = None
@@ -308,25 +349,16 @@ def _parse_ssr_billing(text: str) -> Optional[dict]:
 
 
 def _debug_billing_failure(text: str) -> None:
-    """Log a snippet of the billing SSR text for diagnosis."""
+    """Log a short snippet of the billing SSR text for diagnosis (debug only)."""
     for kw in ("availableCredits", "creditBalance", "balance", "credits",
                "plan", "billing"):
         idx = text.find(kw)
         if idx >= 0:
             start = max(0, idx - 120)
-            end = min(len(text), idx + 320)
-            snippet = text[start:end].replace("\n", "\\n").replace("\r", "")
-            logger.warning(
-                "opencode_billing_ssr_context keyword=%s snippet=%s",
-                kw, snippet[:500],
-            )
+            snippet = text[start:idx + 200].replace("\n", "\\n").replace("\r", "")
+            logger.debug("opencode_billing_ssr_context", keyword=kw, snippet=snippet)
             return
-    head = text[:1500].replace("\n", "\\n")
-    tail = text[-1500:].replace("\n", "\\n")
-    logger.warning(
-        "opencode_billing_ssr_no_credits_found head=%s tail=%s",
-        head, tail,
-    )
+    logger.debug("opencode_billing_ssr_no_credits_found")
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
@@ -355,7 +387,7 @@ def fetch_billing(cookie: Optional[str], workspace_id: Optional[str] = None) -> 
             if ids:
                 workspace_id = ids[0]
         except (URLError, OSError) as exc:
-            logger.warning("opencode_dashboard_fetch_failed: %s", str(exc))
+            logger.warning("opencode_dashboard_fetch_failed", error=str(exc))
             return None
 
     if not workspace_id:
@@ -368,16 +400,14 @@ def fetch_billing(cookie: Optional[str], workspace_id: Optional[str] = None) -> 
         url = f"{_OPENCODE_BASE}/workspace/{workspace_id}/billing"
         raw = _http_get(url, headers)
     except (URLError, OSError) as exc:
-        logger.warning("opencode_billing_page_fetch_failed: %s", str(exc))
+        logger.warning("opencode_billing_page_fetch_failed", error=str(exc))
         return None
 
     result = _parse_ssr_billing(raw)
     if result is None:
-        head = raw[:2000].replace("\n", "\\n")
-        tail = raw[-2000:].replace("\n", "\\n")
         logger.warning(
-            "opencode_billing_parse_failed len=%d head=%s tail=%s",
-            len(raw), head, tail,
+            "opencode_billing_parse_failed",
+            page_len=len(raw),
         )
         return None
 
@@ -429,7 +459,7 @@ def fetch_subscription(cookie: Optional[str], workspace_id: Optional[str] = None
             if ids:
                 workspace_id = ids[0]
         except (URLError, OSError) as exc:
-            logger.warning("opencode_dashboard_fetch_failed: %s", str(exc))
+            logger.warning("opencode_dashboard_fetch_failed", error=str(exc))
             return None
 
     if not workspace_id:
@@ -442,17 +472,19 @@ def fetch_subscription(cookie: Optional[str], workspace_id: Optional[str] = None
         url = f"{_OPENCODE_BASE}/workspace/{workspace_id}/go"
         raw = _http_get(url, headers)
     except (URLError, OSError) as exc:
-        logger.warning("opencode_go_page_fetch_failed: %s", str(exc))
+        logger.warning("opencode_go_page_fetch_failed", error=str(exc))
         return None
 
     result = _parse_ssr_subscription(raw)
     if result is None:
-        head = raw[:2000].replace("\n", "\\n")
-        tail = raw[-2000:].replace("\n", "\\n")
+        reason, detail = _classify_subscription_absence(raw)
         logger.warning(
-            "opencode_subscription_parse_failed len=%d head=%s tail=%s",
-            len(raw), head, tail,
+            "opencode_subscription_unavailable",
+            reason=reason,
+            page_len=len(raw),
         )
+        if reason in ("no_subscription", "auth"):
+            raise OpenCodeSubscriptionUnavailable(reason, detail)
         return None
 
     # Heuristic: if percent < 1, multiply by 100 (fraction → percentage).
