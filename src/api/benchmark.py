@@ -220,13 +220,18 @@ def benchmark_status() -> dict:
             "categories": list(LIVEBENCH_CATEGORIES),
             "coding_supported": False,
         }
+    try:
+        from .setup import livebench_site
+        site = livebench_site()
+    except Exception:
+        site = None
     return {
         "available": True,
         "reason": None,
         "livebench_dir": path,
         "categories": list(LIVEBENCH_CATEGORIES),
         "coding_supported": coding_deps_available(),
-        "core_installed": core_deps_available(),
+        "core_installed": core_deps_available(site=site),
     }
 
 
@@ -262,6 +267,7 @@ def build_livebench_commands(
     categories: Optional[list[str]] = None,
     livebench_path: Optional[str] = None,
     release: str = DEFAULT_LIVEBENCH_RELEASE,
+    parallel: Optional[int] = None,
 ) -> list[list[str]]:
     """Build the LiveBench subprocess argv lists for a model run.
 
@@ -273,6 +279,10 @@ def build_livebench_commands(
     (``LIVEBENCH_CATEGORIES``); otherwise one scope per requested category
     (``live_bench/<category>``). The full ``live_bench`` scope is never used
     because it would pull in Docker-requiring agentic coding.
+
+    ``parallel`` (optional) sets the number of concurrent API requests
+    (``--parallel-requests N``) inside gen_api_answer — the worker otherwise
+    runs 1 request at a time. Pass ``None``/``1`` for sequential.
     """
     path = livebench_path or livebench_dir()
     if not path:
@@ -289,14 +299,17 @@ def build_livebench_commands(
 
     commands: list[list[str]] = []
     for scope in scopes:
-        commands.append([
+        run_cmd = [
             "python", runner,
             "--model", model,
             "--api-base", api_base,
             "--api-key", api_key,
             "--bench-name", scope,
             "--livebench-release-option", release,
-        ])
+        ]
+        if parallel is not None and int(parallel) > 1:
+            run_cmd += ["--parallel-requests", str(int(parallel))]
+        commands.append(run_cmd)
         commands.append([
             "python", shower,
             "--model-list", model,
@@ -522,12 +535,17 @@ def queue_benchmark(
     target_kind: str,
     target: dict,
     categories: Optional[list[str]] = None,
+    parallel: Optional[int] = None,
 ) -> dict:
     """Queue a benchmark run. Returns the run record (status=queued).
 
     Validates the target kind, target shape, and categories up front so a bad
     request fails synchronously (the caller sees the error) instead of
     producing a silently-failed background run.
+
+    ``parallel`` (optional) is the number of concurrent API requests for
+    answer generation (1 = sequential). Stored inside ``target_json`` so the
+    run record carries it and the worker can apply it.
     """
     from .models import BenchmarkRun, get_session
 
@@ -540,6 +558,16 @@ def queue_benchmark(
     if target_kind == "provider":
         if not isinstance(target, dict) or not target.get("provider") or not target.get("model"):
             raise ValueError("provider target requires 'provider' and 'model'")
+
+    if parallel is not None:
+        try:
+            parallel = int(parallel)
+        except (TypeError, ValueError):
+            raise ValueError("invalid 'parallel': must be an integer")
+        if parallel < 1 or parallel > 64:
+            raise ValueError("invalid 'parallel': must be between 1 and 64")
+        # Carry it inside the target spec so the worker sees it.
+        target = {**target, "parallel": parallel}
 
     with get_session(engine) as session:
         run = BenchmarkRun(
@@ -689,13 +717,15 @@ def _execute_run(run_id: int, engine, config) -> None:
         session.commit()
 
     try:
+        from .setup import livebench_pythonpath, livebench_site
+
         if target_kind != "provider":
             raise RuntimeError(
                 f"target_kind {target_kind!r} is not implemented yet "
                 f"(only 'provider' benchmarks the raw model directly)"
             )
 
-        if not core_deps_available():
+        if not core_deps_available(site=livebench_site()):
             raise RuntimeError(
                 "LiveBench core package is not installed (missing libtmux). "
                 "Run the Setup → LiveBench install to pip install the "
@@ -712,7 +742,6 @@ def _execute_run(run_id: int, engine, config) -> None:
         # (<modules_dir>/site) and the livebench package resolves via the repo
         # root. Prepend both to PYTHONPATH for the benchmark subprocesses.
         env = dict(os.environ)
-        from .setup import livebench_pythonpath
         module_path = livebench_pythonpath()
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = module_path if not existing else f"{module_path}{os.pathsep}{existing}"
@@ -723,6 +752,7 @@ def _execute_run(run_id: int, engine, config) -> None:
             api_key=api_key,
             categories=categories,
             livebench_path=checkout,
+            parallel=target.get("parallel") if isinstance(target, dict) else None,
         )
 
         # LiveBench's scripts are path-sensitive: run_livebench.py invokes

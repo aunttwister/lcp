@@ -213,10 +213,14 @@ const API = {
     const r = await fetch('/api/models/benchmark/status');
     return r.json();
   },
-  async runBenchmark(provider, model) {
+  async runBenchmark(provider, model, parallel) {
+    const body = {provider, model};
+    if (parallel !== undefined && parallel !== null && parallel !== '') {
+      body.parallel = parseInt(parallel, 10);
+    }
     const r = await fetch('/api/models/benchmark', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({provider, model})
+      body: JSON.stringify(body)
     });
     return r.json();
   },
@@ -674,6 +678,8 @@ function benchSection(model, providers) {
   const options = provList.map(p => `<option value="${esc(p)}"${provList[0] === p ? ' selected' : ''}>${esc(p)}</option>`).join('');
   return `<div class="bench-run-row">
     <select id="benchProvider" class="capability-filter">${options}</select>
+    <input type="number" id="benchParallel" class="capability-filter" min="1" max="64" value="8" style="width:70px"
+           title="Concurrent API requests (1 = sequential)" aria-label="Benchmark parallelism">
     <button class="btn btn-outline" id="runBenchBtn">Run benchmark</button>${note}
     <span id="benchStatus" class="seed-status"></span>
   </div>`;
@@ -1097,13 +1103,15 @@ function closeBenchLog() {
 
 async function runBenchmark(model) {
   const provider = document.getElementById('benchProvider').value.trim();
+  const parallelEl = document.getElementById('benchParallel');
+  const parallel = parallelEl ? parallelEl.value.trim() : '';
   const status = document.getElementById('benchStatus');
   if (!provider) { status.textContent = 'Enter a provider.'; return; }
   const btn = document.getElementById('runBenchBtn');
   btn.disabled = true;
   status.textContent = 'Queueing…';
   try {
-    const data = await API.runBenchmark(provider, model);
+    const data = await API.runBenchmark(provider, model, parallel);
     if (data.error) status.textContent = 'Error: ' + data.error;
     else { status.textContent = `Queued run #${data.run.id}.`; loadAll(); loadRunsForSelected(); }
   } catch (e) { status.textContent = 'Error: ' + e.message; }

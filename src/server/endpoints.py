@@ -2648,7 +2648,8 @@ class DashboardEndpoints:
     def _serve_benchmark_create_api(self):
         """POST /api/models/benchmark — queue a LiveBench run.
 
-        Body: {"provider": ..., "model": ..., "categories": [...] (optional)}
+        Body: {"provider": ..., "model": ..., "categories": [...] (optional),
+               "parallel": N (optional, 1..64 concurrent API requests)}
         The benchmark runs direct-to-provider (not through LCP), so it scores
         the raw model without tripping the dynamic router.
         """
@@ -2674,6 +2675,15 @@ class DashboardEndpoints:
             self._send_json({"error": "'categories' must be a list of strings"}, 400)
             return
 
+        parallel = body.get("parallel")
+        if parallel is not None:
+            if isinstance(parallel, bool) or not isinstance(parallel, int):
+                self._send_json({"error": "'parallel' must be an integer"}, 400)
+                return
+            if parallel < 1 or parallel > 64:
+                self._send_json({"error": "'parallel' must be between 1 and 64"}, 400)
+                return
+
         target = {"provider": provider, "model": model}
         if release:
             target["release"] = release
@@ -2685,6 +2695,7 @@ class DashboardEndpoints:
                 target_kind="provider",
                 target=target,
                 categories=categories or None,
+                parallel=parallel,
             )
             self._send_json({"ok": True, "run": run})
         except ValueError as e:

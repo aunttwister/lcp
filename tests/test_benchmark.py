@@ -324,7 +324,7 @@ def test_queue_and_run_flow(tmp_path, monkeypatch):
 
     monkeypatch.setattr("src.api.benchmark.subprocess.Popen", FakeProc)
     monkeypatch.setattr("src.api.benchmark.livebench_dir", lambda: str(tmp_path))
-    monkeypatch.setattr("src.api.benchmark.core_deps_available", lambda: True)
+    monkeypatch.setattr("src.api.benchmark.core_deps_available", lambda site=None: True)
 
     run = queue_benchmark(
         engine, FakeConfig(),
