@@ -60,6 +60,7 @@ from src.api.exceptions import (
     ProviderBadRequestError,
     ProviderCreditsError,
     ProviderInternalError,
+    ProviderTimeoutError,
 )
 
 
@@ -638,6 +639,86 @@ class TestForwardRequestStreaming:
         with _cred_patch(fallback=None):
             with pytest.raises(ConfigError, match="No API key found for provider"):
                 forward_request(self._cfg(provider="deepseek"), body, mock_config)
+
+
+class TestUpstreamReadTimeout:
+    """Configurable upstream relay timeout (LCP_UPSTREAM_READ_TIMEOUT)."""
+
+    def _cfg(self, **overrides):
+        cfg = {"provider": "testco", "api_key_env": "TEST_KEY", "base_url": "https://api.example.com/v1"}
+        cfg.update(overrides)
+        return cfg
+
+    def test_default_timeout_used_when_env_unset(self, mock_config):
+        """Without env, urlopen must be called with the 900s default."""
+        from src.api.request_pipeline import _UPSTREAM_READ_TIMEOUT_DEFAULT
+        body = {"messages": [], "stream": False}
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"ok": true}'
+        with patch.dict("os.environ", {}, clear=False):
+            with _cred_patch(testco="sk"):
+                with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+                    forward_request(self._cfg(), body, mock_config)
+        assert mock_open.call_args.kwargs["timeout"] == _UPSTREAM_READ_TIMEOUT_DEFAULT
+
+    def test_env_timeout_used_when_set(self, mock_config):
+        """LCP_UPSTREAM_READ_TIMEOUT env overrides the default."""
+        body = {"messages": [], "stream": False}
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"ok": true}'
+        with patch.dict("os.environ", {"LCP_UPSTREAM_READ_TIMEOUT": "600"}, clear=False):
+            with _cred_patch(testco="sk"):
+                with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+                    forward_request(self._cfg(), body, mock_config)
+        assert mock_open.call_args.kwargs["timeout"] == 600.0
+
+    def test_timeout_clamped_to_lower_bound(self, mock_config):
+        """A tiny env value is clamped to 30s so a misconfig can't break relays."""
+        body = {"messages": [], "stream": False}
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"ok": true}'
+        with patch.dict("os.environ", {"LCP_UPSTREAM_READ_TIMEOUT": "5"}, clear=False):
+            with _cred_patch(testco="sk"):
+                with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+                    forward_request(self._cfg(), body, mock_config)
+        assert mock_open.call_args.kwargs["timeout"] == 30.0
+
+    def test_invalid_env_falls_back_to_default(self):
+        """Non-numeric env falls back to the 900s default."""
+        from src.api.request_pipeline import _upstream_read_timeout, _UPSTREAM_READ_TIMEOUT_DEFAULT
+        with patch.dict("os.environ", {"LCP_UPSTREAM_READ_TIMEOUT": "abc"}, clear=False):
+            assert _upstream_read_timeout() == _UPSTREAM_READ_TIMEOUT_DEFAULT
+
+    def test_nonstream_read_timeout_raises_provider_timeout(self, mock_config):
+        """A raw socket TimeoutError during the full-body read must surface as
+        ProviderTimeoutError so try_chain's fallback engages (not a bare LCP-5001)."""
+        body = {"messages": [], "stream": False}
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.side_effect = TimeoutError("The read operation timed out")
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", return_value=mock_resp):
+                with pytest.raises(ProviderTimeoutError, match="read timed out"):
+                    forward_request(self._cfg(), body, mock_config)
+
+    def test_stream_chunk_read_timeout_raises_provider_timeout(self, mock_config):
+        """TimeoutError mid-SSE-stream is classified as ProviderTimeoutError."""
+        body = {"messages": [], "stream": True}
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.side_effect = [
+            b"data: {}\n\n",
+            TimeoutError("The read operation timed out"),
+        ]
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", return_value=mock_resp):
+                reader, status = forward_request(self._cfg(), body, mock_config)
+        assert status == 200
+        with pytest.raises(ProviderTimeoutError, match="stream read timed out"):
+            list(reader)
 
 
 # ── strip_forbidden_tools ───────────────────────────────────────────────

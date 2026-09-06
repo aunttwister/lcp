@@ -5,6 +5,7 @@ Handles the full request flow:
 """
 
 import json
+import os
 import random
 import time
 import urllib.error
@@ -34,6 +35,30 @@ logger = get_logger("lcp.pipeline")
 
 # Generic return type for call_with_retry — it returns whatever request_fn returns.
 T = TypeVar("T")
+
+# Upstream socket read timeout for a single provider relay call.
+# Hardcoded 180s used to kill legitimate long cache-MISS requests (Hermes
+# context-compression summaries ~200k tokens can take 8-9+ min through the
+# opencode relay before the first byte). Make it configurable so operators
+# can tune per deployment; 900s default covers observed compression runs.
+# NOTE: read timeout is per socket read — streaming requests (SSE) are
+# unaffected because each 8KB chunk read resets the window.
+_UPSTREAM_READ_TIMEOUT_DEFAULT = 900.0
+_UPSTREAM_READ_TIMEOUT_ENV = "LCP_UPSTREAM_READ_TIMEOUT"
+
+
+def _upstream_read_timeout() -> float:
+    """Return the upstream relay read timeout (seconds).
+
+    Reads ``LCP_UPSTREAM_READ_TIMEOUT`` from the environment; falls back to
+    900.0 when unset or invalid. Clamped to a sane lower bound.
+    """
+    raw = os.environ.get(_UPSTREAM_READ_TIMEOUT_ENV, "")
+    try:
+        value = float(raw) if raw else _UPSTREAM_READ_TIMEOUT_DEFAULT
+    except (TypeError, ValueError):
+        value = _UPSTREAM_READ_TIMEOUT_DEFAULT
+    return max(value, 30.0)
 
 # Substrings that identify an insufficient-balance / out-of-credits response
 # from a provider. Detected in the HTTP error body regardless of status code.
@@ -467,8 +492,9 @@ def forward_request(provider_cfg: dict, body: dict, config, session_id: str | No
         headers["Authorization"] = f"Bearer {api_key}"
 
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    _read_timeout = _upstream_read_timeout()
     try:
-        resp = urllib.request.urlopen(req, timeout=180)
+        resp = urllib.request.urlopen(req, timeout=_read_timeout)
         if streaming:
             # Return a closure that yields chunks and closes the response when done.
             # This avoids buffering the entire SSE stream in memory.
@@ -479,6 +505,14 @@ def forward_request(provider_cfg: dict, body: dict, config, session_id: str | No
                         if not chunk:
                             break
                         yield chunk
+                except TimeoutError as e:
+                    # Mid-stream socket read timeout (socket.timeout == TimeoutError
+                    # on py3.10+). Classify as ProviderTimeoutError so the chain
+                    # fallback can engage instead of escaping as an untyped error.
+                    raise ProviderTimeoutError(
+                        f"Provider {provider_cfg['provider']} stream read timed out after "
+                        f"{_read_timeout:.0f}s"
+                    ) from e
                 finally:
                     resp.close()
             return chunk_reader(), resp.status
@@ -520,6 +554,18 @@ def forward_request(provider_cfg: dict, body: dict, config, session_id: str | No
         raise ProviderAuthError(f"Provider {provider_cfg['provider']} HTTP {status}: {error_body}")
     except urllib.error.URLError as e:
         raise ProviderTimeoutError(f"Provider {provider_cfg['provider']} unreachable: {e.reason}")
+    except TimeoutError as e:
+        # Raw socket read timeout on the full-body (non-streaming) path.
+        # ``urlopen`` wraps connect-level timeouts in URLError, but a timeout
+        # mid-``resp.read()`` raises bare TimeoutError (socket.timeout) that
+        # escapes the URLError handler above. Without this, try_chain's typed
+        # fallback never engages and the client sees a generic LCP-5001
+        # instead of a ProviderTimeoutError (verified 2026-09-06 — long
+        # cache-miss compression summaries died with exactly this symptom).
+        raise ProviderTimeoutError(
+            f"Provider {provider_cfg['provider']} read timed out after "
+            f"{_read_timeout:.0f}s"
+        ) from e
 
 
 def call_with_retry(request_fn: Callable[[], T], retry_cfg=None) -> T:
