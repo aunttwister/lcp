@@ -26,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -e '.[dev]'
+          pip install -e '.[dev,memory]'
 
       - name: Pre-download tiktoken vocabulary
         run: |
