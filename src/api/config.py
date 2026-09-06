@@ -145,6 +145,27 @@ SEED_CONFIG: dict[str, Any] = {
             "supports_thinking": True,
             "description": "DeepSeek V4 Flash — fast lane for economical reasoning and long-context work",
         },
+        "ox-alpha-free": {
+            "context_window": 262144,
+            "max_output_tokens": 16384,
+            "supports_vision": False,
+            "supports_thinking": False,
+            "description": "Qwen3.8-27b Q4_K_M — local llama.cpp (RVN multilingual MTP, n_ctx 262144)",
+        },
+        "qwen3.8-27b-q4_k_m-heretic": {
+            "context_window": 262144,
+            "max_output_tokens": 16384,
+            "supports_vision": False,
+            "supports_thinking": False,
+            "description": "Qwen3.8-27b Q4_K_M — local llama.cpp (RVN multilingual MTP, n_ctx 262144)",
+        },
+        "qwen3.8-flash-next": {
+            "context_window": 262144,
+            "max_output_tokens": 16384,
+            "supports_vision": False,
+            "supports_thinking": False,
+            "description": "Qwen3.8-Flash-Next — local vLLM on ZGX (DGX Spark 128GB, SEQS=16)",
+        },
     },
     "database": {
         "path": "/app/data/costs.db",

@@ -678,7 +678,7 @@ function benchSection(model, providers) {
   const options = provList.map(p => `<option value="${esc(p)}"${provList[0] === p ? ' selected' : ''}>${esc(p)}</option>`).join('');
   return `<div class="bench-run-row">
     <select id="benchProvider" class="capability-filter">${options}</select>
-    <input type="number" id="benchParallel" class="capability-filter" min="1" max="64" value="8" style="width:70px"
+    <input type="number" id="benchParallel" class="capability-filter" min="1" max="64" value="16" style="width:70px"
            title="Concurrent API requests (1 = sequential)" aria-label="Benchmark parallelism">
     <button class="btn btn-outline" id="runBenchBtn">Run benchmark</button>${note}
     <span id="benchStatus" class="seed-status"></span>

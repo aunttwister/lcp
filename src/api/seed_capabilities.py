@@ -513,6 +513,16 @@ DEFAULT_MODEL_REGISTRY: list[dict] = [
         "benchmark_key": "gemini-3.6-flash",
         "provider_mappings": {},
     },
+    {
+        "logical_name": "qwen3.8-flash-next",
+        "benchmark_key": "qwen3.8-flash-next",
+        "provider_mappings": {
+            "zgx": "qwen3.8-flash-next",
+            "llamacpp": "qwen3.8-flash-next",
+        },
+        "active_release": "2026-08-25",
+        "benchmark_release": "2026-08-25",
+    },
 ]
 
 
