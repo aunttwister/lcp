@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://hub.docker.com/)
 [![CI](https://github.com/aunttwister/lcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1701%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-2251%20passed-brightgreen.svg)](https://github.com/aunttwister/lcp/actions/workflows/ci.yml)
 
 ---
 
@@ -528,13 +528,13 @@ Dev-only dependencies (`pip install .[dev]`):
 
 | Package | Role |
 |---|---|
-| `pytest` | Test runner — 1701 tests covering routing (incl. benchmark-driven capability routing, semantic task classification, the runtime enable toggle, per-profile routing overrides, `unit_tests` taxonomy), budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, the memory plugin, the component runtime, and the plugin system |
+| `pytest` | Test runner — 2251 tests covering routing (incl. benchmark-driven capability routing, semantic task classification, the runtime enable toggle, per-profile routing overrides, `unit_tests` taxonomy), budgets, alerts, cost estimation, auth enforcement, circuit breaker, encrypted credentials, provider plugins (DeepSeek, OpenCode, Command Code, llama.cpp), the benchmark/import pipeline, the memory plugin, the component runtime, and the plugin system |
 | `pytest-cov` | Coverage reports — `pytest --cov=src --cov-report=term-missing` |
 | `pytest-mock` | Mocking utilities for the `unittest.mock` patch system |
 
 ## Test Coverage
 
-**91% overall** — 8,475 of 9,280 statements covered (1701 tests, 15 deselected integration tests).
+**99% overall** — 9,489 of 9,505 statements covered (2251 tests, 15 deselected integration tests).
 
 Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 
@@ -542,53 +542,53 @@ Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing -q`
 |---|---|
 | `src/__init__.py` | 100% |
 | `src/api/__init__.py` | 100% |
-| `src/api/alert_manager.py` | 98% |
-| `src/api/benchmark.py` | 95% |
-| `src/api/benchmark_import.py` | 97% |
-| `src/api/circuit_breaker.py` | 99% |
-| `src/api/component.py` | 94% |
-| `src/api/config.py` | 90% |
-| `src/api/cost_cache.py` | 91% |
-| `src/api/cost_estimator.py` | 95% |
+| `src/api/alert_manager.py` | 100% |
+| `src/api/benchmark.py` | 99% |
+| `src/api/benchmark_import.py` | 100% |
+| `src/api/circuit_breaker.py` | 100% |
+| `src/api/component.py` | 100% |
+| `src/api/config.py` | 100% |
+| `src/api/cost_cache.py` | 100% |
+| `src/api/cost_estimator.py` | 100% |
 | `src/api/cost_plugins/__init__.py` | 100% |
-| `src/api/cost_plugins/base.py` | 96% |
-| `src/api/cost_plugins/commandcode.py` | 93% |
-| `src/api/cost_plugins/commandcode_api.py` | 94% |
-| `src/api/cost_plugins/deepseek.py` | 94% |
-| `src/api/cost_plugins/llamacpp.py` | 96% |
-| `src/api/cost_plugins/opencode.py` | 90% |
-| `src/api/cost_plugins/opencode_api.py` | 90% |
-| `src/api/credential_store.py` | 95% |
+| `src/api/cost_plugins/base.py` | 100% |
+| `src/api/cost_plugins/commandcode.py` | 99% |
+| `src/api/cost_plugins/commandcode_api.py` | 100% |
+| `src/api/cost_plugins/deepseek.py` | 97% |
+| `src/api/cost_plugins/llamacpp.py` | 100% |
+| `src/api/cost_plugins/opencode.py` | 97% |
+| `src/api/cost_plugins/opencode_api.py` | 100% |
+| `src/api/credential_store.py` | 100% |
 | `src/api/crypto.py` | 100% |
 | `src/api/exceptions.py` | 100% |
-| `src/api/key_manager.py` | 97% |
+| `src/api/key_manager.py` | 100% |
 | `src/api/livebench_tasks.py` | 100% |
 | `src/api/logging_config.py` | 100% |
-| `src/api/memory/__init__.py` | 91% |
+| `src/api/memory/__init__.py` | 100% |
 | `src/api/memory/base.py` | 100% |
-| `src/api/memory/embeddings.py` | 84% |
-| `src/api/memory/harness.py` | 93% |
-| `src/api/memory/lancedb_backend.py` | 77% |
+| `src/api/memory/embeddings.py` | 100% |
+| `src/api/memory/harness.py` | 100% |
+| `src/api/memory/lancedb_backend.py` | 100% |
 | `src/api/models.py` | 100% |
-| `src/api/prompt_cache.py` | 98% |
-| `src/api/reasoning_store.py` | 95% |
-| `src/api/request_pipeline.py` | 96% |
-| `src/api/router.py` | 86% |
-| `src/api/runtime.py` | 97% |
-| `src/api/seed_capabilities.py` | 98% |
-| `src/api/setup.py` | 87% |
-| `src/api/task_classifier.py` | 87% |
-| `src/api/token_verifier.py` | 95% |
-| `src/main.py` | 85% |
+| `src/api/prompt_cache.py` | 100% |
+| `src/api/reasoning_store.py` | 100% |
+| `src/api/request_pipeline.py` | 100% |
+| `src/api/router.py` | 99% |
+| `src/api/runtime.py` | 100% |
+| `src/api/seed_capabilities.py` | 100% |
+| `src/api/setup.py` | 100% |
+| `src/api/task_classifier.py` | 100% |
+| `src/api/token_verifier.py` | 100% |
+| `src/main.py` | 100% |
 | `src/server/__init__.py` | 100% |
-| `src/server/endpoints.py` | 88% |
-| `src/server/handler.py` | 93% |
+| `src/server/endpoints.py` | 100% |
+| `src/server/handler.py` | 100% |
 | `src/server/server.py` | 100% |
 | `src/server/sse_helpers.py` | 100% |
 | `src/ui/__init__.py` | 100% |
-| `src/ui/dashboard.py` | 98% |
-| `src/ui/pages.py` | 94% |
-| `src/ui/render.py` | 97% |
+| `src/ui/dashboard.py` | 100% |
+| `src/ui/pages.py` | 100% |
+| `src/ui/render.py` | 100% |
 
 ## API
 
