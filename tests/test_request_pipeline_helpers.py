@@ -513,6 +513,47 @@ class TestForwardRequestStreaming:
                 with pytest.raises(ProviderBadRequestError):
                     forward_request(self._cfg(), body, mock_config)
 
+    def test_bare_400_falls_through(self, mock_config):
+        """A bare 400 (no error/message field, e.g. opencode's
+        {"object":"error","model":"..."}) is ambiguous — it must fall through
+        (ProviderInternalError) so the chain tries the next provider instead of
+        aborting with all_providers_failed."""
+        import urllib.error
+        body = {"messages": [], "stream": False}
+        err = urllib.error.HTTPError("url", 400, "Bad Request", {}, None)
+        err.read = MagicMock(return_value=b'{"object":"error","model":"deepseek-v4-flash"}')
+        mock_config.get_provider_key.return_value = None
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", side_effect=err):
+                with pytest.raises(ProviderInternalError):
+                    forward_request(self._cfg(), body, mock_config)
+
+    def test_empty_400_falls_through(self, mock_config):
+        """An empty 400 body is bare → falls through (ProviderInternalError)."""
+        import urllib.error
+        body = {"messages": [], "stream": False}
+        err = urllib.error.HTTPError("url", 400, "Bad Request", {}, None)
+        err.read = MagicMock(return_value=b"")
+        mock_config.get_provider_key.return_value = None
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", side_effect=err):
+                with pytest.raises(ProviderInternalError):
+                    forward_request(self._cfg(), body, mock_config)
+
+    def test_400_with_message_stays_bad_request(self, mock_config):
+        """A 400 with a real error.message stays a fatal ProviderBadRequestError."""
+        import urllib.error
+        body = {"messages": [], "stream": False}
+        err = urllib.error.HTTPError("url", 400, "Bad Request", {}, None)
+        err.read = MagicMock(return_value=(
+            b'{"error":{"message":"reasoning_content must be passed back"}}'
+        ))
+        mock_config.get_provider_key.return_value = None
+        with _cred_patch(testco="sk"):
+            with patch("urllib.request.urlopen", side_effect=err):
+                with pytest.raises(ProviderBadRequestError):
+                    forward_request(self._cfg(), body, mock_config)
+
     def test_http_500_raises_internal_error(self, mock_config):
         import urllib.error
         body = {"messages": [], "stream": False}

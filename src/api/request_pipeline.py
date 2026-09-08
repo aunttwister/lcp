@@ -88,6 +88,37 @@ def _is_credits_error(error_body: str, status: int) -> bool:
     return status == 402
 
 
+def _is_bare_4xx(error_body: str) -> bool:
+    """True when a 4xx error body carries no descriptive error message.
+
+    A bare 4xx (empty body, or JSON with no ``error``/``message`` field) is
+    ambiguous — we cannot conclude the request body is the problem. Providers
+    sometimes return a minimal envelope (e.g. opencode's
+    ``{"object":"error","model":"deepseek-v4-flash"}``) for transient or
+    content-specific rejections. Treating these as fatal bad requests aborts
+    the whole chain even when healthy fallbacks exist; instead they should
+    fall through to the next provider.
+
+    A body that DOES carry an ``error`` or ``message`` field (e.g.
+    ``{"error":"bad"}`` or ``{"error":{"message":"..."}})`` is NOT bare — it
+    describes the problem, so it stays a fatal bad request.
+    """
+    body = (error_body or "").strip()
+    if not body:
+        return True
+    try:
+        data = json.loads(body)
+    except Exception:
+        # Non-JSON body: bare only when trivially short (no real message);
+        # otherwise it likely carries a human-readable reason.
+        return len(body) < 20
+    if isinstance(data, dict):
+        if "error" in data or "message" in data:
+            return False
+        return True
+    return False
+
+
 # ── Tool Stripping ───────────────────────────────────────────────────────────
 
 def strip_forbidden_tools(body: dict, forbidden: list[str] | None) -> tuple[dict, list[str]]:
@@ -540,8 +571,17 @@ def forward_request(provider_cfg: dict, body: dict, config, session_id: str | No
         elif status == 429:
             raise ProviderRateLimitError(f"Provider {provider_cfg['provider']} rate limited")
         elif 400 <= status < 500:
-            # 4xx (non-auth, non-rate-limit) — bad request, the body is the problem.
-            # Do NOT fall back to another provider; the same body will fail again.
+            # 4xx (non-auth, non-rate-limit, non-credits). A body with a real
+            # message is a bad request — the body is the problem, don't fall
+            # back (the same body would fail again). But a BARE 4xx (empty
+            # body or no error/message field) is ambiguous: it could be a
+            # transient provider rejection. With healthy fallbacks in the
+            # chain, fall through (ProviderInternalError) rather than abort
+            # everything.
+            if _is_bare_4xx(error_body):
+                raise ProviderInternalError(
+                    f"Provider {provider_cfg['provider']} HTTP {status}: {error_body}"
+                )
             raise ProviderBadRequestError(
                 f"Provider {provider_cfg['provider']} HTTP {status}: {error_body}"
             )
