@@ -79,7 +79,7 @@ class TestLlamaCppRecordTokens:
         assert plugin._daily[today]["qwen2.5"]["prompt_tokens"] == 200
 
     def test_record_tokens_accumulates_latency(self, tmp_path):
-        """record_tokens with latency_ms accumulates for TPS computation."""
+        """record_tokens with latency_ms accumulates latency."""
         persist = tmp_path / "usage.json"
         plugin = LlamaCppCostPlugin(persist_path=str(persist))
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -101,11 +101,9 @@ class TestLlamaCppFetchMetrics:
         m = plugin.fetch_metrics()
         assert m["total_tokens"] == 0
         assert m["requests"] == 0
-        assert m["tokens_per_sec"] == 0
         assert m["per_model"] == {}
 
-    def test_computes_total_tps(self, tmp_path):
-        """Total TPS = (prompt + completion) / (latency_sec). 300 tok / 30s = 10."""
+    def test_aggregates_tokens_and_latency(self, tmp_path):
         persist = tmp_path / "usage.json"
         plugin = LlamaCppCostPlugin(persist_path=str(persist))
         plugin.record_tokens(model="qwen", prompt_tokens=100, completion_tokens=50,
@@ -120,8 +118,9 @@ class TestLlamaCppFetchMetrics:
         assert m["requests"] == 2
         assert m["total_latency_ms"] == 30000
         assert m["avg_latency_ms"] == 15000
-        assert m["tokens_per_sec"] == 10.0
         assert m["per_model"]["qwen"]["request_count"] == 2
+        # No tokens/sec — hop latency is not generation time, so it would mislead.
+        assert "tokens_per_sec" not in m
 
     def test_fetch_usage_returns_latency_fields(self, tmp_path):
         """fetch_usage exposes total_latency_ms + total_tokens."""
@@ -143,8 +142,6 @@ class TestLlamaCppFetchMetrics:
         }
         row = plugin.fetch_usage()[0]
         assert row["total_latency_ms"] == 0
-        m = plugin.fetch_metrics()
-        assert m["tokens_per_sec"] == 0
 
 
 class TestLlamaCppPersistence:

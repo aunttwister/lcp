@@ -198,12 +198,13 @@ class LlamaCppCostPlugin(CostPlugin):
           - total tokens in / out / cache-hit
           - total requests
           - average latency per request (ms)
-          - TOTAL throughput in tokens/sec
-            = (prompt_tokens + completion_tokens) / (total_latency_sec)
 
-        Includes a per-model breakdown and the date range actually covered.
-        All cost fields are zero (local hardware) — the dashboard for this
-        provider is token/throughput focused.
+        NOTE: no tokens/sec metric — recorded ``latency_ms`` is the full HTTP
+        hop (routing + relay + stream), not on-GPU generation time, so a
+        derived TPS would misrepresent local hardware speed.
+
+        Includes a per-model breakdown. All cost fields are zero (local
+        hardware) — the dashboard for this provider is token focused.
         """
         rows = self.fetch_usage(start_date=start_date, end_date=end_date)
         prompt = sum(r["prompt_tokens"] for r in rows)
@@ -226,8 +227,6 @@ class LlamaCppCostPlugin(CostPlugin):
             m["request_count"] += r["request_count"]
             m["total_latency_ms"] += r["total_latency_ms"]
 
-        latency_sec = latency_ms / 1000.0
-        tps = round(total_tokens / latency_sec, 1) if latency_sec > 0 else 0.0
         return {
             "provider": "llamacpp",
             "prompt_tokens": prompt,
@@ -237,7 +236,6 @@ class LlamaCppCostPlugin(CostPlugin):
             "requests": requests,
             "total_latency_ms": latency_ms,
             "avg_latency_ms": round(latency_ms / requests, 1) if requests else 0,
-            "tokens_per_sec": tps,
             "per_model": per_model,
         }
 

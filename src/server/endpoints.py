@@ -2119,12 +2119,6 @@ class UsageEndpoints:
                 cache_hit = sum(r.cache_hit_tokens for r in model_rows)
                 cache_miss = sum(r.cache_miss_tokens for r in model_rows)
 
-                # Tokens/sec (total throughput) across the period. Only meaningful
-                # for local inference (llamacpp) where latency is recorded; for
-                # cloud providers it is informational.
-                latency_sec = total_latency_ms / 1000.0
-                tokens_per_sec = round(total_tokens / latency_sec, 1) if latency_sec > 0 else 0.0
-
             self._send_json({
                 "provider": provider,
                 "daily": daily,
@@ -2137,7 +2131,6 @@ class UsageEndpoints:
                     "prompt_tokens": sum(r.prompt_tokens for r in model_rows),
                     "completion_tokens": sum(r.completion_tokens for r in model_rows),
                     "latency_ms": total_latency_ms,
-                    "tokens_per_sec": tokens_per_sec,
                 },
                 "cache": {
                     "hit_tokens": cache_hit,

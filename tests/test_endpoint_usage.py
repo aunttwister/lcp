@@ -147,7 +147,6 @@ class TestUsageStatsApi:
         assert body["totals"]["cost"] == 0
         assert body["totals"]["requests"] == 0
         assert body["totals"]["tokens"] == 0
-        assert body["totals"]["tokens_per_sec"] == 0
         # The date-range fill generates 30 zero-days even when empty
         assert len(body["daily"]) == 30
         assert all(d["cost"] == 0 for d in body["daily"])

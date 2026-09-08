@@ -517,7 +517,6 @@ DEFAULT_MODEL_REGISTRY: list[dict] = [
         "logical_name": "qwen3.8-flash-next",
         "benchmark_key": "qwen3.8-flash-next",
         "provider_mappings": {
-            "zgx": "qwen3.8-flash-next",
             "llamacpp": "qwen3.8-flash-next",
         },
         "active_release": "2026-08-25",

@@ -849,12 +849,10 @@ function buildPage(providers) {
             } else if (prov === 'llamacpp') {
                 // Local LLM — token-centric view (no $ — self-hosted hardware).
                 var lt = stats.totals || {};
-                var latSec = (lt.latency_ms || 0) / 1000;
                 panelsHtml += '<div class="stat-cards">' +
                     '<div class="stat-card"><div class="label">Tokens (30d)</div><div class="value">' + formatTokens(lt.tokens || 0) + '</div><div class="sub">' + (lt.requests || 0) + ' requests</div></div>' +
                     '<div class="stat-card"><div class="label">Tokens In</div><div class="value">' + formatTokens(lt.prompt_tokens || 0) + '</div><div class="sub">prompt</div></div>' +
                     '<div class="stat-card"><div class="label">Tokens Out</div><div class="value">' + formatTokens(lt.completion_tokens || 0) + '</div><div class="sub">completion</div></div>' +
-                    '<div class="stat-card"><div class="label">Throughput</div><div class="value">' + (lt.tokens_per_sec || 0) + '</div><div class="sub">tokens/sec</div></div>' +
                     '</div>';
             } else {
                 panelsHtml += '<div class="stat-cards">' +

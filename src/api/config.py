@@ -164,7 +164,7 @@ SEED_CONFIG: dict[str, Any] = {
             "max_output_tokens": 16384,
             "supports_vision": False,
             "supports_thinking": False,
-            "description": "Qwen3.8-Flash-Next — local vLLM on ZGX (DGX Spark 128GB, SEQS=16)",
+            "description": "Qwen3.8-Flash-Next — local vLLM (DGX Spark 128GB, SEQS=16)",
         },
     },
     "database": {
