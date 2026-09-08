@@ -8,6 +8,7 @@ import traceback
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from typing import Any
+from urllib.parse import unquote
 
 from ..api.logging_config import get_logger
 from ..api.request_pipeline import (
@@ -225,6 +226,18 @@ class LCPHandler(
     _models_paths = set(
         p.strip() for p in os.environ.get("LCP_MODELS_PATHS", "/v1/models,/models").split(",") if p.strip()
     )
+
+    @staticmethod
+    def _path_part(path: str, index: int) -> str:
+        """Return URL-DECODED path segment at *index* (0-based on split('/')).
+
+        Browser clients percent-encode names in URLs (e.g. a provider named
+        "local llm zgx" becomes ``local%20llm%20zgx``). Without decoding, the
+        config lookup compared the encoded form against the real (decoded)
+        config keys and 404'd. Also normalizes NBSP → space (rich-text editors
+        and UI forms can insert U+00A0 which is not the same key).
+        """
+        return unquote(path.split("?")[0].split("/")[index]).replace("\u00a0", " ")
 
     def do_GET(self):
         logger.debug("request_start", method="GET", path=self.path,
@@ -449,17 +462,22 @@ class LCPHandler(
             return
         elif self.path.startswith("/api/providers/") and self.path.endswith("/toggle"):
             # POST /api/providers/{name}/toggle
-            provider_name = self.path.split("/")[3]
+            provider_name = self._path_part(self.path, 3)
             self._serve_provider_toggle(provider_name)
             return
-        elif self.path.startswith("/api/cost-plugins/cookie/") and len(self.path.split("/")) == 5:
+        elif self.path.startswith("/api/providers/") and self.path.endswith("/rename"):
+            # POST /api/providers/{name}/rename  {new_name: "..."}
+            provider_name = self._path_part(self.path, 3)
+            self._serve_provider_rename(provider_name)
+            return
+        elif self.path.startswith("/api/cost-plugins/cookie/") and len(self.path.split("?")[0].split("/")) == 5:
             # POST /api/cost-plugins/cookie/{provider}
-            provider = self.path.split("/")[4]
+            provider = self._path_part(self.path, 4)
             self._serve_plugin_cookie_set(provider)
             return
-        elif self.path.startswith("/api/cost-plugins/workspace-id/") and len(self.path.split("/")) == 5:
+        elif self.path.startswith("/api/cost-plugins/workspace-id/") and len(self.path.split("?")[0].split("/")) == 5:
             # POST /api/cost-plugins/workspace-id/{provider}
-            provider = self.path.split("/")[4]
+            provider = self._path_part(self.path, 4)
             self._serve_plugin_workspace_id_set(provider)
             return
 
@@ -807,8 +825,8 @@ class LCPHandler(
     def do_PUT(self):
         logger.debug("request_start", method="PUT", path=self.path,
                      client_ip=self.client_address[0])
-        if self.path.startswith("/api/providers/") and len(self.path.split("/")) == 4:
-            provider_name = self.path.split("/")[3]
+        if self.path.startswith("/api/providers/") and len(self.path.split("?")[0].split("/")) == 4:
+            provider_name = self._path_part(self.path, 3)
             self._serve_provider_update(provider_name)
         elif self.path.startswith("/api/chains/") and len(self.path.split("/")) == 4:
             profile = self.path.split("/")[3]
@@ -831,8 +849,8 @@ class LCPHandler(
     def do_DELETE(self):
         logger.debug("request_start", method="DELETE", path=self.path,
                      client_ip=self.client_address[0])
-        if self.path.startswith("/api/providers/") and len(self.path.split("/")) == 4:
-            provider_name = self.path.split("/")[3]
+        if self.path.startswith("/api/providers/") and len(self.path.split("?")[0].split("/")) == 4:
+            provider_name = self._path_part(self.path, 3)
             self._serve_provider_delete(provider_name)
         elif self.path.startswith("/api/keys/") and len(self.path.split("/")) == 4:
             key_id = self.path.split("/")[3]

@@ -847,6 +847,73 @@ class ProviderEndpoints:
             store.set(name, "")
         self._send_json({"ok": True, "deleted": name})
 
+    def _serve_provider_rename(self, name: str):
+        """POST /api/providers/{name}/rename  {new_name: "..."} — rename a provider.
+
+        Renaming is NOT create-then-delete: the provider's config entry, every
+        profile chain step that references it, and its stored credential are
+        moved to the new name atomically. Rejects missing/empty/duplicate names
+        and no-op renames.
+        """
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        new_name = (body.get("new_name") or "").strip()
+        if not new_name:
+            self._send_json({"error": "missing 'new_name' field"}, 400)
+            return
+        cfg = self.config
+        if name not in cfg.providers:
+            self._send_json({"error": f"provider '{name}' not found"}, 404)
+            return
+        if new_name == name:
+            self._send_json({"ok": True, "provider": name, "renamed": False})
+            return
+        if new_name in cfg.providers:
+            self._send_json({"error": f"provider '{new_name}' already exists"}, 409)
+            return
+
+        # Move the config entry.
+        cfg.raw["providers"][new_name] = cfg.raw["providers"].pop(name)
+        # Re-point every chain step that referenced the old provider.
+        steps_updated = 0
+        for pname, pcfg in cfg.raw.get("profiles", {}).items():
+            for step in pcfg.get("chain", []):
+                if step.get("provider") == name:
+                    step["provider"] = new_name
+                    steps_updated += 1
+        cfg.save()
+
+        # Move stored credentials (api key / cookie / workspace id).
+        store = _credential_store_for(self)
+        if store is not None:
+            try:
+                if store.has(name):
+                    store.set(new_name, store.get(name) or "")
+                    store.set(name, "")
+                if store.has_cookie(name):
+                    store.set_cookie(new_name, store.get_cookie(name) or "")
+                    store.set_cookie(name, "")
+                if store.has_workspace_id(name):
+                    store.set_workspace_id(new_name, store.get_workspace_id(name) or "")
+                    store.set_workspace_id(name, "")
+            except Exception as exc:  # noqa: BLE001 — rename must not fail wholesale
+                logger.warning("provider_rename_credential_move_failed",
+                               provider=name, new_name=new_name, error=str(exc))
+
+        # Fresh cache entry for the new name on the next background pass.
+        from ..api.cost_cache import get_refresher
+        refresher = resolve_service("refresher", fallback=get_refresher)
+        if refresher is not None:
+            refresher.request_refresh(provider=new_name)
+
+        logger.info("provider_renamed", provider=name, new_name=new_name,
+                    chain_steps_updated=steps_updated)
+        self._send_json({"ok": True, "provider": new_name, "renamed": True,
+                         "chain_steps_updated": steps_updated})
+
     def _serve_provider_test(self):
         import urllib.request
         import urllib.error

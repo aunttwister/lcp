@@ -290,6 +290,82 @@ class TestProviderCrudEdges:
         h.do_DELETE()
         assert _status(h) == 200
 
+    def test_delete_provider_with_url_encoded_spaces(self, temp_db):
+        """Regression: a provider named with spaces arrives percent-encoded in
+        the URL (local%20llm%20zgx). The handler must decode it before the
+        config lookup, else the delete 404s even though the provider exists."""
+        name = "local llm zgx"
+        cfg = LCPHandler.config
+        # Mirror the real Config: .providers and .raw["providers"] share state.
+        cfg.providers[name] = {"api_base": "https://d/v1", "models": []}
+        cfg.raw["providers"] = cfg.providers
+        h = TestHandler(path="/api/providers/local%20llm%20zgx", method="DELETE", engine=temp_db)
+        h.do_DELETE()
+        assert _status(h) == 200
+        assert name not in cfg.providers
+        assert name not in cfg.raw["providers"]
+
+    def test_rename_provider(self, temp_db):
+        """POST /api/providers/{name}/rename moves the config entry, re-points
+        every profile chain step and moves stored credentials."""
+        old, new = "oldco", "newco"
+        cfg = LCPHandler.config
+        cfg.providers[old] = {"api_base": "https://o/v1", "models": ["m1"]}
+        cfg.raw["providers"] = cfg.providers
+        cfg.raw["profiles"]["l2"]["chain"] = [
+            {"provider": old, "model": "m1", "base_url": "https://o/v1"},
+            {"provider": "deepseek", "model": "deepseek-v4-pro", "base_url": "https://t/v1"},
+        ]
+
+        store = MagicMock()
+        store.has.return_value = True
+        store.get.return_value = "sk-old"
+        store.has_cookie.return_value = False
+        store.has_workspace_id.return_value = False
+        with patch("src.server.endpoints._credential_store_for", return_value=store):
+            h = TestHandler(path=f"/api/providers/{old}/rename", method="POST", engine=temp_db,
+                            body=json.dumps({"new_name": new}))
+            h.do_POST()
+
+        assert _status(h) == 200
+        assert old not in cfg.providers
+        assert new in cfg.providers
+        assert cfg.providers[new]["api_base"] == "https://o/v1"
+        # Chain step re-pointed to the new provider name.
+        assert cfg.raw["profiles"]["l2"]["chain"][0]["provider"] == new
+        # Credential moved to the new name.
+        store.set.assert_any_call(new, "sk-old")
+        cfg.save.assert_called()
+
+    def test_rename_missing_new_name(self, temp_db):
+        h = TestHandler(path="/api/providers/deepseek/rename", method="POST", engine=temp_db,
+                        body=json.dumps({}))
+        h.do_POST()
+        assert _status(h) == 400
+
+    def test_rename_missing_provider(self, temp_db):
+        h = TestHandler(path="/api/providers/nope/rename", method="POST", engine=temp_db,
+                        body=json.dumps({"new_name": "x"}))
+        h.do_POST()
+        assert _status(h) == 404
+
+    def test_rename_conflict_existing_target(self, temp_db):
+        h = TestHandler(path="/api/providers/deepseek/rename", method="POST", engine=temp_db,
+                        body=json.dumps({"new_name": "deepseek"}))
+        h.do_POST()
+        assert _status(h) == 200  # no-op rename → ok, renamed False
+        body = _json_body(h)
+        assert body["renamed"] is False
+
+    def test_rename_to_existing_other_provider_conflicts(self, temp_db):
+        cfg = LCPHandler.config
+        cfg.providers["other"] = {"api_base": "https://o/v1", "models": []}
+        cfg.raw["providers"] = dict(cfg.providers)
+        h = TestHandler(path="/api/providers/deepseek/rename", method="POST", engine=temp_db,
+                        body=json.dumps({"new_name": "other"}))
+        h.do_POST()
+        assert _status(h) == 409
+
     def test_provider_test_cloudflare_block(self, temp_db):
         import urllib.error
         err = urllib.error.HTTPError("url", 403, "Forbidden", {}, None)
