@@ -403,19 +403,21 @@ function monthPct() {
     return ((now - start) / (end - start)) * 100;
 }
 
-function renderDailyChart(canvasId, daily) {
+function renderDailyChart(canvasId, daily, metric) {
     var ctx = document.getElementById(canvasId);
     if (!ctx) return;
+    metric = metric || 'cost';
     var labels = daily.map(function(d) { var p = d.date.split('-'); return p[2] + ' ' + (monthNames[parseInt(p[1])-1] || ''); });
-    var costs = daily.map(function(d) { return d.cost; });
+    var values = daily.map(function(d) { return metric === 'tokens' ? (d.tokens || 0) : (d.cost || 0); });
+    var isTokens = metric === 'tokens';
     window._charts = window._charts || {};
     window._charts[canvasId] = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: labels,
             datasets: [{
-                label: 'Daily Cost (USD)',
-                data: costs,
+                label: isTokens ? 'Daily Tokens' : 'Daily Cost (USD)',
+                data: values,
                 backgroundColor: 'hsl(217 91% 60% / 0.6)',
                 borderColor: 'hsl(217 91% 60%)',
                 borderWidth: 1,
@@ -428,29 +430,42 @@ function renderDailyChart(canvasId, daily) {
             plugins: { legend: { display: false } },
             scales: {
                 x: { ticks: { color: 'hsl(var(--muted-foreground))', maxTicksLimit: 15, font: { size: 10 } }, grid: { display: false } },
-                y: { ticks: { color: 'hsl(var(--muted-foreground))', callback: function(v) { return '$' + v.toFixed(2); }, font: { size: 10 } }, grid: { color: 'hsl(var(--card-border) / 0.3)' } }
+                y: { ticks: { color: 'hsl(var(--muted-foreground))', callback: function(v) { return isTokens ? formatTokens(v) : '$' + v.toFixed(2); }, font: { size: 10 } }, grid: { color: 'hsl(var(--card-border) / 0.3)' } }
             }
         }
     });
 }
 
-function renderBreakdownTable(containerId, data, labelKey) {
+function renderBreakdownTable(containerId, data, labelKey, metric) {
     var el = document.getElementById(containerId);
     if (!el) return;
-    var keys = Object.keys(data).sort(function(a,b) { return data[b].cost - data[a].cost; });
+    metric = metric || 'cost';
+    var isTokens = metric === 'tokens';
+    // Sort by the display metric: cost (default) or token volume.
+    var keys = Object.keys(data).sort(function(a,b) {
+        if (isTokens) return (data[b].completion_tokens + data[b].prompt_tokens) - (data[a].completion_tokens + data[a].prompt_tokens);
+        return data[b].cost - data[a].cost;
+    });
     if (keys.length === 0) {
         el.innerHTML = '<div class="empty-state">No data for this period</div>';
         return;
     }
-    var maxCost = data[keys[0]].cost || 1;
-    var html = '<table class="breakdown-table"><thead><tr><th>' + labelKey + '</th><th class="cost-col">Cost</th><th class="cost-col">Requests</th><th class="cost-col">Tokens</th><th>Share</th></tr></thead><tbody>';
+    var maxVal = 1;
+    keys.forEach(function(k) {
+        var v = isTokens ? (data[k].completion_tokens + data[k].prompt_tokens) : data[k].cost;
+        if (v > maxVal) maxVal = v;
+    });
+    var html = '<table class="breakdown-table"><thead><tr><th>' + labelKey + '</th>' +
+        (isTokens ? '' : '<th class="cost-col">Cost</th>') +
+        '<th class="cost-col">Requests</th><th class="cost-col">Tokens</th><th>Share</th></tr></thead><tbody>';
     keys.forEach(function(k) {
         var d = data[k];
-        var pct = maxCost > 0 ? ((d.cost / maxCost) * 100) : 0;
-        var barColor = maxCost > 0 && d.cost === maxCost ? 'progress-blue' : 'progress-green';
+        var v = isTokens ? (d.completion_tokens + d.prompt_tokens) : d.cost;
+        var pct = maxVal > 0 ? ((v / maxVal) * 100) : 0;
+        var barColor = maxVal > 0 && v === maxVal ? 'progress-blue' : 'progress-green';
         html += '<tr>' +
             '<td><b>' + k + '</b></td>' +
-            '<td class="cost-col">$' + d.cost.toFixed(4) + '</td>' +
+            (isTokens ? '' : '<td class="cost-col">$' + d.cost.toFixed(4) + '</td>') +
             '<td class="cost-col">' + d.requests + '</td>' +
             '<td class="cost-col">' + formatTokens(d.prompt_tokens + d.completion_tokens) + '</td>' +
             '<td style="width:120px"><div class="progress-bar"><div class="progress-fill ' + barColor + '" style="width:' + Math.round(pct) + '%"></div></div></td>' +
@@ -682,7 +697,7 @@ function buildPage(providers) {
 
         providers.forEach(function(prov, i) {
             var activeClass = i === 0 ? ' active' : '';
-            tabsHtml += '<button class="tab-btn' + activeClass + '" onclick="switchTab(\'' + prov + '\')">' + prov + '</button>';
+            tabsHtml += '<button class="tab-btn' + activeClass + '" onclick="switchTab(\'' + prov + '\')">' + providerDisplayName(prov) + '</button>';
 
             var stats = statsList[i] || {daily:[], by_model:{}, by_profile:{}, totals:{cost:0, requests:0}};
             var sum = summaries[prov];
@@ -831,6 +846,16 @@ function buildPage(providers) {
                         panelsHtml += '<div class="usage-bars">' + ccBars + '</div>';
                     }
                 }
+            } else if (prov === 'llamacpp') {
+                // Local LLM — token-centric view (no $ — self-hosted hardware).
+                var lt = stats.totals || {};
+                var latSec = (lt.latency_ms || 0) / 1000;
+                panelsHtml += '<div class="stat-cards">' +
+                    '<div class="stat-card"><div class="label">Tokens (30d)</div><div class="value">' + formatTokens(lt.tokens || 0) + '</div><div class="sub">' + (lt.requests || 0) + ' requests</div></div>' +
+                    '<div class="stat-card"><div class="label">Tokens In</div><div class="value">' + formatTokens(lt.prompt_tokens || 0) + '</div><div class="sub">prompt</div></div>' +
+                    '<div class="stat-card"><div class="label">Tokens Out</div><div class="value">' + formatTokens(lt.completion_tokens || 0) + '</div><div class="sub">completion</div></div>' +
+                    '<div class="stat-card"><div class="label">Throughput</div><div class="value">' + (lt.tokens_per_sec || 0) + '</div><div class="sub">tokens/sec</div></div>' +
+                    '</div>';
             } else {
                 panelsHtml += '<div class="stat-cards">' +
                     '<div class="stat-card"><div class="label">Gateway Spend (30d)</div><div class="value">$' + stats.totals.cost.toFixed(4) + '</div><div class="sub">' + stats.totals.requests + ' requests</div></div>' +
@@ -847,7 +872,7 @@ function buildPage(providers) {
                 '<button class="date-pill" data-range="custom" onclick="applyDateRange(this,\'' + prov + '\',\'custom\')">Apply</button>' +
                 '</div>';
 
-            panelsHtml += '<div class="chart-wrap"><h3 style="font-size:0.85rem;margin-bottom:0.5rem" id="chartTitle-' + prov + '">Daily Spending (7 days)</h3><div style="height:250px"><canvas id="' + dailyChartId + '"></canvas></div></div>';
+            panelsHtml += '<div class="chart-wrap"><h3 style="font-size:0.85rem;margin-bottom:0.5rem" id="chartTitle-' + prov + '">' + (prov === 'llamacpp' ? 'Daily Tokens (7 days)' : 'Daily Spending (7 days)') + '</h3><div style="height:250px"><canvas id="' + dailyChartId + '"></canvas></div></div>';
 
             panelsHtml += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">' +
                 '<div class="chart-wrap"><h3 style="font-size:0.85rem;margin-bottom:0.5rem">By Model</h3><div id="' + modelTableId + '"></div></div>' +
@@ -862,11 +887,12 @@ function buildPage(providers) {
 
         providers.forEach(function(prov, i) {
             var stats = statsList[i] || {daily:[], by_model:{}, by_profile:{}};
+            var isLocal = prov === 'llamacpp';
             // Initialize per-tab state on first load
             window._tabState[prov] = { range: String(INITIAL_DAYS), label: INITIAL_DAYS + ' days' };
-            renderDailyChart('chart-daily-' + prov, stats.daily);
-            renderBreakdownTable('table-model-' + prov, stats.by_model, 'Model');
-            renderBreakdownTable('table-profile-' + prov, stats.by_profile, 'Profile');
+            renderDailyChart('chart-daily-' + prov, stats.daily, isLocal ? 'tokens' : 'cost');
+            renderBreakdownTable('table-model-' + prov, stats.by_model, 'Model', isLocal ? 'tokens' : 'cost');
+            renderBreakdownTable('table-profile-' + prov, stats.by_profile, 'Profile', isLocal ? 'tokens' : 'cost');
         });
         if (typeof loadOcCredStatus === 'function') loadOcCredStatus();
         if (typeof loadCcCredStatus === 'function') loadCcCredStatus();
@@ -887,8 +913,9 @@ window.switchTab = function(prov) {
     // Restore this tab's saved chart title from state
     var st = window._tabState[prov];
     var titleEl = document.getElementById('chartTitle-' + prov);
+    var isLocalTab = prov === 'llamacpp';
     if (titleEl && st && st.label) {
-        titleEl.textContent = 'Daily Spending (' + st.label + ')';
+        titleEl.textContent = (isLocalTab ? 'Daily Tokens (' : 'Daily Spending (') + st.label + ')';
     }
     if (!st) {
         window._tabState[prov] = { range: '7', label: '7 days' };
@@ -935,7 +962,8 @@ window.applyDateRange = function(btnEl, provider, range) {
     window._tabState[provider] = { range: String(range), label: label };
 
     var titleEl = document.getElementById('chartTitle-' + provider);
-    if (titleEl) titleEl.textContent = 'Daily Spending (' + label + ')';
+    var isLocal = provider === 'llamacpp';
+    if (titleEl) titleEl.textContent = (isLocal ? 'Daily Tokens (' : 'Daily Spending (') + label + ')';
 
     fetch('/api/usage/stats?provider=' + encodeURIComponent(provider) + '&start=' + start + '&end=' + end)
         .then(function(r) { return r.json(); })
@@ -944,9 +972,9 @@ window.applyDateRange = function(btnEl, provider, range) {
             if (window._charts && window._charts[canvasKey]) {
                 window._charts[canvasKey].destroy();
             }
-            renderDailyChart(canvasKey, stats.daily || []);
-            renderBreakdownTable('table-model-' + provider, stats.by_model || {}, 'Model');
-            renderBreakdownTable('table-profile-' + provider, stats.by_profile || {}, 'Profile');
+            renderDailyChart(canvasKey, stats.daily || [], isLocal ? 'tokens' : 'cost');
+            renderBreakdownTable('table-model-' + provider, stats.by_model || {}, 'Model', isLocal ? 'tokens' : 'cost');
+            renderBreakdownTable('table-profile-' + provider, stats.by_profile || {}, 'Profile', isLocal ? 'tokens' : 'cost');
         })
         .catch(function(e) {
             console.error('Date filter fetch failed', e);

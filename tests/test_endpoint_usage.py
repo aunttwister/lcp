@@ -144,10 +144,14 @@ class TestUsageStatsApi:
         h.do_GET()
         assert _status(h) == 200
         body = _json_body(h)
-        assert body["totals"] == {"cost": 0, "requests": 0}
+        assert body["totals"]["cost"] == 0
+        assert body["totals"]["requests"] == 0
+        assert body["totals"]["tokens"] == 0
+        assert body["totals"]["tokens_per_sec"] == 0
         # The date-range fill generates 30 zero-days even when empty
         assert len(body["daily"]) == 30
         assert all(d["cost"] == 0 for d in body["daily"])
+        assert all(d["tokens"] == 0 for d in body["daily"])
 
     def test_with_seeded_data(self, temp_db):
         _seed(temp_db)

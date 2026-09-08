@@ -34,6 +34,12 @@
 <script>
 var monthly = {{ monthly_json | safe }};
 var configuredProviders = {{ configured_providers_json | safe }};
+// Display name for a provider key (internal ids stay stable; only the label
+// shown to users changes). e.g. llamacpp -> "Local LLM".
+function providerDisplayName(key) {
+  if (key === 'llamacpp') return 'Local LLM';
+  return key;
+}
 </script>
 {% block base_scripts %}
 <script src="/static/js/api.js?v={{ cache_buster }}"></script>

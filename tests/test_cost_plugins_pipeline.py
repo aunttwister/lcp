@@ -139,6 +139,7 @@ class TestRecordCostPluginHook:
             prompt_tokens=180,   # prompt_tokens + cache_miss_tokens = 100 + 80
             completion_tokens=50,
             cache_hit_tokens=20,
+            latency_ms=500,
         )
 
     def test_does_not_call_record_tokens_on_failure(self, temp_db):

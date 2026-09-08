@@ -82,7 +82,7 @@ function loadPluginStatus() {
       }
 
       return '<a href="/usage#' + encodeURIComponent(prov) + '">' +
-        '<span class="sb-usage-name">' + prov + '</span>' +
+        '<span class="sb-usage-name">' + providerDisplayName(prov) + '</span>' +
         detailHtml +
         '</a>';
     }).join('');

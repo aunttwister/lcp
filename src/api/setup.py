@@ -390,13 +390,13 @@ _PROVIDER_TITLES = {
     "deepseek": "DeepSeek",
     "opencode": "OpenCode",
     "commandcode": "Command Code",
-    "llamacpp": "llama.cpp",
+    "llamacpp": "Local LLM",
 }
 _PROVIDER_DESCRIPTIONS = {
     "deepseek": "Official DeepSeek API — pricing, cost + balance tracking.",
     "opencode": "OpenCode gateway — cost history + subscription usage.",
     "commandcode": "Command Code — billing API + gateway cost tracking.",
-    "llamacpp": "Self-hosted local inference — zero-cost token tracking.",
+    "llamacpp": "Self-hosted local inference — token-based usage tracking.",
 }
 
 

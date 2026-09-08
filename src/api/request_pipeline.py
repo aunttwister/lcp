@@ -990,6 +990,7 @@ def record_cost(engine, profile: str, model: str, provider: str, cost_info: dict
                                  + cost_info.get("cache_miss_tokens", 0),
                     completion_tokens=cost_info.get("completion_tokens", 0),
                     cache_hit_tokens=cost_info.get("cache_hit_tokens", 0),
+                    latency_ms=cost_info.get("latency_ms", 0),
                 )
             except Exception as exc:
                 logger.warning("plugin_record_tokens_failed",

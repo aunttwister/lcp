@@ -182,7 +182,7 @@
       }
 
       var sum = pluginSummaries[latest];
-      var hdrLabel = latest;
+      var hdrLabel = providerDisplayName(latest);
 
       if (latest === 'deepseek' && sum && sum.balance) {
         hideUsage();
@@ -210,7 +210,7 @@
 
       hdrDot.className = 'header-plugin-dot on';
       hdrText.textContent = hdrLabel;
-      hdrBadge.title = latest + ' \u2014 latest active provider';
+      hdrBadge.title = providerDisplayName(latest) + ' \u2014 latest active provider';
     });
   }
 

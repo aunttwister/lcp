@@ -78,6 +78,74 @@ class TestLlamaCppRecordTokens:
         assert plugin._daily[today]["llama3"]["prompt_tokens"] == 100
         assert plugin._daily[today]["qwen2.5"]["prompt_tokens"] == 200
 
+    def test_record_tokens_accumulates_latency(self, tmp_path):
+        """record_tokens with latency_ms accumulates for TPS computation."""
+        persist = tmp_path / "usage.json"
+        plugin = LlamaCppCostPlugin(persist_path=str(persist))
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        plugin.record_tokens(model="default", prompt_tokens=100, completion_tokens=50,
+                             latency_ms=1000)
+        plugin.record_tokens(model="default", prompt_tokens=100, completion_tokens=50,
+                             latency_ms=3000)
+        entry = plugin._daily[today]["default"]
+        assert entry["total_latency_ms"] == 4000
+        assert entry["request_count"] == 2
+
+
+class TestLlamaCppFetchMetrics:
+    """fetch_metrics aggregates token/latency into token-centric metrics."""
+
+    def test_empty_returns_zeros(self, tmp_path):
+        plugin = LlamaCppCostPlugin(persist_path=str(tmp_path / "empty.json"))
+        m = plugin.fetch_metrics()
+        assert m["total_tokens"] == 0
+        assert m["requests"] == 0
+        assert m["tokens_per_sec"] == 0
+        assert m["per_model"] == {}
+
+    def test_computes_total_tps(self, tmp_path):
+        """Total TPS = (prompt + completion) / (latency_sec). 300 tok / 30s = 10."""
+        persist = tmp_path / "usage.json"
+        plugin = LlamaCppCostPlugin(persist_path=str(persist))
+        plugin.record_tokens(model="qwen", prompt_tokens=100, completion_tokens=50,
+                             cache_hit_tokens=20, latency_ms=10000)
+        plugin.record_tokens(model="qwen", prompt_tokens=50, completion_tokens=100,
+                             latency_ms=20000)
+        m = plugin.fetch_metrics()
+        assert m["prompt_tokens"] == 150
+        assert m["completion_tokens"] == 150
+        assert m["total_tokens"] == 300
+        assert m["cache_hit_tokens"] == 20
+        assert m["requests"] == 2
+        assert m["total_latency_ms"] == 30000
+        assert m["avg_latency_ms"] == 15000
+        assert m["tokens_per_sec"] == 10.0
+        assert m["per_model"]["qwen"]["request_count"] == 2
+
+    def test_fetch_usage_returns_latency_fields(self, tmp_path):
+        """fetch_usage exposes total_latency_ms + total_tokens."""
+        persist = tmp_path / "usage.json"
+        plugin = LlamaCppCostPlugin(persist_path=str(persist))
+        plugin.record_tokens(model="qwen", prompt_tokens=100, completion_tokens=50,
+                             latency_ms=1000)
+        row = plugin.fetch_usage()[0]
+        assert row["total_latency_ms"] == 1000
+        assert row["total_tokens"] == 150
+
+    def test_backward_compat_missing_latency_key(self, tmp_path):
+        """Old persisted entries without total_latency_ms default to 0 — no crash."""
+        plugin = LlamaCppCostPlugin(persist_path=str(tmp_path / "u.json"))
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        plugin._daily[today] = {
+            "old": {"prompt_tokens": 10, "completion_tokens": 5,
+                    "cache_hit_tokens": 0, "request_count": 1}
+        }
+        row = plugin.fetch_usage()[0]
+        assert row["total_latency_ms"] == 0
+        m = plugin.fetch_metrics()
+        assert m["tokens_per_sec"] == 0
+
 
 class TestLlamaCppPersistence:
     """Verify that token data is written to and loaded from the JSON file."""

@@ -124,8 +124,9 @@ class LlamaCppCostPlugin(CostPlugin):
                       model: str,
                       prompt_tokens: int,
                       completion_tokens: int,
-                      cache_hit_tokens: int = 0) -> None:
-        """Record a request's token counts."""
+                      cache_hit_tokens: int = 0,
+                      latency_ms: int = 0) -> None:
+        """Record a request's token counts and latency."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         with self._lock:
             day_models = self._daily.setdefault(today, {})
@@ -134,14 +135,28 @@ class LlamaCppCostPlugin(CostPlugin):
                 "completion_tokens": 0,
                 "cache_hit_tokens": 0,
                 "request_count": 0,
+                # Latency accumulation for tokens/sec (total TPS):
+                #   tps = (prompt + completion) / (total_latency_ms / 1000)
+                "total_latency_ms": 0,
             })
             entry["prompt_tokens"] += prompt_tokens
             entry["completion_tokens"] += completion_tokens
             entry["cache_hit_tokens"] += cache_hit_tokens
             entry["request_count"] += 1
+            entry["total_latency_ms"] += latency_ms
         self._persist()
 
     # ── Usage history ─────────────────────────────────────────────────────
+
+    def _entry(self, entry: dict) -> dict:
+        """Normalize a raw stored entry to include latency fields (default 0).
+
+        Backward-compatible with JSON files persisted before latency tracking
+        existed (no ``total_latency_ms`` key).
+        """
+        out = dict(entry)
+        out.setdefault("total_latency_ms", 0)
+        return out
 
     def fetch_usage(self,
                     start_date: Optional[str] = None,
@@ -154,7 +169,8 @@ class LlamaCppCostPlugin(CostPlugin):
                     continue
                 if end_date and day > end_date:
                     continue
-                for model, entry in models.items():
+                for model, raw_entry in models.items():
+                    entry = self._entry(raw_entry)
                     result.append({
                         "date": day,
                         "model": model,
@@ -165,10 +181,65 @@ class LlamaCppCostPlugin(CostPlugin):
                         "cache_miss_tokens": entry["prompt_tokens"],
                         "cost": 0.0,
                         "request_count": entry["request_count"],
+                        "total_latency_ms": entry["total_latency_ms"],
+                        "total_tokens": (entry["prompt_tokens"]
+                                         + entry["completion_tokens"]),
                     })
         from ..logging_config import get_logger
         get_logger("lcp.cost.llamacpp").debug("usage_fetched", days=len(result))
         return result
+
+    def fetch_metrics(self,
+                      start_date: Optional[str] = None,
+                      end_date: Optional[str] = None) -> dict:
+        """Return aggregate local-inference metrics (token-centric, no cost).
+
+        Computed from the recorded daily usage:
+          - total tokens in / out / cache-hit
+          - total requests
+          - average latency per request (ms)
+          - TOTAL throughput in tokens/sec
+            = (prompt_tokens + completion_tokens) / (total_latency_sec)
+
+        Includes a per-model breakdown and the date range actually covered.
+        All cost fields are zero (local hardware) — the dashboard for this
+        provider is token/throughput focused.
+        """
+        rows = self.fetch_usage(start_date=start_date, end_date=end_date)
+        prompt = sum(r["prompt_tokens"] for r in rows)
+        completion = sum(r["completion_tokens"] for r in rows)
+        cache_hit = sum(r["cache_hit_tokens"] for r in rows)
+        requests = sum(r["request_count"] for r in rows)
+        latency_ms = sum(r["total_latency_ms"] for r in rows)
+        total_tokens = prompt + completion
+
+        per_model: dict[str, dict] = {}
+        for r in rows:
+            m = per_model.setdefault(r["model"], {
+                "prompt_tokens": 0, "completion_tokens": 0,
+                "cache_hit_tokens": 0, "request_count": 0,
+                "total_latency_ms": 0,
+            })
+            m["prompt_tokens"] += r["prompt_tokens"]
+            m["completion_tokens"] += r["completion_tokens"]
+            m["cache_hit_tokens"] += r["cache_hit_tokens"]
+            m["request_count"] += r["request_count"]
+            m["total_latency_ms"] += r["total_latency_ms"]
+
+        latency_sec = latency_ms / 1000.0
+        tps = round(total_tokens / latency_sec, 1) if latency_sec > 0 else 0.0
+        return {
+            "provider": "llamacpp",
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total_tokens,
+            "cache_hit_tokens": cache_hit,
+            "requests": requests,
+            "total_latency_ms": latency_ms,
+            "avg_latency_ms": round(latency_ms / requests, 1) if requests else 0,
+            "tokens_per_sec": tps,
+            "per_model": per_model,
+        }
 
     def fetch_balance(self) -> Optional[dict]:
         # Local inference — no balance to query

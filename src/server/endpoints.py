@@ -1976,6 +1976,11 @@ class UsageEndpoints:
                         func.substr(RequestModel.timestamp, 1, 10).label("date"),
                         func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
                         func.count(RequestModel.id).label("requests"),
+                        func.coalesce(func.sum(RequestModel.prompt_tokens), 0).label("prompt_tokens"),
+                        func.coalesce(func.sum(RequestModel.completion_tokens), 0).label("completion_tokens"),
+                        func.coalesce(func.sum(RequestModel.cache_hit_tokens), 0).label("cache_hit_tokens"),
+                        func.coalesce(func.sum(RequestModel.cache_miss_tokens), 0).label("cache_miss_tokens"),
+                        func.coalesce(func.sum(RequestModel.latency_ms), 0).label("latency_ms"),
                     )
                 )
                 for f in base_filter:
@@ -1991,7 +1996,19 @@ class UsageEndpoints:
                 )
 
                 # Build lookup of existing data keyed by date
-                daily_map = {r.date: {"cost": float(r.cost), "requests": r.requests} for r in daily_rows}
+                daily_map = {}
+                for r in daily_rows:
+                    total_tok = r.prompt_tokens + r.completion_tokens
+                    daily_map[r.date] = {
+                        "cost": float(r.cost),
+                        "requests": r.requests,
+                        "prompt_tokens": r.prompt_tokens,
+                        "completion_tokens": r.completion_tokens,
+                        "cache_hit_tokens": r.cache_hit_tokens,
+                        "cache_miss_tokens": r.cache_miss_tokens,
+                        "tokens": total_tok,
+                        "latency_ms": r.latency_ms,
+                    }
 
                 # Determine full date range to fill gaps with zero-usage days
                 if start_str and end_str:
@@ -2007,9 +2024,14 @@ class UsageEndpoints:
                 while d <= date_end:
                     ds = d.strftime("%Y-%m-%d")
                     if ds in daily_map:
-                        daily.append({"date": ds, "cost": daily_map[ds]["cost"], "requests": daily_map[ds]["requests"]})
+                        daily.append({"date": ds, **daily_map[ds]})
                     else:
-                        daily.append({"date": ds, "cost": 0, "requests": 0})
+                        daily.append({
+                            "date": ds, "cost": 0, "requests": 0,
+                            "prompt_tokens": 0, "completion_tokens": 0,
+                            "cache_hit_tokens": 0, "cache_miss_tokens": 0,
+                            "tokens": 0, "latency_ms": 0,
+                        })
                     d += timedelta(days=1)
 
                 # Per-model aggregates (with cache tokens)
@@ -2081,6 +2103,8 @@ class UsageEndpoints:
                     session.query(
                         func.coalesce(func.sum(RequestModel.cost), 0).label("cost"),
                         func.count(RequestModel.id).label("requests"),
+                        func.coalesce(func.sum(RequestModel.prompt_tokens + RequestModel.completion_tokens), 0).label("tokens"),
+                        func.coalesce(func.sum(RequestModel.latency_ms), 0).label("latency_ms"),
                     )
                 )
                 for f in base_filter:
@@ -2088,17 +2112,33 @@ class UsageEndpoints:
                 total_row = total_q.first()
                 total_cost = float(total_row.cost) if total_row else 0
                 total_requests = total_row.requests if total_row else 0
+                total_tokens = int(total_row.tokens) if total_row and total_row.tokens else 0
+                total_latency_ms = int(total_row.latency_ms) if total_row else 0
 
                 # Aggregate cache stats
                 cache_hit = sum(r.cache_hit_tokens for r in model_rows)
                 cache_miss = sum(r.cache_miss_tokens for r in model_rows)
+
+                # Tokens/sec (total throughput) across the period. Only meaningful
+                # for local inference (llamacpp) where latency is recorded; for
+                # cloud providers it is informational.
+                latency_sec = total_latency_ms / 1000.0
+                tokens_per_sec = round(total_tokens / latency_sec, 1) if latency_sec > 0 else 0.0
 
             self._send_json({
                 "provider": provider,
                 "daily": daily,
                 "by_model": by_model,
                 "by_profile": by_profile,
-                "totals": {"cost": total_cost, "requests": total_requests},
+                "totals": {
+                    "cost": total_cost,
+                    "requests": total_requests,
+                    "tokens": total_tokens,
+                    "prompt_tokens": sum(r.prompt_tokens for r in model_rows),
+                    "completion_tokens": sum(r.completion_tokens for r in model_rows),
+                    "latency_ms": total_latency_ms,
+                    "tokens_per_sec": tokens_per_sec,
+                },
                 "cache": {
                     "hit_tokens": cache_hit,
                     "miss_tokens": cache_miss,
