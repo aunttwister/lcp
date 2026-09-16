@@ -845,7 +845,19 @@ class ProviderEndpoints:
         store = _credential_store_for(self)
         if store is not None:
             store.set(name, "")
-        self._send_json({"ok": True, "deleted": name})
+        # Cascade: a provider's persisted circuit-breaker health is otherwise
+        # immortal — attach_engine() materializes EVERY provider_health row at
+        # boot, so /health and /api/providers/health kept listing the deleted
+        # provider across restarts. Drop its rows here so the delete is complete.
+        health_rows_removed = 0
+        try:
+            cb = resolve_service("circuit_breaker", fallback=get_circuit_breaker)
+            health_rows_removed = cb.forget_provider(name)
+        except Exception as exc:  # noqa: BLE001 — never fail a delete on health bookkeeping
+            logger.warning("provider_delete_health_cascade_failed",
+                           provider=name, error=str(exc))
+        self._send_json({"ok": True, "deleted": name,
+                         "health_rows_removed": health_rows_removed})
 
     def _serve_provider_rename(self, name: str):
         """POST /api/providers/{name}/rename  {new_name: "..."} — rename a provider.

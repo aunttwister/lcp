@@ -265,6 +265,49 @@ class CircuitBreaker:
         """Return all tracked provider health entries keyed by (provider, url, profile)."""
         return dict(self._health)
 
+    def forget_provider(self, provider: str) -> int:
+        """Drop every health entry for *provider* — in memory AND on disk.
+
+        Called when a provider is deleted from the config. Without this the
+        rows are effectively immortal: nothing else ever deletes them, and
+        ``attach_engine()`` materializes ALL persisted rows at boot, so a
+        deleted provider keeps being listed by ``/health`` and
+        ``/api/providers/health`` forever (the "llamacpp ghost" — the provider
+        was gone from the config while three rows, including a
+        ``degraded/consecutive_failures=6`` one, kept feeding reports).
+
+        Removes every ``(provider, *, profile)`` variant, since one provider can
+        hold a row per base_url/profile combination. Returns the number of
+        entries dropped (DB rows when the engine is attached, otherwise just the
+        in-memory count). Best-effort on the DB side, matching ``_persist``: a
+        DB problem is logged, never raised, so deleting a provider can't fail
+        because of health bookkeeping.
+        """
+        in_memory = [k for k in self._health if k and k[0] == provider]
+        for key in in_memory:
+            self._health.pop(key, None)
+
+        if self._engine is None:
+            return len(in_memory)
+
+        try:
+            from .models import ProviderHealth, get_session
+            with get_session(self._engine) as session:
+                rows = session.query(ProviderHealth).filter_by(
+                    provider=provider,
+                ).delete(synchronize_session=False)
+                session.commit()
+        except Exception as exc:  # noqa: BLE001 — best-effort, see docstring
+            logger.warning("circuit_breaker_health_forget_failed",
+                           provider=provider, error=str(exc))
+            return len(in_memory)
+
+        if rows or in_memory:
+            logger.info("circuit_breaker_health_forgotten",
+                        provider=provider, rows=rows or 0,
+                        in_memory=len(in_memory))
+        return max(rows or 0, len(in_memory))
+
     def reset(self, provider: str, base_url: str, profile: str) -> None:
         """Force-reset a provider back to healthy, clearing failures and cooldown."""
         h = self.get_health(provider, base_url, profile)

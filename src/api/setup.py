@@ -494,6 +494,15 @@ def remove_provider(engine, config, name: str) -> dict:
         store.set_workspace_id(name, "")
 
     set_state(engine, f"provider:{name}", "removed")
+    # Cascade the circuit-breaker health, same as the Providers page delete:
+    # provider_health rows are reloaded wholesale at boot, so leaving them
+    # behind resurrects the provider in /health forever.
+    try:
+        from .circuit_breaker import get_circuit_breaker
+        get_circuit_breaker(config).forget_provider(name)
+    except Exception as exc:  # noqa: BLE001 — removal must not fail on health cleanup
+        logger.warning("setup_provider_health_cascade_failed",
+                       provider=name, error=str(exc))
     logger.info("setup_provider_removed", provider=name)
     return {"removed": True, "provider": name}
 
