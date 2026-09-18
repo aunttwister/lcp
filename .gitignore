@@ -1,9 +1,10 @@
 # Environment secrets
 .env
 
-# Legacy local gateway config — config is now DB-backed (seeded in code via
-# src/api/config.py SEED_CONFIG); gateway.yaml is obsolete and only kept as a
-# local reference.
+# Legacy local gateway config. Config is DB-backed (seeded in code via
+# src/api/config.py SEED_CONFIG). The YAML file itself was deleted 2026-09-18
+# after the stale references were purged; the rule stays so it cannot come
+# back unnoticed.
 config/gateway.yaml
 
 # Python
@@ -14,6 +15,12 @@ __pycache__/
 .coverage
 *.egg-info/
 .venv/
+build/
+dist/
+
+# Editor/tooling scratch copies (`foo.py,cover`). Untracked but were not
+# ignored, so they polluted git status and grep/ripgrep results.
+*,cover
 
 # IDE
 .vscode/
