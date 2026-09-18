@@ -2,7 +2,7 @@
 
 Provider API keys entered via the UI are encrypted at rest using Fernet
 (symmetric AES-128-CBC + HMAC) and stored in the SQLite database — never in
-plaintext and never in the git-tracked gateway.yaml.
+plaintext and never in the git-tracked config.
 
 The master encryption key comes from the ``LCP_SECRET_KEY`` environment
 variable. When it is unset, we fall back to a per-install random key persisted

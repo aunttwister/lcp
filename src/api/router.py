@@ -971,7 +971,7 @@ DEFAULT_COST_BIAS = 0.15
 # Hysteresis: only override/reorder when the best step beats the default by this much.
 _HYSTERESIS = 0.05
 
-# Known model pricing (USD per 1M output tokens) — from gateway.yaml
+# Known model pricing (USD per 1M output tokens) — from the gateway config
 _MODEL_PRICES: dict[str, float] = {
     "deepseek-v4-pro": 0.87,
     "deepseek-v4-flash": 0.27,
@@ -2199,7 +2199,7 @@ def get_dynamic_router() -> CapabilityRouter:
 def sync_router_enabled_from_settings() -> bool:
     """Re-apply the persisted ``routing_enabled`` toggle to the global router.
 
-    Boot seeds ``enabled`` from ``gateway.yaml`` (which may be the ``false``
+    Boot seeds ``enabled`` from the gateway config (which may be the ``false``
     baseline). Once the settings store is available (after ``init_settings``),
     this re-syncs so the effective state — and the boot log — reflects the UI
     toggle. Returns the effective enabled state.

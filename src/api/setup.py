@@ -4,8 +4,9 @@ LCP ships a small number of self-contained "plugins" that are each installed
 (registered) once:
 
   - **Provider cost plugins** — ``deepseek``, ``opencode``, ``commandcode``,
-    ``llamacpp``. "Installation" means adding the provider to ``gateway.yaml``
-    (reusing the same preset + provider-create machinery as the Providers
+    ``llamacpp``. "Installation" means adding the provider to the gateway
+    config (the settings DB — ``config.save()``), reusing the same
+    preset + provider-create machinery as the Providers
     page) and — for API-keyed providers — storing the key encrypted in the
     credential store. Local/credential-free steps (``llamacpp``) or steps that
     only need a cookie/workspace-id are config-apply only.
@@ -429,7 +430,9 @@ def install_provider(engine, config, name: str, body: dict) -> dict:
     if not api_base:
         raise SetupError(f"missing api_base for {name} (no preset available)")
 
-    # Write provider into gateway.yaml (same path as the Providers page).
+    # Write the provider into the gateway config (settings DB) — the same path
+    # the Providers page uses. `config.save()` persists every section to
+    # `gateway_config:<section>` rows; there is no YAML file involved.
     cfg_raw = config.raw
     existing = cfg_raw.get("providers", {}).get(name, {})
     merged = dict(existing)
@@ -437,11 +440,11 @@ def install_provider(engine, config, name: str, body: dict) -> dict:
         merged["api_base"] = api_base
     if models:
         merged["models"] = models
-    # Preserve gateway.yaml-only keys like api_key_env / cache settings.
+    # Preserve config-only keys like api_key_env / cache settings.
     cfg_raw.setdefault("providers", {})[name] = merged
     config.save()
 
-    # Store the API key encrypted (never in gateway.yaml) when provided.
+    # Store the API key encrypted (never in the config) when provided.
     from .credential_store import get_credential_store
 
     store = get_credential_store()
@@ -474,7 +477,7 @@ def remove_provider(engine, config, name: str) -> dict:
     if name not in ("deepseek", "opencode", "commandcode", "llamacpp"):
         raise SetupError(f"unknown provider: {name}")
 
-    # Remove the provider entry from gateway.yaml.
+    # Remove the provider entry from the gateway config.
     cfg_raw = config.raw
     cfg_raw.setdefault("providers", {}).pop(name, None)
     # Drop it from every profile chain (same as the Providers page).

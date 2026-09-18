@@ -16,7 +16,7 @@ logger = get_logger("lcp.cost_estimator")
 
 
 # Approximate token pricing per 1M tokens (fallback if config unavailable)
-# Keys match the gateway.yaml pricing convention: cache_miss = input, output = output
+# Keys match the gateway config pricing convention: cache_miss = input, output = output
 _DEFAULT_PRICING = {
     "deepseek-v4-pro": {"cache_miss": 0.435, "output": 0.87},
     "deepseek-v4-flash": {"cache_miss": 0.14, "output": 0.28},

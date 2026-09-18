@@ -74,7 +74,7 @@ class ProviderCredential(Base):
 
     The raw key is encrypted with Fernet (see src.api.crypto) using the master
     key from ``LCP_SECRET_KEY`` (or the on-disk fallback). Only ciphertext is
-    stored here — the gateway.yaml only ever references the env var name.
+    stored here — the gateway config only ever references the env var name.
     """
     __tablename__ = "provider_credentials"
 
@@ -186,7 +186,7 @@ class ModelCapability(Base):
     model = Column(String, nullable=False, index=True)
     task_type = Column(String, nullable=False, index=True)
     score = Column(Float, nullable=False)  # 0.0–1.0 normalized
-    source = Column(String, nullable=False, default="livebench")  # livebench, arena, gateway_yaml, lcp_benchmark, manual
+    source = Column(String, nullable=False, default="livebench")  # livebench, arena, gateway_yaml (historical), lcp_benchmark, manual
     benchmark_category = Column(String, nullable=True)  # raw LiveBench category (coding, math, etc.)
     raw_score = Column(Float, nullable=True)  # original score before normalization (e.g. 70.0 out of 100)
     release_label = Column(String, nullable=True, index=True)  # e.g. "2026-08-13"; None = unversioned/legacy

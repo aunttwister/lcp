@@ -783,7 +783,7 @@ class ProviderEndpoints:
         # context-aware router + /v1/models know the true capacity.
         _auto_learn_model_contexts(cfg, name, provider_data.get("api_base", ""))
         # Store the API key (if provided) encrypted in the credential store —
-        # never in the git-tracked gateway.yaml.
+        # never in the git-tracked config.
         if body.get("api_key"):
             store = _credential_store_for(self)
             if store is not None:
@@ -2129,7 +2129,7 @@ class UsageEndpoints:
                     model_q = model_q.filter(f)
                 model_rows = model_q.group_by(RequestModel.model).order_by(func.sum(RequestModel.cost).desc()).all()
 
-                # Compute cache savings from gateway.yaml pricing
+                # Compute cache savings from gateway config pricing
                 total_cache_savings = 0.0
                 for r in model_rows:
                     try:

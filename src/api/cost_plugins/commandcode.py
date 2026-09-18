@@ -15,7 +15,7 @@ Usage tracking has two sources:
 
 Pricing is at the provider's list price (Command Code passes through at
 cost). Common models are pre-priced; unknown models fall back to config-based
-pricing from ``gateway.yaml``.
+pricing from the gateway config.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ _COMMANDCODE_BASE = "https://api.commandcode.ai/provider/v1"
 # ── Pre-known model pricing (per 1M tokens, USD) ────────────────────────────
 # Sourced from commandcode.ai/docs/resources/pricing-limits (August 2026).
 # Only models commonly routed through commandcode are listed. Unlisted models
-# are billed through config-based pricing from gateway.yaml.
+# are billed through config-based pricing from the gateway config.
 _COMMANDCODE_PRICING: dict[str, dict[str, float]] = {
     # DeepSeek (primary models — 75% off deal)
     "deepseek-v4-pro": {

@@ -77,11 +77,12 @@ def _sanitize_message(msg: str) -> str:
 def _resolve_pricing(config, provider: str, model: str) -> dict | None:
     """Resolve pricing for cost estimation without hard-failing.
 
-    Order: config (gateway.yaml) → cost-plugin registry (e.g. Command Code's
-    built-in pricing) → None (``estimate_from_request`` then uses default rates).
+    Order: config (the gateway config's ``pricing:`` section) → cost-plugin
+    registry (e.g. Command Code's built-in pricing) → None
+    (``estimate_from_request`` then uses default rates).
 
     Returns ``None`` instead of raising so a missing pricing entry (e.g.
-    commandcode not in gateway.yaml's ``pricing:`` section) does NOT turn a
+    commandcode absent from the config's ``pricing:`` section) does NOT turn a
     request into a 500 before it ever reaches the provider chain.
     """
     try:
