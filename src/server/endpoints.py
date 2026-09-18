@@ -1,7 +1,47 @@
 """Endpoint mixin classes for LCPHandler.
 
-Each class groups related _serve_* methods by domain.
-LCPHandler inherits from all of them via multiple inheritance.
+Each class groups related ``_serve_*`` methods by domain. ``LCPHandler``
+inherits from all of them via multiple inheritance.
+
+    HealthEndpoints      (~456 lines)  health, models, errors, metrics, export
+    ProviderEndpoints    (~500)        provider CRUD, test, discover, toggle, rename
+    ProfileEndpoints     (~150)        profile CRUD, per-profile budget
+    KeyEndpoints         (~77)         API key CRUD, rotate
+    AlertEndpoints       (~50)         alert list/config/active, webhook, acknowledge
+    BudgetEndpoints      (~147)        budget CRUD + status
+    PluginEndpoints      (~105)        cost-plugin usage/balances/summary/subscriptions
+    SettingsEndpoints    (~217)        settings read/update, cache refresh/clear
+    UsageEndpoints       (~258)        daily costs, recent requests, logs, usage stats
+    DashboardEndpoints   (~702)        dashboard page + its aggregated views
+    MemoryEndpoints      (~137)        per-profile memory count/retain/recall/forget
+    SetupEndpoints       (~137)        first-run setup wizard + install progress
+
+Routing lives in ``src/server/router.py`` — this module only implements the
+handlers. Module-level ``_helpers`` below are shared by several classes.
+
+WHY THIS IS ONE MODULE (measured, 2026-09-18) — do not split it naively
+-----------------------------------------------------------------------
+This file is ~3,250 lines and is the largest single module in the repo, so the
+obvious move is one file per class. That was assessed and rejected, because it
+is NOT a mechanical change and it would make the test suite worse:
+
+* ``tests/`` patches module-global dependencies through THIS module's
+  namespace in 69 places — ``src.server.endpoints.get_session`` (17),
+  ``resolve_service`` (13), ``get_credential_store`` (12), ``get_registry``
+  (9), ``get_alert_manager`` (7), ``_credential_store_for`` (5),
+  ``get_key_manager`` (4), ``_auto_learn_model_contexts`` (2).
+* Python binds a patched name to the module that *resolves* it. Moving a class
+  into a submodule means its dependencies resolve in that submodule, so every
+  patch site must be retargeted.
+* Worse, the shared dependencies are used broadly — ``resolve_service`` appears
+  54 times and ``get_session`` 25 times across many classes — so a single
+  ``patch("...resolve_service")`` covering a test that exercises several
+  endpoints would have to become up to twelve patches.
+
+The classes are already cleanly separated by concern; the file is only a
+container. Splitting it is therefore a test-refactor project (rewrite 69 patch
+targets, accepting worse ergonomics), not a code cleanup. Do that deliberately
+if ever, not as a drive-by.
 """
 
 import json
