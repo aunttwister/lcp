@@ -53,6 +53,16 @@ from .endpoints import (
     MemoryEndpoints,
 )
 
+from .router import (
+    RouteTable,
+    any_of,
+    exact,
+    prefix,
+    prefix_suffix,
+    regex,
+    suffix,
+)
+
 logger = get_logger("lcp.server")
 
 # Redact things that look like API keys / bearer tokens before surfacing any
@@ -125,6 +135,17 @@ class LCPHandler(
     # Class-level references set after server init
     config: Any = None
     engine: Any = None
+
+    # Route tables are built once per process and reused across requests.
+    _routes: "RouteTable | None" = None
+
+    @classmethod
+    def _route_table(cls) -> "RouteTable":
+        """Return the (lazily built) declarative route table."""
+        if cls._routes is None:
+            cls._routes = _build_routes()
+        return cls._routes
+
 
     def log_message(self, format, *args):
         """Suppress default http.server logging — we use structlog."""
@@ -241,255 +262,37 @@ class LCPHandler(
         return unquote(path.split("?")[0].split("/")[index]).replace("\u00a0", " ")
 
     def do_GET(self):
+        """Dispatch a GET through the declarative route table.
+
+        Replaces a 143-line if/elif chain of 60 string comparisons. Rules are
+        matched in registration order; a miss is a 404, which is exactly the
+        semantics the chain ended with.
+        """
         logger.debug("request_start", method="GET", path=self.path,
                      client_ip=self.client_address[0])
-        if self.path == "/" or self.path == "/dashboard":
-            self._serve_dashboard()
-        elif self.path == "/keys" or self.path == "/keys/dashboard":
-            self._serve_keys_dashboard()
-        elif self.path == "/providers":
-            self._serve_providers_page()
-        elif self.path == "/profiles":
-            self._serve_profiles_page()
-        elif self.path.endswith("/dashboard"):
-            # Per-profile: /l2/dashboard, /l1/dashboard, etc.
-            profile = self._resolve_profile()
-            if profile:
-                self._serve_dashboard(profile_filter=profile)
-            else:
-                self._serve_dashboard()
-        elif self.path == "/health":
-            self._serve_health()
-        elif self.path == "/models":
-            self._serve_models_page()
-        elif self.path == "/setup":
-            self._serve_setup_page()
-        elif self.path == "/api/settings" or self.path.startswith("/api/settings?"):
-            self._serve_settings_api()
-        elif self.path == "/api/routing/status" or self.path.startswith("/api/routing/status?"):
-            self._serve_routing_status_api()
-        elif self.path == "/api/setup" or self.path.startswith("/api/setup?"):
-            self._serve_setup_api()
-        elif self.path == "/api/setup/progress" or self.path.startswith("/api/setup/progress?"):
-            self._serve_setup_progress_api()
-        elif self.path in self._models_paths:
-            self._serve_models()
-        elif any(self.path.endswith("/" + p.lstrip("/")) for p in self._models_paths):
-            # Per-profile: /coder/v1/models or /coder/models
-            profile = self._resolve_profile()
-            if profile and profile in self.config.profiles:
-                self._serve_models(profile=profile)
-            else:
-                self._send_json({"error": "not found"}, 404)
-        elif self.path.startswith("/errors"):
-            self._serve_errors()
-        elif self.path == "/cache/stats":
-            self._serve_cache_stats()
-        elif self.path == "/metrics":
-            self._serve_metrics()
-        elif self.path == "/export" or self.path.startswith("/export?"):
-            self._serve_export()
-        elif self.path == "/api/daily-costs":
-            self._serve_daily_costs_api()
-        elif self.path == "/api/recent-requests":
-            self._serve_recent_requests_api()
-        elif self.path == "/api/logs" or self.path.startswith("/api/logs?"):
-            self._serve_logs_api()
-        elif self.path == "/api/providers":
-            self._serve_providers_list()
-        elif self.path == "/api/providers/presets":
-            self._serve_provider_presets()
-        elif self.path == "/api/providers/health" or self.path.startswith("/api/providers/health?"):
-            self._serve_providers_health_api()
-        elif self.path == "/api/providers/failovers" or self.path.startswith("/api/providers/failovers?"):
-            self._serve_providers_failovers_api()
-        elif self.path.split("?")[0].startswith("/api/providers/") and self.path.split("?")[0].endswith("/failures"):
-            # GET /api/providers/{name}/failures?window=...
-            provider_name = self.path.split("?")[0].split("/")[3]
-            self._serve_provider_failures_api(provider_name)
-        elif self.path == "/api/profiles":
-            self._serve_profiles_list()
-        elif self.path.startswith("/api/profiles/") and self.path.endswith("/budget"):
-            # GET /api/profiles/{name}/budget
-            parts = self.path.split("/")
-            self._serve_profile_budget(parts[3])
-        elif self.path == "/api/keys":
-            self._serve_keys_list()
-        elif self.path.startswith("/api/keys/") and len(self.path.split("/")) == 4:
-            key_id = self.path.split("/")[3]
-            self._serve_key_detail(key_id)
-        elif self.path == "/api/alerts":
-            self._serve_alerts_list()
-        elif self.path == "/api/alerts/config":
-            self._serve_alerts_config()
-        elif self.path == "/api/alerts/active":
-            self._serve_alerts_active()
-        elif self.path == "/api/budgets":
-            self._serve_budgets_list()
-        elif self.path == "/api/budgets/status":
-            self._serve_budgets_status()
-        elif self.path == "/api/cost-plugins/usage":
-            self._serve_plugin_usage()
-        elif self.path == "/api/cost-plugins/balances":
-            self._serve_plugin_balances()
-        elif self.path == "/api/cost-plugins/summary":
-            self._serve_plugin_summary()
-        elif self.path == "/api/cost-plugins/subscriptions":
-            self._serve_plugin_subscriptions()
-        elif self.path.startswith("/api/cost-plugins/cookie/") and len(self.path.split("/")) == 5:
-            # GET /api/cost-plugins/cookie/{provider}
-            provider = self.path.split("/")[4]
-            self._serve_plugin_cookie_get(provider)
-        elif self.path.startswith("/api/cost-plugins/workspace-id/") and len(self.path.split("/")) == 5:
-            # GET /api/cost-plugins/workspace-id/{provider}
-            provider = self.path.split("/")[4]
-            self._serve_plugin_workspace_id_get(provider)
-        elif self.path == "/api/usage/stats" or self.path.startswith("/api/usage/stats?"):
-            self._serve_usage_stats_api()
-        elif self.path == "/api/usage/totals" or self.path.startswith("/api/usage/totals?"):
-            self._serve_usage_totals_api()
-        elif self.path.startswith("/static/"):
-            self._serve_static()
-        elif self.path == "/usage":
-            self._serve_usage_page()
-        elif self.path == "/logs":
-            self._serve_logs_page()
-        elif self.path == "/alerts":
-            self._serve_alerts_page()
-        elif self.path == "/api/models/capability" or self.path.startswith("/api/models/capability?"):
-            self._serve_capability_api()
-        elif self.path == "/api/models/registry" or self.path.startswith("/api/models/registry?"):
-            self._serve_registry_api()
-        elif self.path == "/api/models/benchmark" or self.path.startswith("/api/models/benchmark?"):
-            self._serve_benchmark_list_api()
-        elif self.path == "/api/models/benchmark/status":
-            self._serve_benchmark_status_api()
-        elif self.path.startswith("/api/models/benchmark/") and self.path.endswith("/log"):
-            # GET /api/models/benchmark/{id}/log
-            parts = self.path.split("/")
-            if len(parts) == 6:
-                self._serve_benchmark_log_api(parts[4])
-            else:
-                self._send_json({"error": "not found"}, 404)
-        elif self.path.startswith("/api/models/benchmark/") and len(self.path.split("/")) == 5:
-            run_id = self.path.split("/")[4]
-            self._serve_benchmark_detail_api(run_id)
-        else:
-            # GET /{profile}/memory/count
-            profile = self._memory_profile()
-            if profile:
-                parts = self.path.rstrip("/").split("/")
-                if len(parts) == 4 and parts[3] == "count":
-                    self._serve_memory_api(profile, "count")
-                    return
+        if not self._route_table().dispatch(self, "GET"):
             self._send_json({"error": "not found"}, 404)
-
     def do_POST(self):
         profile = self._resolve_profile()
         logger.debug("request_start", method="POST", path=self.path,
                      client_ip=self.client_address[0], profile=profile or "none")
 
-        # Provider API routes
-        if self.path == "/api/providers":
-            self._serve_provider_create()
-            return
-        elif self.path == "/api/providers/test":
-            self._serve_provider_test()
-            return
-        elif self.path == "/api/providers/discover":
-            self._serve_provider_discover()
-            return
-        elif self.path == "/api/profiles":
-            self._serve_profile_create()
-            return
-        elif self.path == "/api/keys":
-            self._serve_key_create()
-            return
-        elif self.path.startswith("/api/keys/") and self.path.endswith("/rotate"):
-            key_id = self.path.split("/")[3]
-            self._serve_key_rotate(key_id)
-            return
-        elif self.path == "/api/alerts/webhook/test":
-            self._serve_alerts_test_webhook()
-            return
-        elif self.path.startswith("/api/alerts/") and self.path.endswith("/acknowledge"):
-            alert_id = self.path.split("/")[3]
-            self._serve_alert_acknowledge(alert_id)
-            return
-        elif self.path == "/api/budgets":
-            self._serve_budget_create()
-            return
-        elif self.path == "/api/setup/skip":
-            self._serve_setup_skip_api()
-            return
-        elif self.path == "/api/settings":
-            self._serve_settings_update_api()
-            return
-        elif self.path == "/api/settings/cache/refresh":
-            self._serve_settings_refresh_api()
-            return
-        elif self.path == "/api/settings/cache/clear":
-            self._serve_settings_cache_clear()
-            return
-        elif self.path == "/api/routing/policy":
-            self._serve_routing_policy_api()
-            return
-        elif self.path == "/api/routing/rules":
-            self._serve_routing_rules_api()
-            return
-        elif self.path.startswith("/api/setup/install/") and len(self.path.split("/")) == 6:
-            # POST /api/setup/install/{kind}/{name}
-            kind = self.path.split("/")[4]
-            name = self.path.split("/")[5]
-            self._serve_setup_install_api(kind, name)
-            return
-        elif self.path.startswith("/api/circuit-breaker/reset"):
-            self._serve_circuit_breaker_reset()
-            return
-        elif self.path == "/api/models/registry":
-            self._serve_registry_upsert_api()
-            return
-        elif self.path == "/api/models/capability/manual":
-            self._serve_capability_manual_api()
-            return
-        elif self.path == "/api/models/capability/seed":
-            self._serve_capability_seed_api()
-            return
-        elif self.path == "/api/models/capability/import":
-            self._serve_capability_import_api()
-            return
-        elif self.path == "/api/models/benchmark":
-            self._serve_benchmark_create_api()
-            return
-        elif self.path.startswith("/api/providers/") and self.path.endswith("/toggle"):
-            # POST /api/providers/{name}/toggle
-            provider_name = self._path_part(self.path, 3)
-            self._serve_provider_toggle(provider_name)
-            return
-        elif self.path.startswith("/api/providers/") and self.path.endswith("/rename"):
-            # POST /api/providers/{name}/rename  {new_name: "..."}
-            provider_name = self._path_part(self.path, 3)
-            self._serve_provider_rename(provider_name)
-            return
-        elif self.path.startswith("/api/cost-plugins/cookie/") and len(self.path.split("?")[0].split("/")) == 5:
-            # POST /api/cost-plugins/cookie/{provider}
-            provider = self._path_part(self.path, 4)
-            self._serve_plugin_cookie_set(provider)
-            return
-        elif self.path.startswith("/api/cost-plugins/workspace-id/") and len(self.path.split("?")[0].split("/")) == 5:
-            # POST /api/cost-plugins/workspace-id/{provider}
-            provider = self._path_part(self.path, 4)
-            self._serve_plugin_workspace_id_set(provider)
+        # ── Admin / UI routes: declarative table (see _build_routes) ─────────
+        if self._route_table().dispatch(self, "POST"):
             return
 
-        # POST /{profile}/memory/{retain|recall|forget}
-        profile = self._memory_profile()
-        if profile:
-            parts = self.path.rstrip("/").split("/")
-            if len(parts) == 4 and parts[3] in ("retain", "recall", "forget"):
-                self._serve_memory_api(profile, parts[3])
-                return
+        # ── Proxy path: POST /{profile}/chat/completions ─────────────────────
+        # Everything below the admin routes is the proxy itself. It used to be
+        # inlined right here, which is what made do_POST 438 lines long.
+        self._serve_chat_completions()
 
+    def _serve_chat_completions(self):
+        """Handle a POST /{profile}/chat/completions proxy request.
+
+        Extracted verbatim from ``do_POST`` — resolves the profile (falling back
+        to the body's ``model`` field), authenticates the key, enforces budgets,
+        then drives the provider chain with prompt caching and cost recording.
+        """
         # Only handle chat completions
         if "/chat/completions" not in self.path:
             logger.warning("invalid_route", method="POST", path=self.path,
@@ -977,3 +780,256 @@ class LCPHandler(
                 dedup_key=f"budget:{breach['budget_id']}:t{breach['threshold']}",
                 metadata=breach,
             )
+
+
+def _build_routes() -> RouteTable:
+    """Build the declarative route table.
+
+    ORDER IS SIGNIFICANT — the first matching rule wins, which is the contract
+    the previous if/elif chain had. Specific paths must be registered before
+    generic ones that would also match them (e.g. ``/api/providers/presets``
+    before ``/api/providers``; ``/api/setup`` before ``/api/setup/progress`` is
+    safe because both are exact matches).
+
+    Rule names are used by ``RouteTable.describe()`` for the routing inventory
+    and are asserted against in tests.
+    """
+    t = RouteTable()
+    _mp = LCPHandler._models_paths
+
+    # ── pages ──
+    t.get("page.dashboard", exact("/", "/dashboard"),
+          lambda h, p: h._serve_dashboard())
+    t.get("page.keys", exact("/keys", "/keys/dashboard"),
+          lambda h, p: h._serve_keys_dashboard())
+    t.get("page.providers", exact("/providers"),
+          lambda h, p: h._serve_providers_page())
+    t.get("page.profiles", exact("/profiles"),
+          lambda h, p: h._serve_profiles_page())
+    t.get("page.models", exact("/models"),
+          lambda h, p: h._serve_models_page())
+    t.get("page.setup", exact("/setup"),
+          lambda h, p: h._serve_setup_page())
+    t.get("page.usage", exact("/usage"),
+          lambda h, p: h._serve_usage_page())
+    t.get("page.logs", exact("/logs"),
+          lambda h, p: h._serve_logs_page())
+    t.get("page.alerts", exact("/alerts"),
+          lambda h, p: h._serve_alerts_page())
+
+    # ── per-profile dashboard: /{profile}/dashboard ──
+    def _dashboard(h, p):
+        profile = h._resolve_profile()
+        if profile:
+            h._serve_dashboard(profile_filter=profile)
+        else:
+            h._serve_dashboard()
+
+    t.get("page.dashboard.profile", suffix("/dashboard"), _dashboard)
+
+    # ── health / models ──
+    t.get("health", exact("/health"), lambda h, p: h._serve_health())
+    t.get("models.list", exact(*sorted(_mp)), lambda h, p: h._serve_models())
+
+    def _models_for_profile(h, p):
+        profile = h._resolve_profile()
+        if profile and profile in h.config.profiles:
+            h._serve_models(profile=profile)
+        else:
+            h._send_json({"error": "not found"}, 404)
+
+    t.get("models.list.profile",
+          any_of(*[suffix("/" + q.lstrip("/")) for q in sorted(_mp)]),
+          _models_for_profile,
+          note="per-profile: /coder/v1/models, /coder/models")
+
+    # ── static / diagnostics ──
+    t.get("static", prefix("/static/"), lambda h, p: h._serve_static())
+    t.get("errors", prefix("/errors"), lambda h, p: h._serve_errors())
+    t.get("cache.stats", exact("/cache/stats"), lambda h, p: h._serve_cache_stats())
+    t.get("metrics", exact("/metrics"), lambda h, p: h._serve_metrics())
+    t.get("export", exact("/export"), lambda h, p: h._serve_export())
+
+    # ── settings / setup / routing ──
+    t.get("api.settings", exact("/api/settings"),
+          lambda h, p: h._serve_settings_api())
+    t.get("api.routing.status", exact("/api/routing/status"),
+          lambda h, p: h._serve_routing_status_api())
+    t.get("api.setup", exact("/api/setup"), lambda h, p: h._serve_setup_api())
+    t.get("api.setup.progress", exact("/api/setup/progress"),
+          lambda h, p: h._serve_setup_progress_api())
+
+    # ── cost / usage / logs ──
+    t.get("api.daily-costs", exact("/api/daily-costs"),
+          lambda h, p: h._serve_daily_costs_api())
+    t.get("api.recent-requests", exact("/api/recent-requests"),
+          lambda h, p: h._serve_recent_requests_api())
+    t.get("api.logs", exact("/api/logs"), lambda h, p: h._serve_logs_api())
+    t.get("api.usage.stats", exact("/api/usage/stats"),
+          lambda h, p: h._serve_usage_stats_api())
+    t.get("api.usage.totals", exact("/api/usage/totals"),
+          lambda h, p: h._serve_usage_totals_api())
+
+    # ── providers (presets before the bare list) ──
+    t.get("api.providers.presets", exact("/api/providers/presets"),
+          lambda h, p: h._serve_provider_presets())
+    t.get("api.providers.health", exact("/api/providers/health"),
+          lambda h, p: h._serve_providers_health_api())
+    t.get("api.providers.failovers", exact("/api/providers/failovers"),
+          lambda h, p: h._serve_providers_failovers_api())
+    t.get("api.providers.failures",
+          regex(r"^/api/providers/(?P<name>[^/]+)/failures$"),
+          lambda h, p: h._serve_provider_failures_api(
+              h._path_part(h.path, 3)))
+    t.get("api.providers", exact("/api/providers"),
+          lambda h, p: h._serve_providers_list())
+
+    # ── profiles ──
+    t.get("api.profiles.budget",
+          regex(r"^/api/profiles/(?P<name>[^/]+)/budget$"),
+          lambda h, p: h._serve_profile_budget(h._path_part(h.path, 3)))
+    t.get("api.profiles", exact("/api/profiles"),
+          lambda h, p: h._serve_profiles_list())
+
+    # ── keys ──
+    t.get("api.keys.detail", regex(r"^/api/keys/(?P<id>[^/]+)$"),
+          lambda h, p: h._serve_key_detail(h._path_part(h.path, 3)))
+    t.get("api.keys", exact("/api/keys"), lambda h, p: h._serve_keys_list())
+
+    # ── alerts / budgets ──
+    t.get("api.alerts.config", exact("/api/alerts/config"),
+          lambda h, p: h._serve_alerts_config())
+    t.get("api.alerts.active", exact("/api/alerts/active"),
+          lambda h, p: h._serve_alerts_active())
+    t.get("api.alerts", exact("/api/alerts"), lambda h, p: h._serve_alerts_list())
+    t.get("api.budgets.status", exact("/api/budgets/status"),
+          lambda h, p: h._serve_budgets_status())
+    t.get("api.budgets", exact("/api/budgets"), lambda h, p: h._serve_budgets_list())
+
+    # ── cost plugins ──
+    t.get("api.cost-plugins.usage", exact("/api/cost-plugins/usage"),
+          lambda h, p: h._serve_plugin_usage())
+    t.get("api.cost-plugins.balances", exact("/api/cost-plugins/balances"),
+          lambda h, p: h._serve_plugin_balances())
+    t.get("api.cost-plugins.summary", exact("/api/cost-plugins/summary"),
+          lambda h, p: h._serve_plugin_summary())
+    t.get("api.cost-plugins.subscriptions", exact("/api/cost-plugins/subscriptions"),
+          lambda h, p: h._serve_plugin_subscriptions())
+    t.get("api.cost-plugins.cookie",
+          regex(r"^/api/cost-plugins/cookie/(?P<provider>[^/]+)$"),
+          lambda h, p: h._serve_plugin_cookie_get(h._path_part(h.path, 4)))
+    t.get("api.cost-plugins.workspace-id",
+          regex(r"^/api/cost-plugins/workspace-id/(?P<provider>[^/]+)$"),
+          lambda h, p: h._serve_plugin_workspace_id_get(h._path_part(h.path, 4)))
+
+    # ── models ──
+    t.get("api.models.capability", exact("/api/models/capability"),
+          lambda h, p: h._serve_capability_api())
+    t.get("api.models.registry", exact("/api/models/registry"),
+          lambda h, p: h._serve_registry_api())
+    t.get("api.models.benchmark.status", exact("/api/models/benchmark/status"),
+          lambda h, p: h._serve_benchmark_status_api())
+    t.get("api.models.benchmark.log",
+          regex(r"^/api/models/benchmark/(?P<id>[^/]+)/log$"),
+          lambda h, p: h._serve_benchmark_log_api(h._path_part(h.path, 4)))
+    t.get("api.models.benchmark.detail",
+          regex(r"^/api/models/benchmark/(?P<id>[^/]+)$"),
+          lambda h, p: h._serve_benchmark_detail_api(h._path_part(h.path, 4)))
+    t.get("api.models.benchmark", exact("/api/models/benchmark"),
+          lambda h, p: h._serve_benchmark_list_api())
+
+    # ── memory: GET /{profile}/memory/count (last resort, as before) ──
+    def _memory_count(h, p):
+        profile = h._memory_profile()
+        if profile:
+            h._serve_memory_api(profile, "count")
+        else:
+            h._send_json({"error": "not found"}, 404)
+
+    t.get("memory.count", regex(r"^/(?P<profile>[^/]+)/memory/count$"), _memory_count)
+
+
+    # ── POST: admin / UI routes ──────────────────────────────────────────
+    t.post("api.providers.test", exact("/api/providers/test"),
+           lambda h, p: h._serve_provider_test())
+    t.post("api.providers.discover", exact("/api/providers/discover"),
+           lambda h, p: h._serve_provider_discover())
+    t.post("api.providers.toggle",
+           prefix_suffix("/api/providers/", "/toggle"),
+           lambda h, p: h._serve_provider_toggle(h._path_part(h.path, 3)))
+    t.post("api.providers.rename",
+           prefix_suffix("/api/providers/", "/rename"),
+           lambda h, p: h._serve_provider_rename(h._path_part(h.path, 3)))
+    t.post("api.providers", exact("/api/providers"),
+           lambda h, p: h._serve_provider_create())
+
+    t.post("api.profiles", exact("/api/profiles"),
+           lambda h, p: h._serve_profile_create())
+
+    t.post("api.keys.rotate", prefix_suffix("/api/keys/", "/rotate"),
+           lambda h, p: h._serve_key_rotate(h._path_part(h.path, 3)))
+    t.post("api.keys", exact("/api/keys"), lambda h, p: h._serve_key_create())
+
+    t.post("api.alerts.test-webhook", exact("/api/alerts/webhook/test"),
+           lambda h, p: h._serve_alerts_test_webhook())
+    t.post("api.alerts.acknowledge",
+           prefix_suffix("/api/alerts/", "/acknowledge"),
+           lambda h, p: h._serve_alert_acknowledge(h._path_part(h.path, 3)))
+
+    t.post("api.budgets", exact("/api/budgets"),
+           lambda h, p: h._serve_budget_create())
+
+    t.post("api.setup.skip", exact("/api/setup/skip"),
+           lambda h, p: h._serve_setup_skip_api())
+    t.post("api.setup.install",
+           regex(r"^/api/setup/install/(?P<kind>[^/]+)/(?P<name>[^/]+)$"),
+           lambda h, p: h._serve_setup_install_api(
+               h._path_part(h.path, 4), h._path_part(h.path, 5)))
+
+    t.post("api.settings.cache.refresh", exact("/api/settings/cache/refresh"),
+           lambda h, p: h._serve_settings_refresh_api())
+    t.post("api.settings.cache.clear", exact("/api/settings/cache/clear"),
+           lambda h, p: h._serve_settings_cache_clear())
+    t.post("api.settings", exact("/api/settings"),
+           lambda h, p: h._serve_settings_update_api())
+
+    t.post("api.routing.policy", exact("/api/routing/policy"),
+           lambda h, p: h._serve_routing_policy_api())
+    t.post("api.routing.rules", exact("/api/routing/rules"),
+           lambda h, p: h._serve_routing_rules_api())
+
+    t.post("api.circuit-breaker.reset", prefix("/api/circuit-breaker/reset"),
+           lambda h, p: h._serve_circuit_breaker_reset())
+
+    t.post("api.models.registry", exact("/api/models/registry"),
+           lambda h, p: h._serve_registry_upsert_api())
+    t.post("api.models.capability.manual", exact("/api/models/capability/manual"),
+           lambda h, p: h._serve_capability_manual_api())
+    t.post("api.models.capability.seed", exact("/api/models/capability/seed"),
+           lambda h, p: h._serve_capability_seed_api())
+    t.post("api.models.capability.import", exact("/api/models/capability/import"),
+           lambda h, p: h._serve_capability_import_api())
+    t.post("api.models.benchmark", exact("/api/models/benchmark"),
+           lambda h, p: h._serve_benchmark_create_api())
+
+    t.post("api.cost-plugins.cookie",
+           regex(r"^/api/cost-plugins/cookie/(?P<provider>[^/]+)$"),
+           lambda h, p: h._serve_plugin_cookie_set(h._path_part(h.path, 4)))
+    t.post("api.cost-plugins.workspace-id",
+           regex(r"^/api/cost-plugins/workspace-id/(?P<provider>[^/]+)$"),
+           lambda h, p: h._serve_plugin_workspace_id_set(h._path_part(h.path, 4)))
+
+    # memory: POST /{profile}/memory/{retain|recall|forget}
+    def _memory_write(h, p):
+        profile = h._memory_profile()
+        if profile:
+            h._serve_memory_api(profile, p["action"])
+        else:
+            h._send_json({"error": "not found"}, 404)
+
+    t.post("memory.write",
+           regex(r"^/(?P<profile>[^/]+)/memory/(?P<action>retain|recall|forget)$"),
+           _memory_write)
+
+
+    return t
