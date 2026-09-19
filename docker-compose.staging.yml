@@ -42,6 +42,12 @@ services:
       # makes that structural. The state of a task IS its directory, so a
       # writable mount would let a dashboard silently complete your work.
       - /root/.hermes/profiles/homelab-expert-l2/work:/app/work-tree:ro
+      # Session transcripts, for the Categories view. READ-ONLY for the same
+      # reason as everything else here: a view of what the agents did must not
+      # be able to change what was recorded. Host paths are NOT visible inside a
+      # container -- the path has to be mounted or the read fails as if the file
+      # were absent, which is a failure mode that looks like "no data".
+      - /root/.hermes/profiles:/app/profiles:ro
     env_file:
       - .env
     environment:
