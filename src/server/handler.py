@@ -878,6 +878,8 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_work_decisions_api())
     t.get("api.work.tasks", exact("/api/work/tasks"),
           lambda h, p: h._serve_work_tasks_api())
+    t.get("api.work.tasks.detail", exact("/api/work/tasks/detail"),
+          lambda h, p: h._serve_work_tasks_detail_api())
     t.get("api.work.fleet", exact("/api/work/fleet"),
           lambda h, p: h._serve_work_fleet_api())
     t.get("api.work.cron", exact("/api/work/cron"),

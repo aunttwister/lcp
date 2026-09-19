@@ -189,3 +189,34 @@ class TestTasksViewParams:
         v = wt.tasks_view({"states": "all", "per": "all"})
         assert v["filter"]["pages"] == 1
         assert len(v["tasks"]) == 9
+
+
+class TestLiteAndDetail:
+    def test_lite_rows_carry_no_plan_payload(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        TestTasksViewParams._moments(TestTasksViewParams(), tmp_path)
+        v = wt.tasks_view({"states": "in_progress", "lite": "1"})
+        row = v["tasks"][0]
+        assert "plan_html" not in row["payload"]
+        assert "results_html" not in row["payload"]
+        assert "state_summary" not in row["payload"]
+        assert row["key"] == "in_progress/alpha"
+
+    def test_detail_returns_heavy_payload(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        TestTasksViewParams._moments(TestTasksViewParams(), tmp_path)
+        d = wt.task_detail("in_progress/alpha")
+        assert d["subject"] == "alpha"
+        assert d["payload"]["state"] == "in_progress"
+        assert d["payload"]["has_plan"] is True
+        assert d["payload"]["plan_html"]
+
+    def test_detail_rejects_bad_keys(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        TestTasksViewParams._moments(TestTasksViewParams(), tmp_path)
+        with pytest.raises(ValueError):
+            wt.task_detail("../etc/passwd")
+        with pytest.raises(ValueError):
+            wt.task_detail("unknown/alpha")
+        with pytest.raises(FileNotFoundError):
+            wt.task_detail("in_progress/does-not-exist")

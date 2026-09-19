@@ -431,6 +431,12 @@ def tasks_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         start = (page - 1) * per
         tasks = filtered[start:start + per]
 
+    # ── lite mode: row-only payload for the lazy-loaded table ──
+    # The Tasks page no longer ships PLAN.md/RESULTS.md for every row; the
+    # table fetches lite rows and pulls the heavy detail per-task on expand.
+    if str(params.get("lite") or "").lower() in ("1", "true", "yes"):
+        tasks = [_lite_moment(m) for m in tasks]
+
     # ── classification rollup ──
     by_label = (cls_idx or {}).get("by_label") or {}
     labels_meta = (cls_idx or {}).get("labels") or {}
@@ -547,6 +553,54 @@ def _todo_view() -> Optional[Dict[str, Any]]:
                 "table_row": True,
             })
     return out
+
+
+def _lite_moment(m: Dict[str, Any]) -> Dict[str, Any]:
+    """Row-only view of a task moment — NO PLAN/RESULTS/STATE payloads.
+
+    Everything the lazy table needs to render a row (and the key to fetch the
+    full detail on expand).
+    """
+    p = m["payload"]
+    return {
+        "id": "task:%s/%s" % (p["state"], m["subject"]),
+        "key": "%s/%s" % (p["state"], m["subject"]),
+        "t": m["t"],
+        "computed_at": m["computed_at"],
+        "subject": m["subject"],
+        "kind": m["kind"],
+        "payload": {
+            "state": p["state"],
+            "n_files": p["n_files"],
+            "claimed_status": p["claimed_status"],
+            "status_conflict": p["status_conflict"],
+            "classification": p["classification"],
+        },
+    }
+
+
+def task_detail(key: str) -> Dict[str, Any]:
+    """The heavy payload for ONE task (fetched on row expand).
+
+    ``key`` is ``<state>/<slug>`` — the lite row's ``key`` field. Strictly
+    validated: state must be a known state and the slug must resolve inside
+    the task tree (no traversal).
+    """
+    if "/" in key:
+        state, slug = key.split("/", 1)
+    else:
+        state, slug = "", key
+    if state not in STATES or not slug or not re.fullmatch(r"[A-Za-z0-9.-]+", slug):
+        raise ValueError("invalid task key %r" % key)
+    tdir = os.path.join(tasks_dir(), state, slug)
+    if not os.path.isdir(tdir):
+        raise FileNotFoundError("no task at %s" % key)
+
+    # Reuse the same moment builder path as the table for one directory.
+    for m in task_moments():
+        if m["subject"] == slug and m["payload"]["state"] == state:
+            return m
+    raise FileNotFoundError("task vanished: %s" % key)
 
 
 _TODO_TIMELINE_CAP = 50
