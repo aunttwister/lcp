@@ -3382,6 +3382,15 @@ class WorkEndpoints:
         self.end_headers()
         self.wfile.write(html.encode("utf-8"))
 
+    def _serve_work_config_page(self):
+        """Server-rendered Work > Config page."""
+        from ..ui.pages import render_work_config_page
+        html = render_work_config_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
     def _serve_work_cron_api(self):
         """GET /api/work/cron — the Cron view as JSON."""
         from ..api import work_cron

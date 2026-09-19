@@ -823,6 +823,8 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_work_fleet_page())
     t.get("page.work.cron", exact("/work/cron"),
           lambda h, p: h._serve_work_cron_page())
+    t.get("page.work.config", exact("/work/config"),
+          lambda h, p: h._serve_work_config_page())
     t.get("page.usage", exact("/usage"),
           lambda h, p: h._serve_usage_page())
     t.get("page.logs", exact("/logs"),

@@ -124,48 +124,8 @@
 
   {% if view.sources %}
   <h2 class="work-h2">Work sources
-    <span class="muted">· every path below is data — edit it here, nothing is hardcoded{% if not view.sources.configured %}; defaults shown, save to pin{% endif %}</span>
+    <span class="muted">· <a href="/work/config">edit on the Work Configuration page</a></span>
   </h2>
-  <form id="sources-form" class="sources-form">
-    <div class="cron-row">
-      <div class="cron-field">
-        <label for="sf-profiles-dir">Profiles directory</label>
-        <input type="text" id="sf-profiles-dir" name="hermes_profiles_dir" value="{{ view.sources.hermes_profiles_dir }}" autocomplete="off">
-      </div>
-      <div class="cron-field">
-        <label for="sf-tasks-root">Default task tree</label>
-        <input type="text" id="sf-tasks-root" name="tasks_root" value="{{ view.sources.tasks_root }}" autocomplete="off">
-      </div>
-      <div class="cron-field">
-        <label for="sf-ops-dir">Op spool</label>
-        <input type="text" id="sf-ops-dir" name="ops_dir" value="{{ view.sources.ops_dir }}" autocomplete="off">
-      </div>
-    </div>
-    <div class="work-scroll">
-      <table class="work-table">
-        <thead><tr><th>Profile</th><th>Task tree</th><th>Cron store</th><th>Legacy</th><th>Hidden</th></tr></thead>
-        <tbody>
-          {% for name, s in view.sources.profiles.items() %}
-            <tr>
-              <td data-label="Profile">
-                <span class="work-actor">{{ name }}</span>
-                {% if s.configured %}<span class="work-chip work-chip-ok">pinned</span>{% endif %}
-              </td>
-              <td data-label="Task tree"><input type="text" class="sf-input" data-profile="{{ name }}" data-field="tasks_root" value="{{ s.tasks_root }}" autocomplete="off"></td>
-              <td data-label="Cron store"><input type="text" class="sf-input" data-profile="{{ name }}" data-field="cron_store" value="{{ s.cron_store }}" autocomplete="off"></td>
-              <td data-label="Legacy"><input type="checkbox" class="sf-check" data-profile="{{ name }}" data-field="legacy"{% if s.legacy %} checked{% endif %}></td>
-              <td data-label="Hidden"><input type="checkbox" class="sf-check" data-profile="{{ name }}" data-field="hidden"{% if s.hidden %} checked{% endif %}></td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <div class="cron-dialog-foot no-border">
-      <button type="button" class="btn-sm" id="sources-reset">Reset to defaults</button>
-      <button type="submit" class="btn-sm btn-primary">Save sources</button>
-      <span class="muted" id="sources-hint"></span>
-    </div>
-  </form>
   {% endif %}
 
 {% endif %}
@@ -346,56 +306,7 @@
     closeModal();
   });
 
-  // ── Work sources form ──
-  const sourcesForm = document.getElementById('sources-form');
-  const sourcesHint = document.getElementById('sources-hint');
-  if (sourcesForm) {
-    function collectSources() {
-      const payload = {
-        version: 1,
-        hermes_profiles_dir: F('sf-profiles-dir').value.trim(),
-        tasks_root: F('sf-tasks-root').value.trim(),
-        ops_dir: F('sf-ops-dir').value.trim(),
-        profiles: {}
-      };
-      sourcesForm.querySelectorAll('.sf-input').forEach((inp) => {
-        const p = inp.dataset.profile;
-        if (!payload.profiles[p]) payload.profiles[p] = {};
-        const v = inp.value.trim();
-        if (v) payload.profiles[p][inp.dataset.field] = v;
-      });
-      sourcesForm.querySelectorAll('.sf-check').forEach((cb) => {
-        const p = cb.dataset.profile;
-        if (!payload.profiles[p]) payload.profiles[p] = {};
-        payload.profiles[p][cb.dataset.field] = cb.checked;
-      });
-      return payload;
-    }
-    sourcesForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      fetch('/api/work/sources', {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(collectSources())
-      }).then((r) => r.json().then((d) => ({ok: r.ok, d})))
-        .then(({ok, d}) => {
-          sourcesHint.textContent = ok ? 'Saved — collector/executor pick it up on their next tick.'
-                                       : 'Rejected: ' + (d.error || 'unknown');
-          sourcesHint.className = ok ? 'work-chip work-chip-ok' : 'work-warn';
-        })
-        .catch(() => { sourcesHint.textContent = 'Network error'; sourcesHint.className = 'work-warn'; });
-    });
-    F('sources-reset').addEventListener('click', () => {
-      fetch('/api/work/sources')
-        .then((r) => r.json())
-        .then((d) => {
-          if (!d || d.error) { sourcesHint.textContent = 'No configured file to reset from'; return; }
-          F('sf-profiles-dir').value = d.hermes_profiles_dir;
-          F('sf-tasks-root').value = d.tasks_root;
-          F('sf-ops-dir').value = d.ops_dir;
-        });
-    });
-  }
+  // ── Work sources form moved to /work/config (Work Configuration page) ──
 })();
 </script>
 {% endif %}

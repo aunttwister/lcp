@@ -135,12 +135,6 @@ def render_work_fleet_page(config, engine=None) -> str:
 
 
 def render_work_cron_page(config, engine=None) -> str:
-    """Render the Work > Cron page (Jinja2).
-
-    The payload comes from the host-side cron snapshot
-    (``.work-layers/cron-jobs.json``) written by ``work_layers.collect_cron``;
-    LCP itself is a read-only window onto the Hermes scheduler.
-    """
     from .render import render_page
     from ..api import work_cron
     try:
@@ -168,6 +162,24 @@ def render_work_cron_page(config, engine=None) -> str:
         view["sources"] = None
     return render_page("pages/work_cron.html", config, engine,
                        active_page="work_cron", view=view)
+
+
+def render_work_config_page(config, engine=None) -> str:
+    """Render the Work > Config page (Jinja2).
+
+    The Work Configuration page owns every source path the work layer reads
+    (profiles directory, task trees, cron stores, the op spool). The payload
+    is the resolved sources view; saving happens through PUT /api/work/sources
+    and the host-side collector/executor pick the file up on their ticks.
+    """
+    from .render import render_page
+    from ..api import work_sources
+    try:
+        sources = work_sources.resolved_view()
+    except Exception as e:
+        sources = None
+    return render_page("pages/work_config.html", config, engine,
+                       active_page="work_config", view={"sources": sources})
 
 
 
