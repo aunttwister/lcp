@@ -99,9 +99,11 @@ def _generate_name(head: Optional[str], cid: str,
                    task: Optional[str] = None, last_seen: Optional[str] = None) -> str:
     """Deterministic generated name: leading words of the first user turn (or
     assistant text when the window has no user turn), else the routing task
-    label plus the activity date, else a bare fallback."""
+    label plus the activity date, else a bare fallback. Markdown decoration
+    is stripped so names never carry `**`/backtick artifacts."""
     if head:
-        words = head.split()[:7]
+        clean = re.sub(r"[*_`~#>]", "", head)
+        words = re.sub(r"\s{2,}", " ", clean).strip().split()[:7]
         if words:
             return " ".join(words)[:48]
     if task:
