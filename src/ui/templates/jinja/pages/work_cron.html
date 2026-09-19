@@ -21,7 +21,7 @@
 {% else %}
 
   <div class="cron-toolbar">
-    <button id="cron-new-btn" class="btn btn-primary">+ New job</button>
+    <button id="cron-new-btn" class="btn-sm btn-primary">+ New job</button>
     <span class="muted" id="cron-op-hint"></span>
   </div>
 
@@ -81,10 +81,10 @@
                 {% if j.deliver %}<div class="muted" style="font-size:0.72rem">→ {{ j.deliver }}</div>{% endif %}
               </td>
               <td data-label="Actions" class="cron-actions">
-                <button class="btn-mini cron-act" data-act="{% if j.status == 'paused' %}resume{% else %}pause{% endif %}">{% if j.status == 'paused' %}Resume{% else %}Pause{% endif %}</button>
-                <button class="btn-mini cron-act" data-act="run">Run</button>
-                <button class="btn-mini cron-act" data-act="edit">Edit</button>
-                <button class="btn-mini btn-danger cron-act" data-act="remove">Del</button>
+                <button class="btn-sm cron-act" data-act="{% if j.status == 'paused' %}resume{% else %}pause{% endif %}">{% if j.status == 'paused' %}Resume{% else %}Pause{% endif %}</button>
+                <button class="btn-sm cron-act" data-act="run">Run</button>
+                <button class="btn-sm cron-act" data-act="edit">Edit</button>
+                <button class="btn-sm btn-danger cron-act" data-act="remove">Del</button>
               </td>
             </tr>
           {% endfor %}
@@ -161,8 +161,8 @@
       </table>
     </div>
     <div class="cron-dialog-foot no-border">
-      <button type="button" class="btn" id="sources-reset">Reset to defaults</button>
-      <button type="submit" class="btn btn-primary">Save sources</button>
+      <button type="button" class="btn-sm" id="sources-reset">Reset to defaults</button>
+      <button type="submit" class="btn-sm btn-primary">Save sources</button>
       <span class="muted" id="sources-hint"></span>
     </div>
   </form>
@@ -175,7 +175,7 @@
   <div class="cron-dialog">
     <div class="cron-dialog-head">
       <span id="cron-modal-title">New job</span>
-      <button class="btn-mini" id="cron-modal-close" title="Close">✕</button>
+      <button class="btn-sm" id="cron-modal-close" title="Close">✕</button>
     </div>
     <form id="cron-form">
       <input type="hidden" id="cf-action" name="action">
@@ -231,8 +231,8 @@
       </div>
       <p class="muted cron-note" id="cf-note"></p>
       <div class="cron-dialog-foot">
-        <button type="button" class="btn" id="cron-form-cancel">Cancel</button>
-        <button type="submit" class="btn btn-primary" id="cron-form-go">Queue op</button>
+        <button type="button" class="btn-sm" id="cron-form-cancel">Cancel</button>
+        <button type="submit" class="btn-sm btn-primary" id="cron-form-go">Queue op</button>
       </div>
     </form>
   </div>

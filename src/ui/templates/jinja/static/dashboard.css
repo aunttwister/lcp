@@ -1378,16 +1378,9 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .work-rel { color: var(--text-muted, #8b949e); font-size: 0.72rem; }
 .work-script { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Cron page controls — toolbar, mini row buttons, op modal */
+/* Cron page controls — toolbar and row actions use the panel's shadcn-style
+   .btn-sm vocabulary (no custom button shapes). */
 .cron-toolbar { display: flex; align-items: center; gap: 0.75rem; margin: 0.35rem 0 0.85rem; }
-.cron-toolbar .btn-primary { background: #238636; color: #fff; border: 1px solid #238636; }
-.btn-mini {
-  font-size: 0.7rem; line-height: 1; padding: 0.28rem 0.45rem; margin-right: 0.25rem;
-  border: 1px solid var(--border, #30363d); border-radius: 4px;
-  background: var(--bg-elevated, #161b22); color: var(--foreground); cursor: pointer;
-}
-.btn-mini:hover { border-color: var(--muted-foreground); }
-.btn-danger:hover { border-color: #f85149; color: #f85149; }
 .cron-actions { white-space: nowrap; }
 .cron-modal {
   position: fixed; inset: 0; z-index: 200; display: flex; align-items: flex-start;
@@ -1411,7 +1404,6 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   display: flex; justify-content: flex-end; gap: 0.5rem;
   padding: 0.7rem 1rem; border-top: 1px solid var(--border, #30363d);
 }
-.cron-dialog-foot .btn-primary { background: #238636; color: #fff; border: 1px solid #238636; }
 .cron-field { display: flex; flex-direction: column; gap: 0.25rem; margin: 0.65rem 1rem; flex: 1; }
 .cron-field label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted, #8b949e); }
 .cron-field input[type="text"], .cron-field input[type="number"], .cron-field select, .cron-field textarea {
@@ -1432,9 +1424,8 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   border: 1px solid var(--border, #30363d); border-radius: 4px; padding: 0.3rem 0.45rem;
   font-size: 0.78rem; min-width: 0; width: 100%; box-sizing: border-box;
 }
-.sources-form .sf-check { accent-color: #238636; }
+.sources-form .sf-check { accent-color: hsl(var(--primary)); }
 .cron-dialog-foot.no-border { border-top: none; padding: 0.7rem 0; justify-content: flex-start; }
-.cron-dialog-foot.no-border .btn-primary { background: #238636; color: #fff; border: 1px solid #238636; }
 
 .work-scroll { overflow-x: auto; }
 
