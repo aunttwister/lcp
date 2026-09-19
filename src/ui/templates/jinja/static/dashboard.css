@@ -1445,6 +1445,13 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   letter-spacing: 0.04em;
   color: var(--muted-foreground, #8b949e);
 }
+/* The STATE-SUMMARY (PLAN vs REAL) block gets a distinct accent so the
+   generative layer is visually separated from the raw plan below it. */
+.task-expander-h-summary { color: #58a6ff; }
+.task-md-summary {
+  border-left: 3px solid rgba(88, 166, 255, 0.45);
+  padding-left: 0.65rem;
+}
 .task-note { margin: 0.4rem 0 0; font-size: 0.75rem; }
 .task-artifacts {
   margin: 0.25rem 0 0;
@@ -1452,6 +1459,20 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   font-size: 0.75rem;
   color: var(--muted-foreground, #8b949e);
 }
+/* Layer-1 classification chip: a quiet bordered tag, never loud. */
+.task-chip {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--card-border, #30363d);
+  border-radius: 10px;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--muted-foreground, #8b949e);
+  background: rgba(127, 127, 127, 0.08);
+  white-space: nowrap;
+}
+.task-flag { color: #d29922; font-size: 0.8rem; margin-left: 0.3rem; }
+.work-h2-note { font-size: 0.75rem; font-weight: normal; letter-spacing: normal; }
 
 /* Rendered markdown (plan / results) — GitHub-dark-ish typography at a
    readable panel size. The accordion is full-width, so no forced wrapping;

@@ -6,6 +6,7 @@ artifacts list. Everything runs against temp dirs -- never the real
 task tree.
 """
 
+import json
 import os
 
 import pytest
@@ -110,6 +111,70 @@ class TestMomentPayload:
         (m,) = wt.task_moments()
         # errors="replace" keeps the text readable; the moment must exist.
         assert m["payload"]["has_plan"] is True
+
+
+class TestClassificationAndSummary:
+    def _with_index(self, tmp_path, monkeypatch, index_json):
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n\nBody.\n")
+        wl = tmp_path / ".work-layers"
+        wl.mkdir()
+        (wl / "classifications.json").write_text(index_json, encoding="utf-8")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        return root
+
+    def test_classification_attached_when_index_present(self, tmp_path, monkeypatch):
+        idx = json.dumps({"by_label": {"infrastructure": 1},
+                          "labels": {"infrastructure": {"description": "x"}},
+                          "tasks": {"demo-task": {"label": "infrastructure", "score": 0.71,
+                                                  "state": "in_progress"}}})
+        self._with_index(tmp_path, monkeypatch, idx)
+        (m,) = wt.task_moments()
+        assert m["payload"]["classification"] == {"label": "infrastructure", "score": 0.71}
+
+    def test_no_classification_without_label(self, tmp_path, monkeypatch):
+        idx = json.dumps({"tasks": {"demo-task": {"label": None, "score": 0.2}}})
+        self._with_index(tmp_path, monkeypatch, idx)
+        (m,) = wt.task_moments()
+        assert m["payload"]["classification"] is None
+
+    def test_view_exposes_by_label_rollup(self, tmp_path, monkeypatch):
+        idx = json.dumps({"by_label": {"infrastructure": 1, "automation": 0},
+                          "labels": {"infrastructure": {"description": "x"},
+                                     "automation": {"description": "y"}},
+                          "tasks": {"demo-task": {"label": "infrastructure", "score": 0.71}}})
+        self._with_index(tmp_path, monkeypatch, idx)
+        v = wt.tasks_view()
+        assert v["by_label"]["infrastructure"] == 1
+        assert v["classified"] == 1
+        assert v["labels_meta"]["infrastructure"]["description"] == "x"
+
+    def test_corrupt_index_is_ignored(self, tmp_path, monkeypatch):
+        self._with_index(tmp_path, monkeypatch, "{not json")
+        (m,) = wt.task_moments()
+        assert m["payload"]["classification"] is None
+        v = wt.tasks_view()
+        assert v["by_label"] == {}
+        assert v["classified"] == 0
+
+    def test_state_summary_rendered_from_file(self, tmp_path, monkeypatch):
+        root, tdir = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        (tdir / "STATE-SUMMARY.md").write_text(
+            "# STATE-SUMMARY\n\n**PLAN claims** x\n\n**Verdict** healthy\n", encoding="utf-8")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        (m,) = wt.task_moments()
+        p = m["payload"]["state_summary"]
+        assert p["present"] is True
+        assert "**PLAN claims** x" in p["text"]
+        assert "<strong>PLAN claims</strong> x" in p["html"]
+        # STATE-SUMMARY.md is a work-layers artifact, not a task artifact.
+        assert "STATE-SUMMARY.md" not in m["payload"]["artifacts"]
+
+    def test_state_summary_absent_when_missing(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, plan="# T\n")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        (m,) = wt.task_moments()
+        assert m["payload"]["state_summary"]["present"] is False
+        assert m["payload"]["state_summary"]["html"] is None
 
 
 class TestMarkdown:

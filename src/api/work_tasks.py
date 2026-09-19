@@ -10,6 +10,7 @@ new state. No extra bookkeeping, and it cannot drift from reality because the
 location is the state.
 """
 
+import json
 import os
 import re
 from typing import Any, Dict, List, Optional
@@ -71,6 +72,36 @@ def todos_path() -> str:
     return os.environ.get("LCP_WORK_TODO", os.path.join(os.path.dirname(root), "todo.md"))
 
 
+def _classification_index() -> Optional[Dict[str, Any]]:
+    """The work-layers classification index, if the batch has run.
+
+    ``<tasks_root>/.work-layers/classifications.json`` is written by the
+    deterministic classifier (bge-small centroids over a hand-authored
+    taxonomy). Defensive: a missing or corrupt index simply means the panel
+    shows no chips.
+    """
+    root = tasks_dir()
+    p = os.path.join(root, ".work-layers", "classifications.json")
+    try:
+        with open(p, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _state_summary(tdir: str) -> Dict[str, Any]:
+    """STATE-SUMMARY.md (PLAN-vs-REAL, written by the summarizer batch)."""
+    p = os.path.join(tdir, "STATE-SUMMARY.md")
+    if not os.path.isfile(p):
+        return {"text": None, "html": None, "present": False}
+    try:
+        with open(p, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read(4000)
+    except OSError:
+        return {"text": None, "html": None, "present": False}
+    return {"text": text, "html": _md_to_html(text), "present": True}
+
+
 def _read_status_line(plan_path: str) -> Optional[str]:
     """Pull the bolded **Status:** line out of a PLAN.md, if present.
 
@@ -95,6 +126,9 @@ def task_moments() -> List[Dict[str, Any]]:
     root = tasks_dir()
     if not os.path.isdir(root):
         return []
+
+    cls_idx = _classification_index()
+    cls_tasks = (cls_idx or {}).get("tasks") or {}
 
     moments: List[Dict[str, Any]] = []
     for state in STATES:
@@ -150,7 +184,17 @@ def task_moments() -> List[Dict[str, Any]]:
                     results_text = None
                 results_html = _md_to_html(results_text) if results_text else None
 
-            artifacts = [f for f in files if f != "PLAN.md"]
+            artifacts = [f for f in files if f not in ("PLAN.md", "STATE-SUMMARY.md")]
+
+            # Layer-1 classification (deterministic batch) + Layer-2 summary.
+            classification = None
+            cls = cls_tasks.get(name)
+            if cls and cls.get("label"):
+                classification = {
+                    "label": cls["label"],
+                    "score": cls.get("score"),
+                }
+            st_summary = _state_summary(tdir)
 
             moments.append({
                 "id": "task:%s" % name,
@@ -165,6 +209,8 @@ def task_moments() -> List[Dict[str, Any]]:
                     "n_files": len(files),
                     "has_plan": os.path.isfile(plan),
                     "claimed_status": claimed,
+                    "classification": classification,
+                    "state_summary": st_summary,
                     "plan_summary": plan_summary,
                     "plan_text": plan_text,
                     "plan_html": plan_html,
@@ -212,6 +258,7 @@ def tasks_view() -> Dict[str, Any]:
     """Assemble the Tasks view: counts per state plus the moment list."""
     root = tasks_dir()
     moments = task_moments()
+    cls_idx = _classification_index()
 
     if not moments:
         return {
@@ -232,11 +279,20 @@ def tasks_view() -> Dict[str, Any]:
 
     conflicts = [m for m in moments if m["payload"]["status_conflict"]]
 
+    # Classification rollup: counts per label sibling to the per-state counts.
+    by_label = (cls_idx or {}).get("by_label") or {}
+    labels_meta = (cls_idx or {}).get("labels") or {}
+    classified = sum(1 for p in (cls_idx or {}).get("tasks", {}).values() if p.get("label"))
+    total_tasks = len(moments)
+
     return {
         "available": True,
         "empty": None,
         "counts": counts,
-        "total": len(moments),
+        "total": total_tasks,
+        "classified": classified,
+        "by_label": by_label,
+        "labels_meta": labels_meta,
         "conflicts": conflicts,
         "tasks": moments,
         "todos": _todo_summary(),

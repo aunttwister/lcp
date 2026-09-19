@@ -28,6 +28,17 @@
       </div>
     {% endfor %}
   </div>
+  {% if view.by_label %}
+    <h2 class="work-h2">By category <span class="muted work-h2-note">(deterministic classifier · {{ view.classified }}/{{ view.total }} labeled)</span></h2>
+    <div class="work-cards">
+      {% for label in view.by_label | dictsort(by='value', reverse=true) %}
+        <div class="work-card work-card-muted">
+          <div class="work-card-label">{{ label[0] }}</div>
+          <div class="work-card-value">{{ label[1] }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
   <p class="muted work-rule">
     {{ view.total }} task directories.
     {% if view.conflicts %}
@@ -77,6 +88,7 @@
             <th class="task-chev-col"></th>
             <th>Task</th>
             <th>State</th>
+            <th>Category</th>
             <th class="num">Files</th>
             <th>Last transition</th>
             <th>PLAN.md status</th>
@@ -86,8 +98,16 @@
           <tbody class="task-group">
             <tr class="task-row" onclick="toggleTaskDetail('task-detail-f{{ loop.index }}', this)">
               <td class="task-chev">▸</td>
-              <td>{{ m.subject }}</td>
+              <td>
+                {{ m.subject }}
+                {% if m.payload.status_conflict %}<span class="task-flag" title="PLAN.md status contradicts the directory">⚠</span>{% endif %}
+              </td>
               <td><span class="work-actor">{{ m.payload.state }}</span></td>
+              <td>
+                {% if m.payload.classification %}
+                  <span class="task-chip" title="cosine {{ m.payload.classification.score }}">{{ m.payload.classification.label }}</span>
+                {% else %}<span class="muted">—</span>{% endif %}
+              </td>
               <td class="num">{{ m.payload.n_files }}</td>
               <td class="mono muted">{{ m.t | fmt_ts }}</td>
               <td class="muted">
@@ -97,8 +117,12 @@
               </td>
             </tr>
             <tr class="task-detail" id="task-detail-f{{ loop.index }}" hidden>
-              <td colspan="6">
+              <td colspan="7">
                 <div class="task-detail-inner">
+                  {% if m.payload.state_summary.present and m.payload.state_summary.html %}
+                    <h4 class="task-expander-h task-expander-h-summary">STATE-SUMMARY · PLAN vs REAL</h4>
+                    <div class="task-md task-md-summary">{{ m.payload.state_summary.html | safe }}</div>
+                  {% endif %}
                   {% if m.payload.plan_summary %}
                     <p class="task-summary">{{ m.payload.plan_summary }}</p>
                   {% endif %}
@@ -139,6 +163,7 @@
         <tr>
           <th class="task-chev-col"></th>
           <th>Task</th>
+          <th>Category</th>
           <th>Last transition</th>
         </tr>
       </thead>
@@ -147,11 +172,20 @@
           <tr class="task-row" onclick="toggleTaskDetail('task-detail-c{{ loop.index }}', this)">
             <td class="task-chev">▸</td>
             <td>{{ m.subject }}</td>
+            <td>
+              {% if m.payload.classification %}
+                <span class="task-chip" title="cosine {{ m.payload.classification.score }}">{{ m.payload.classification.label }}</span>
+              {% else %}<span class="muted">—</span>{% endif %}
+            </td>
             <td class="mono muted">{{ m.t | fmt_ts }}</td>
           </tr>
           <tr class="task-detail" id="task-detail-c{{ loop.index }}" hidden>
-            <td colspan="3">
+            <td colspan="4">
               <div class="task-detail-inner">
+                {% if m.payload.state_summary.present and m.payload.state_summary.html %}
+                  <h4 class="task-expander-h task-expander-h-summary">STATE-SUMMARY · PLAN vs REAL</h4>
+                  <div class="task-md task-md-summary">{{ m.payload.state_summary.html | safe }}</div>
+                {% endif %}
                 {% if m.payload.plan_summary %}
                   <p class="task-summary">{{ m.payload.plan_summary }}</p>
                 {% endif %}
