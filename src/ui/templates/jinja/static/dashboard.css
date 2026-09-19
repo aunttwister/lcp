@@ -1452,6 +1452,13 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   border-left: 3px solid rgba(88, 166, 255, 0.45);
   padding-left: 0.65rem;
 }
+/* The SESSION FACTS block (mined by the 4h assessment round) uses an amber
+   accent to sit alongside the blue PLAN-vs-REAL summary. */
+.task-expander-h-facts { color: #d29922; }
+.task-md-facts {
+  border-left: 3px solid rgba(210, 153, 34, 0.5);
+  padding-left: 0.65rem;
+}
 .task-note { margin: 0.4rem 0 0; font-size: 0.75rem; }
 .task-artifacts {
   margin: 0.25rem 0 0;
@@ -1473,6 +1480,44 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 .task-flag { color: #d29922; font-size: 0.8rem; margin-left: 0.3rem; }
 .work-h2-note { font-size: 0.75rem; font-weight: normal; letter-spacing: normal; }
+
+/* Mobile: the task tables become stacked cards. Header row is dropped, every
+   cell carries its column name via data-label and the accordion still works
+   because the JS only toggles the sibling detail row's hidden attribute. */
+@media (max-width: 720px) {
+  .work-scroll { overflow: visible; }
+  .work-table thead { display: none; }
+  .work-table, .work-table tbody, .work-table tr { display: block; width: 100%; }
+  .work-table tr.task-group {
+    margin-bottom: 0.7rem;
+    border: 1px solid var(--card-border, #30363d);
+    border-radius: 8px;
+    background: rgba(127, 127, 127, 0.04);
+  }
+  .work-table tr.task-row td {
+    display: grid;
+    grid-template-columns: 118px 1fr;
+    gap: 0.35rem 0.6rem;
+    padding: 0.4rem 0.65rem !important;
+    border: none;
+    align-items: baseline;
+  }
+  .work-table tr.task-row td::before {
+    content: attr(data-label);
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted-foreground, #8b949e);
+  }
+  .work-table tr.task-row td.num::before,
+  .work-table tr.task-row td.mono::before { content: attr(data-label); }
+  .work-table td.task-chev { display: none; }
+  .work-table tr.task-detail td { padding: 0 !important; }
+  .task-detail-inner { border-left: none; padding: 0.6rem 0.75rem 0.75rem; }
+  /* Compact the by-state / by-category cards into two per row. */
+  .work-cards { grid-template-columns: repeat(2, 1fr); }
+  .work-card-value { font-size: 1.05rem; }
+}
 
 /* Rendered markdown (plan / results) — GitHub-dark-ish typography at a
    readable panel size. The accordion is full-width, so no forced wrapping;

@@ -170,11 +170,76 @@ class TestClassificationAndSummary:
         assert "STATE-SUMMARY.md" not in m["payload"]["artifacts"]
 
     def test_state_summary_absent_when_missing(self, tmp_path, monkeypatch):
-        root, _ = _tree(tmp_path, plan="# T\n")
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
         monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
         (m,) = wt.task_moments()
         assert m["payload"]["state_summary"]["present"] is False
         assert m["payload"]["state_summary"]["html"] is None
+
+    def test_session_facts_rendered_from_file(self, tmp_path, monkeypatch):
+        root, tdir = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        (tdir / "SESSION-FACTS.md").write_text(
+            "### 2026-09-19 06:00 UTC\n\nPhase 2 done in session.\n", encoding="utf-8")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        (m,) = wt.task_moments()
+        p = m["payload"]["session_facts"]
+        assert p["present"] is True
+        assert "Phase 2 done in session." in p["text"]
+        assert "Phase 2 done in session." in p["html"]
+        assert "SESSION-FACTS.md" not in m["payload"]["artifacts"]
+
+    def test_session_facts_absent_when_missing(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        (m,) = wt.task_moments()
+        assert m["payload"]["session_facts"]["present"] is False
+
+    def test_long_session_facts_truncated_and_flagged(self, tmp_path, monkeypatch):
+        root, tdir = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        (tdir / "SESSION-FACTS.md").write_text("x" * 6000, encoding="utf-8")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        (m,) = wt.task_moments()
+        p = m["payload"]["session_facts"]
+        assert len(p["text"]) <= 4000
+        assert p["truncated"] is True
+
+
+class TestAssessmentFeed:
+    def test_feed_empty_when_no_ledger(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        assert wt._assessment_feed() == []
+
+    def test_feed_skips_bad_lines_and_orders_newest(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        wl = tmp_path / ".work-layers"
+        wl.mkdir()
+        (wl / "assessments.jsonl").write_text(
+            "{not json}\n"
+            + json.dumps({"ts": 100.0, "action": "complete", "slug": "a",
+                          "summary": "s", "applied": True, "reason": None}) + "\n"
+            + json.dumps({"ts": 200.0, "action": "create", "slug": "b",
+                          "summary": "t", "applied": False, "reason": "dup"}) + "\n",
+            encoding="utf-8")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        feed = wt._assessment_feed()
+        assert len(feed) == 2
+        assert feed[0]["slug"] == "b"  # newest first
+        assert feed[0]["ts_iso"].startswith("1970")
+        assert feed[1]["applied"] is True
+
+    def test_view_includes_assessments(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        wl = tmp_path / ".work-layers"
+        wl.mkdir()
+        (wl / "assessments.jsonl").write_text(
+            json.dumps({"ts": 300.0, "action": "note", "slug": "demo-task",
+                        "summary": "touched", "applied": True, "reason": None}) + "\n",
+            encoding="utf-8")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        v = wt.tasks_view()
+        assert len(v["assessments"]) == 1
+        assert v["assessments"][0]["action"] == "note"
 
 
 class TestMarkdown:

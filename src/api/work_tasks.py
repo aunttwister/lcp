@@ -13,6 +13,7 @@ location is the state.
 import json
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 # Where the task trees live. Overridable so LCP can point at any profile.
@@ -102,6 +103,63 @@ def _state_summary(tdir: str) -> Dict[str, Any]:
     return {"text": text, "html": _md_to_html(text), "present": True}
 
 
+_FACTS_CAP = 4000
+
+
+def _session_facts(tdir: str) -> Dict[str, Any]:
+    """SESSION-FACTS.md (mined from sessions by the 4h assessment round)."""
+    p = os.path.join(tdir, "SESSION-FACTS.md")
+    if not os.path.isfile(p):
+        return {"text": None, "html": None, "present": False, "truncated": False}
+    try:
+        with open(p, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read(_FACTS_CAP)
+        truncated = os.path.getsize(p) > _FACTS_CAP
+    except OSError:
+        return {"text": None, "html": None, "present": False, "truncated": False}
+    return {"text": text, "html": _md_to_html(text), "present": True, "truncated": truncated}
+
+
+def _assessment_feed(limit: int = 40) -> List[Dict[str, Any]]:
+    """Newest decisions from .work-layers/assessments.jsonl (append-only).
+
+    The ledger is written by the 4h session-assessment round; a corrupt or
+    absent file must never crash the view, so record-level tolerance is
+    mandatory (one bad line is skipped, not fatal).
+    """
+    root = tasks_dir()
+    p = os.path.join(root, ".work-layers", "assessments.jsonl")
+    if not os.path.isfile(p):
+        return []
+    records = []
+    try:
+        with open(p, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    records.sort(key=lambda r: r.get("ts", 0) or 0, reverse=True)
+    out = []
+    for r in records[:limit]:
+        out.append({
+            "ts": r.get("ts"),
+            "ts_iso": time.strftime("%Y-%m-%d %H:%M",
+                                    time.gmtime(r.get("ts", 0) or 0)),
+            "action": r.get("action"),
+            "slug": r.get("slug"),
+            "summary": (r.get("summary") or "")[:200],
+            "applied": bool(r.get("applied")),
+            "reason": r.get("reason"),
+        })
+    return out
+
+
 def _read_status_line(plan_path: str) -> Optional[str]:
     """Pull the bolded **Status:** line out of a PLAN.md, if present.
 
@@ -184,7 +242,8 @@ def task_moments() -> List[Dict[str, Any]]:
                     results_text = None
                 results_html = _md_to_html(results_text) if results_text else None
 
-            artifacts = [f for f in files if f not in ("PLAN.md", "STATE-SUMMARY.md")]
+            artifacts = [f for f in files
+                 if f not in ("PLAN.md", "STATE-SUMMARY.md", "SESSION-FACTS.md")]
 
             # Layer-1 classification (deterministic batch) + Layer-2 summary.
             classification = None
@@ -195,6 +254,7 @@ def task_moments() -> List[Dict[str, Any]]:
                     "score": cls.get("score"),
                 }
             st_summary = _state_summary(tdir)
+            facts = _session_facts(tdir)
 
             moments.append({
                 "id": "task:%s" % name,
@@ -211,6 +271,7 @@ def task_moments() -> List[Dict[str, Any]]:
                     "claimed_status": claimed,
                     "classification": classification,
                     "state_summary": st_summary,
+                    "session_facts": facts,
                     "plan_summary": plan_summary,
                     "plan_text": plan_text,
                     "plan_html": plan_html,
@@ -294,6 +355,7 @@ def tasks_view() -> Dict[str, Any]:
         "by_label": by_label,
         "labels_meta": labels_meta,
         "conflicts": conflicts,
+        "assessments": _assessment_feed(),
         "tasks": moments,
         "todos": _todo_summary(),
     }

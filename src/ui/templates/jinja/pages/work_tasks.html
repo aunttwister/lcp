@@ -76,6 +76,28 @@
     </div>
   {% endif %}
 
+  {% if view.assessments %}
+    <h2 class="work-h2">Latest session assessments <span class="muted work-h2-note">(L1 round · mined from sessions)</span></h2>
+    <div class="work-scroll">
+      <table class="work-table">
+        <thead>
+          <tr><th>When</th><th>Action</th><th>Task</th><th>Finding</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          {% for a in view.assessments[:8] %}
+            <tr>
+              <td class="mono muted">{{ a.ts_iso }}</td>
+              <td><span class="task-chip">{{ a.action }}</span></td>
+              <td><code>{{ a.slug or '-' }}</code></td>
+              <td class="muted">{{ a.summary or a.reason or '' | truncate(110) }}</td>
+              <td>{% if a.applied %}<span class="work-actor">applied</span>{% else %}<span class="muted">skipped ({{ a.reason or '' }})</span>{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
   <h2 class="work-h2">In progress and new</h2>
   {% set focus = view.tasks | selectattr('payload.state', 'in', ['in_progress', 'new']) | list %}
   {% if not focus %}
@@ -98,19 +120,19 @@
           <tbody class="task-group">
             <tr class="task-row" onclick="toggleTaskDetail('task-detail-f{{ loop.index }}', this)">
               <td class="task-chev">▸</td>
-              <td>
+              <td data-label="Task">
                 {{ m.subject }}
                 {% if m.payload.status_conflict %}<span class="task-flag" title="PLAN.md status contradicts the directory">⚠</span>{% endif %}
               </td>
-              <td><span class="work-actor">{{ m.payload.state }}</span></td>
-              <td>
+              <td data-label="State"><span class="work-actor">{{ m.payload.state }}</span></td>
+              <td data-label="Category">
                 {% if m.payload.classification %}
                   <span class="task-chip" title="cosine {{ m.payload.classification.score }}">{{ m.payload.classification.label }}</span>
                 {% else %}<span class="muted">—</span>{% endif %}
               </td>
-              <td class="num">{{ m.payload.n_files }}</td>
-              <td class="mono muted">{{ m.t | fmt_ts }}</td>
-              <td class="muted">
+              <td data-label="Files" class="num">{{ m.payload.n_files }}</td>
+              <td data-label="Last transition" class="mono muted">{{ m.t | fmt_ts }}</td>
+              <td data-label="PLAN.md status" class="muted">
                 {% if m.payload.claimed_status %}
                   {{ m.payload.claimed_status | truncate(70) }}
                 {% else %}<span class="muted">—</span>{% endif %}
@@ -122,6 +144,13 @@
                   {% if m.payload.state_summary.present and m.payload.state_summary.html %}
                     <h4 class="task-expander-h task-expander-h-summary">STATE-SUMMARY · PLAN vs REAL</h4>
                     <div class="task-md task-md-summary">{{ m.payload.state_summary.html | safe }}</div>
+                  {% endif %}
+                  {% if m.payload.session_facts.present and m.payload.session_facts.html %}
+                    <h4 class="task-expander-h task-expander-h-facts">SESSION FACTS · what's done (mined from sessions)</h4>
+                    <div class="task-md task-md-facts">{{ m.payload.session_facts.html | safe }}</div>
+                    {% if m.payload.session_facts.truncated %}
+                      <p class="muted task-note">… SESSION-FACTS.md longer than 4 KB, truncated in this view.</p>
+                    {% endif %}
                   {% endif %}
                   {% if m.payload.plan_summary %}
                     <p class="task-summary">{{ m.payload.plan_summary }}</p>
@@ -171,13 +200,13 @@
         <tbody class="task-group">
           <tr class="task-row" onclick="toggleTaskDetail('task-detail-c{{ loop.index }}', this)">
             <td class="task-chev">▸</td>
-            <td>{{ m.subject }}</td>
-            <td>
+            <td data-label="Task">{{ m.subject }}</td>
+            <td data-label="Category">
               {% if m.payload.classification %}
                 <span class="task-chip" title="cosine {{ m.payload.classification.score }}">{{ m.payload.classification.label }}</span>
               {% else %}<span class="muted">—</span>{% endif %}
             </td>
-            <td class="mono muted">{{ m.t | fmt_ts }}</td>
+            <td data-label="Last transition" class="mono muted">{{ m.t | fmt_ts }}</td>
           </tr>
           <tr class="task-detail" id="task-detail-c{{ loop.index }}" hidden>
             <td colspan="4">
