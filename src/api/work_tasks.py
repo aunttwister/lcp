@@ -432,7 +432,7 @@ def _todo_view() -> Optional[Dict[str, Any]]:
             section = {"title": title, "expanded": expanded, "entries": []}
             out["sections"].append(section)
         elif s.startswith("### ") and section is not None:
-            t = s[4:].strip()
+            t = _strip_emoji(s[4:].strip())
             section["entries"].append({
                 "text": t,
                 "html": _md_to_html(t[:_TODO_ITEM_CAP]),
@@ -446,7 +446,7 @@ def _todo_view() -> Optional[Dict[str, Any]]:
                 if section["entries"] and section["entries"][-1].get("table_row"):
                     section["entries"].pop()
                 continue
-            t = " · ".join(c for c in cells if c)
+            t = _strip_emoji(" · ".join(c for c in cells if c))
             if not t:
                 continue
             section["entries"].append({
@@ -461,3 +461,13 @@ def _todo_view() -> Optional[Dict[str, Any]]:
 _TODO_TIMELINE_CAP = 50
 _TODO_ENTRY_CAP = 500
 _TODO_ITEM_CAP = 180
+
+# Decorated status markers used INSIDE task descriptions (✅ ⏸ 🆕 ⚠ …).
+# Arrows (→) and other prose symbols are deliberately NOT in the set.
+_EMOJI_RE = re.compile(
+    r"[\U0001F000-\U0001FAFF\U00002300-\U000023FF\U00002600-\U000027BF"
+    r"\U00002B00-\U00002BFF\uFE0F\u200D\u20E3]+")
+
+
+def _strip_emoji(text: str) -> str:
+    return re.sub(r"\s{2,}", " ", _EMOJI_RE.sub("", text)).strip()

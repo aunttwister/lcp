@@ -96,3 +96,21 @@ class TestTodoView:
     def test_h1_and_blank_lines_ignored(self, todo_tree):
         v = wt._todo_view()
         assert all(not s["title"].startswith("# Pending") for s in v["sections"])
+
+    def test_emoji_stripped_from_entries(self, tmp_path, monkeypatch):
+        tree = tmp_path / "work" / "tasks"
+        tree.mkdir(parents=True)
+        (tmp_path / "work" / "todo.md").write_text(textwrap.dedent('''\
+            # T
+            ## In Progress (1)
+
+            ### serbian-tts-stt — ⏸ PARKED 2026-09-06 → next step
+            ### zgx-fp8kv-cache — ✅ COMPLETED
+        '''), encoding="utf-8")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tree))
+        v = wt._todo_view()
+        texts = [e["text"] for e in v["sections"][0]["entries"]]
+        assert "serbian-tts-stt — PARKED 2026-09-06 → next step" in texts
+        assert "zgx-fp8kv-cache — COMPLETED" in texts
+        # arrows are prose and must survive
+        assert "→" in texts[0]
