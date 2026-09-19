@@ -19,6 +19,33 @@ DEFAULT_TASKS_DIR = "/root/.hermes/profiles/homelab-expert-l2/work/tasks"
 
 STATES = ("new", "in_progress", "completed", "cancelled")
 
+# How much of a PLAN.md / RESULTS.md to carry into the view. The plan is the
+# task's document of record; the panel shows its head as a summary and the
+# full (capped) text inside the expander. Truncation is flagged, not silent.
+_PLAN_CAP = 8000
+_RESULTS_CAP = 2000
+
+
+def _plan_summary(plan_text: str) -> Optional[str]:
+    """The first substantive line of a PLAN.md, minus plumbing.
+
+    Skips headings and the front-matter meta lines (**Created:**, **Status:**,
+    **Branch:**, **Owner:**) so the summary is what the task is actually about
+    -- for most plans that is the first user-ask or problem sentence.
+    """
+    skip_meta = ("created:", "status:", "branch:", "owner:", "user ask")
+    for raw in plan_text.splitlines():
+        line = raw.strip().lstrip("*_`~ ").strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            continue
+        low = line.lower()
+        if low.startswith(skip_meta):
+            continue
+        return line[:320]
+    return None
+
 
 def tasks_dir() -> str:
     """Resolve the task tree root, allowing an env override."""
@@ -79,6 +106,35 @@ def task_moments() -> List[Dict[str, Any]]:
             plan = os.path.join(tdir, "PLAN.md")
             claimed = _read_status_line(plan) if os.path.isfile(plan) else None
 
+            # Task document of record (capped + flagged, never silently cut).
+            plan_text = None
+            plan_truncated = False
+            plan_summary = None
+            if os.path.isfile(plan):
+                try:
+                    with open(plan, "r", encoding="utf-8", errors="replace") as fh:
+                        plan_text = fh.read(_PLAN_CAP)
+                    plan_truncated = os.path.getsize(plan) > _PLAN_CAP
+                except OSError:
+                    plan_text = None
+                plan_summary = _plan_summary(plan_text) if plan_text else None
+
+            # Completed tasks carry their output as RESULTS.md (when the agent
+            # wrote one); the expander surfaces it so "review the output" does
+            # not mean opening the terminal.
+            results_path = os.path.join(tdir, "RESULTS.md")
+            results_text = None
+            results_truncated = False
+            if os.path.isfile(results_path):
+                try:
+                    with open(results_path, "r", encoding="utf-8", errors="replace") as fh:
+                        results_text = fh.read(_RESULTS_CAP)
+                    results_truncated = os.path.getsize(results_path) > _RESULTS_CAP
+                except OSError:
+                    results_text = None
+
+            artifacts = [f for f in files if f != "PLAN.md"]
+
             moments.append({
                 "id": "task:%s" % name,
                 "t": st.st_mtime,
@@ -92,6 +148,12 @@ def task_moments() -> List[Dict[str, Any]]:
                     "n_files": len(files),
                     "has_plan": os.path.isfile(plan),
                     "claimed_status": claimed,
+                    "plan_summary": plan_summary,
+                    "plan_text": plan_text,
+                    "plan_truncated": plan_truncated,
+                    "results_text": results_text,
+                    "results_truncated": results_truncated,
+                    "artifacts": artifacts,
                     # A task whose PLAN says one thing while sitting in another
                     # directory is a real inconsistency, not a formatting nit.
                     "status_conflict": bool(claimed) and _conflicts(claimed, state),

@@ -89,7 +89,19 @@
               <td><span class="work-actor">{{ m.payload.state }}</span></td>
               <td class="num">{{ m.payload.n_files }}</td>
               <td>
-                {% if m.payload.has_plan %}<span class="work-label work-label-publish">yes</span>
+                {% if m.payload.has_plan %}
+                  <details class="task-expander">
+                    <summary>plan</summary>
+                    <div class="task-expander-body">
+                      {% if m.payload.plan_summary %}
+                        <p class="task-summary">{{ m.payload.plan_summary }}</p>
+                      {% endif %}
+                      <pre class="task-plan">{{ m.payload.plan_text }}</pre>
+                      {% if m.payload.plan_truncated %}
+                        <p class="muted">… PLAN.md longer than 8 KB, truncated in this view.</p>
+                      {% endif %}
+                    </div>
+                  </details>
                 {% else %}<span class="muted">no</span>{% endif %}
               </td>
               <td class="muted">
@@ -108,14 +120,43 @@
   <div class="work-scroll">
     <table class="work-table">
       <thead>
-        <tr><th>Last transition</th><th>Task</th><th class="num">Files</th></tr>
+        <tr><th>Last transition</th><th>Task</th><th>Output</th></tr>
       </thead>
       <tbody>
         {% for m in view.tasks | selectattr('payload.state', 'equalto', 'completed') | batch(12) | first %}
           <tr>
             <td class="mono muted">{{ m.t | fmt_ts }}</td>
             <td>{{ m.subject }}</td>
-            <td class="num">{{ m.payload.n_files }}</td>
+            <td>
+              <details class="task-expander">
+                <summary>review · {{ m.payload.n_files }} file{{ 's' if m.payload.n_files != 1 }}</summary>
+                <div class="task-expander-body">
+                  {% if m.payload.plan_summary %}
+                    <p class="task-summary">{{ m.payload.plan_summary }}</p>
+                  {% endif %}
+                  {% if m.payload.results_text %}
+                    <h4 class="task-expander-h">RESULTS.md</h4>
+                    <pre class="task-plan">{{ m.payload.results_text }}</pre>
+                    {% if m.payload.results_truncated %}
+                      <p class="muted">… RESULTS.md longer than 2 KB, truncated in this view.</p>
+                    {% endif %}
+                  {% endif %}
+                  {% if m.payload.has_plan %}
+                    <h4 class="task-expander-h">PLAN.md</h4>
+                    <pre class="task-plan">{{ m.payload.plan_text }}</pre>
+                    {% if m.payload.plan_truncated %}
+                      <p class="muted">… PLAN.md longer than 8 KB, truncated in this view.</p>
+                    {% endif %}
+                  {% endif %}
+                  {% if m.payload.artifacts %}
+                    <h4 class="task-expander-h">Artifacts</h4>
+                    <ul class="task-artifacts">
+                      {% for f in m.payload.artifacts %}<li>{{ f }}</li>{% endfor %}
+                    </ul>
+                  {% endif %}
+                </div>
+              </details>
+            </td>
           </tr>
         {% endfor %}
       </tbody>

@@ -1413,6 +1413,52 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .work-label-merge_duplicate { color: #d29922; border-color: #d29922; }
 .work-label-escalate { color: #f85149; border-color: #f85149; }
 
+/* Task expander — the PLAN.md / RESULTS.md disclosure used by the Tasks view.
+   Inline disclosure keeps the review on the row instead of sending the user
+   to the terminal; truncation is flagged in the body, never silent. */
+.task-expander summary {
+  cursor: pointer;
+  color: #58a6ff;
+  font-size: 0.8rem;
+  user-select: none;
+}
+.task-expander summary:hover { text-decoration: underline; }
+.task-expander-body {
+  margin: 0.5rem 0 0.9rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--card-border, #30363d);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.22);
+}
+.task-summary {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--foreground, #e6edf3);
+}
+.task-expander-h {
+  margin: 0.6rem 0 0.25rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground, #8b949e);
+}
+.task-plan {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  max-height: 420px;
+  overflow: auto;
+  color: var(--foreground, #e6edf3);
+}
+.task-artifacts {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.75rem;
+  color: var(--muted-foreground, #8b949e);
+}
+
 @media (max-width: 768px) {
   .work-cards { grid-template-columns: 1fr; }
   .work-table { font-size: 0.75rem; }
