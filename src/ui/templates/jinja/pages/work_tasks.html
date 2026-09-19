@@ -133,17 +133,41 @@
   </details>
 {% endif %}
 
-  <h2 class="work-h2">All tasks <span class="muted work-h2-note">{{ view.total }} · search + tag filter</span></h2>
-  <div class="task-toolbar">
-    <input type="text" id="task-search" class="task-search" placeholder="Search tasks (name, plan, state, tag)…" autocomplete="off">
-    <div class="task-tags" id="task-tags">
-      <button class="btn-sm task-tag-btn active" data-label="">All</button>
-      {% for label, count in view.by_label | dictsort(by='value', reverse=true) %}
-        <button class="btn-sm task-tag-btn" data-label="{{ label }}">{{ label }} <span class="muted">({{ count }})</span></button>
+  {% macro tq(extra) -%}?states={{ view.filter.states | join(',') }}&amp;per={{ view.filter.per }}&amp;q={{ view.filter.q | urlencode }}&amp;tag={{ view.filter.tag | urlencode }}{{ extra }}{%- endmacro %}
+
+  <h2 class="work-h2">All tasks <span class="muted work-h2-note">{{ view.total }} total · {{ view.filter.total_filtered }} shown</span></h2>
+  <form class="task-toolbar" method="get" action="/work/tasks">
+    <div class="task-toolbar-row">
+      <input type="text" id="task-search" name="q" class="task-search" value="{{ view.filter.q }}" placeholder="Search tasks (name, plan, state, tag)…" autocomplete="off">
+      <button type="submit" class="btn-sm btn-primary">Search</button>
+      {% if view.filter.q %}<a class="btn-sm" href="/work/tasks?states={{ view.filter.states | join(',') }}&amp;per={{ view.filter.per }}">Clear</a>{% endif %}
+    </div>
+    <input type="hidden" name="states" value="{{ view.filter.states | join(',') }}">
+    <input type="hidden" name="per" value="{{ view.filter.per }}">
+    <div class="task-tags">
+      <span class="muted task-filter-label">State</span>
+      {% for st in view.filter.states_options %}
+        {% if st in view.filter.states %}
+          <a class="btn-sm task-tag-btn active" href="/work/tasks?states={% set rest = view.filter.states | reject('equalto', st) | list %}{{ rest | join(',') if rest else 'all' }}&amp;per={{ view.filter.per }}&amp;q={{ view.filter.q | urlencode }}&amp;tag={{ view.filter.tag | urlencode }}">{{ st }} <span class="muted">({{ view.counts[st] }})</span></a>
+        {% else %}
+          <a class="btn-sm task-tag-btn" href="/work/tasks?states={{ (view.filter.states + [st]) | join(',') }}&amp;per={{ view.filter.per }}&amp;q={{ view.filter.q | urlencode }}&amp;tag={{ view.filter.tag | urlencode }}">{{ st }} <span class="muted">({{ view.counts[st] }})</span></a>
+        {% endif %}
       {% endfor %}
     </div>
-  </div>
-  <p class="muted work-rule" id="task-count-line">Showing {{ view.tasks | length }} tasks. Click any row to expand.</p>
+    <div class="task-tags">
+      <span class="muted task-filter-label">Tag</span>
+      <a class="btn-sm task-tag-btn{% if not view.filter.tag %} active{% endif %}" href="{{ tq('') }}">All</a>
+      {% for label, count in view.by_label | dictsort(by='value', reverse=true) %}
+        <a class="btn-sm task-tag-btn{% if view.filter.tag == label %} active{% endif %}" href="{{ tq('&amp;tag=' ~ label) }}">{{ label }} <span class="muted">({{ count }})</span></a>
+      {% endfor %}
+    </div>
+  </form>
+  <p class="muted work-rule" id="task-count-line">
+    Showing {{ view.tasks | length }} of {{ view.filter.total_filtered }} matching
+    {% if view.filter.q %}<em>“{{ view.filter.q }}”</em>{% endif %}
+    {% if view.filter.tag %}tag <em>{{ view.filter.tag }}</em>{% endif %}.
+    Click any row to expand.
+  </p>
 
   <div class="work-scroll">
     <table class="work-table">
@@ -225,6 +249,28 @@
     </table>
   </div>
 
+  {% if view.filter.pages > 1 %}
+    <div class="task-pager">
+      {% if view.filter.page > 1 %}
+        <a class="btn-sm" href="{{ tq('&amp;page=' ~ (view.filter.page - 1)) }}">Prev</a>
+      {% endif %}
+      {% for n in range(1, view.filter.pages + 1) %}
+        {% if n == 1 or n == view.filter.pages or (n >= view.filter.page - 2 and n <= view.filter.page + 2) %}
+          <a class="btn-sm{% if n == view.filter.page %} active{% endif %}" href="{{ tq('&amp;page=' ~ n) }}">{{ n }}</a>
+        {% elif n == 2 or n == view.filter.pages - 1 %}
+          <span class="muted">…</span>
+        {% endif %}
+      {% endfor %}
+      {% if view.filter.page < view.filter.pages %}
+        <a class="btn-sm" href="{{ tq('&amp;page=' ~ (view.filter.page + 1)) }}">Next</a>
+      {% endif %}
+      <span class="muted task-pager-label">per page</span>
+      {% for p in ['20', '50', '100', 'all'] %}
+        <a class="btn-sm{% if view.filter.per == p %} active{% endif %}" href="/work/tasks?states={{ view.filter.states | join(',') }}&amp;per={{ p }}&amp;q={{ view.filter.q | urlencode }}&amp;tag={{ view.filter.tag | urlencode }}&amp;page=1">{{ p }}</a>
+      {% endfor %}
+    </div>
+  {% endif %}
+
 {% endif %}
 {% endblock %}
 
@@ -264,49 +310,8 @@ document.querySelectorAll('.todo-more').forEach(function (btn) {
   });
 });
 
-/* Task search + tag filter (single active tag, "All" clears). */
-(function () {
-  var search = document.getElementById('task-search');
-  if (!search) return;
-  var countLine = document.getElementById('task-count-line');
-  var activeLabel = null;  // null = all
-
-  function applyFilter() {
-    var q = (search.value || '').toLowerCase().trim();
-    var total = 0;
-    var all = 0;
-    document.querySelectorAll('tr.task-row').forEach(function (row) {
-      all++;
-      var det = row.nextElementSibling;
-      var label = (row.getAttribute('data-label') || '').toLowerCase();
-      var hitTxt = !q ||
-        row.textContent.toLowerCase().indexOf(q) !== -1 ||
-        (det && det.textContent.toLowerCase().indexOf(q) !== -1);
-      var hitTag = !activeLabel || label === activeLabel;
-      var ok = hitTxt && hitTag;
-      if (ok) total++;
-      row.style.display = ok ? '' : 'none';
-      if (det && det.classList.contains('task-detail')) det.style.display = ok ? '' : 'none';
-    });
-    if (countLine) {
-      countLine.textContent = (activeLabel || q)
-        ? 'Showing ' + total + ' of ' + all + ' tasks.'
-        : 'Showing ' + all + ' tasks. Click any row to expand.';
-    }
-  }
-
-  search.addEventListener('input', applyFilter);
-
-  document.querySelectorAll('.task-tag-btn').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var lbl = (btn.getAttribute('data-label') || '').toLowerCase();
-      activeLabel = lbl ? lbl : null;
-      document.querySelectorAll('.task-tag-btn').forEach(function (b) {
-        b.classList.toggle('active', b.getAttribute('data-label') === btn.getAttribute('data-label'));
-      });
-      applyFilter();
-    });
-  });
+/* Task filtering is server-side (filters + pagination via query params), so
+   there is no client-side search/tag JS — the toolbar is a GET form. */
 })();
 </script>
 {% endblock %}

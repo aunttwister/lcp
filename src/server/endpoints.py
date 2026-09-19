@@ -3338,20 +3338,24 @@ class WorkEndpoints:
             self._send_json({"error": str(e)}, 500)
 
     def _serve_work_tasks_page(self):
-        """Server-rendered Work > Tasks page."""
+        """Server-rendered Work > Tasks page (supports ?states/q/tag/per/page)."""
         from ..ui.pages import render_work_tasks_page
-        html = render_work_tasks_page(self.config, self.engine)
+        from urllib.parse import parse_qs, urlsplit
+        qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+        html = render_work_tasks_page(self.config, self.engine, qs)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
         self.wfile.write(html.encode("utf-8"))
 
     def _serve_work_tasks_api(self):
-        """GET /api/work/tasks — the Tasks view as JSON."""
+        """GET /api/work/tasks — the Tasks view as JSON (filters supported)."""
         from ..api import work_tasks
+        from urllib.parse import parse_qs, urlsplit
 
         try:
-            self._send_json(work_tasks.tasks_view())
+            qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            self._send_json(work_tasks.tasks_view(qs))
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 

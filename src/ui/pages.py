@@ -91,16 +91,17 @@ def render_work_decisions_page(config, engine=None) -> str:
                        active_page="work_decisions", view=view)
 
 
-def render_work_tasks_page(config, engine=None) -> str:
+def render_work_tasks_page(config, engine=None, params=None) -> str:
     """Render the Work > Tasks page (Jinja2).
 
     A task's state is its directory, so this view reads the tree rather than a
     status field -- the state cannot drift from where the item actually lives.
+    ``params`` carries the server-side filter/pagination query string.
     """
     from .render import render_page
     from ..api import work_tasks
     try:
-        view = work_tasks.tasks_view()
+        view = work_tasks.tasks_view(params or {})
     except Exception as e:  # never blank the page on a data error
         view = {
             "available": False,

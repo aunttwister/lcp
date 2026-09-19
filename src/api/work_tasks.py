@@ -325,8 +325,41 @@ def _conflicts(claimed: str, state: str) -> bool:
     return False
 
 
-def tasks_view() -> Dict[str, Any]:
-    """Assemble the Tasks view: counts per state plus the moment list."""
+def _strip_html(text: str) -> str:
+    """Rough HTML -> plain text for the search haystack (entity decode only
+    for the common escapes; substring matching is tolerant)."""
+    if not text:
+        return ""
+    t = re.sub(r"<[^>]+>", " ", text)
+    for ent, ch in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+                    ("&quot;", '"'), ("&#39;", "'")):
+        t = t.replace(ent, ch)
+    return t
+
+
+def _haystack(m: Dict[str, Any]) -> str:
+    """Plain-text corpus a search term is matched against."""
+    p = m["payload"]
+    return " ".join([
+        m.get("subject") or "",
+        p.get("state") or "",
+        p.get("claimed_status") or "",
+        (p.get("classification") or {}).get("label") or "",
+        _strip_html(p.get("plan_html") or ""),
+    ]).lower()
+
+
+def tasks_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Assemble the Tasks view: counts per state plus the moment list.
+
+    ``params`` drives the server-side filters/pagination (so search covers ALL
+    tasks and every response only renders the current page's rows):
+      states  comma list of STATES, or "all"        (default: in_progress)
+      q       substring over subject/plan/state/tag/haystack
+      tag     exact classifier label
+      per     rows per page: int or "all"           (default: 20)
+      page    1-based                                (default: 1)
+    """
     root = tasks_dir()
     moments = task_moments()
     cls_idx = _classification_index()
@@ -344,13 +377,61 @@ def tasks_view() -> Dict[str, Any]:
             "todos": None,
         }
 
+    # ── filter + pagination params ──
+    params = params or {}
+    per_raw = str(params.get("per") or "20")
+    if per_raw == "all":
+        per = "all"
+    else:
+        try:
+            per = max(1, min(500, int(per_raw)))
+        except (TypeError, ValueError):
+            per = 20
+    states_raw = str(params.get("states") or "in_progress")
+    if states_raw in ("", "all"):
+        states = list(STATES)
+    else:
+        states = [s for s in states_raw.split(",") if s in STATES] or list(STATES)
+    q = str(params.get("q") or "").lower().strip()
+    tag = str(params.get("tag") or "").strip().lower()
+    try:
+        page = max(1, int(params.get("page") or 1))
+    except (TypeError, ValueError):
+        page = 1
+
+    # ── counts (unfiltered, drive the status cards) ──
     counts = {s: 0 for s in STATES}
     for m in moments:
         counts[m["payload"]["state"]] = counts.get(m["payload"]["state"], 0) + 1
 
     conflicts = [m for m in moments if m["payload"]["status_conflict"]]
 
-    # Classification rollup: counts per label sibling to the per-state counts.
+    # ── apply filters ──
+    filtered = []
+    for m in moments:
+        st = m["payload"]["state"]
+        if st not in states:
+            continue
+        if tag:
+            label = ((m["payload"].get("classification") or {}).get("label") or "").lower()
+            if label != tag:
+                continue
+        if q and q not in _haystack(m):
+            continue
+        filtered.append(m)
+
+    total_filtered = len(filtered)
+    if per == "all":
+        pages = 1
+        page = 1
+        tasks = filtered
+    else:
+        pages = max(1, -(-total_filtered // per))
+        page = min(page, pages)
+        start = (page - 1) * per
+        tasks = filtered[start:start + per]
+
+    # ── classification rollup ──
     by_label = (cls_idx or {}).get("by_label") or {}
     labels_meta = (cls_idx or {}).get("labels") or {}
     classified = sum(1 for p in (cls_idx or {}).get("tasks", {}).values() if p.get("label"))
@@ -366,8 +447,18 @@ def tasks_view() -> Dict[str, Any]:
         "labels_meta": labels_meta,
         "conflicts": conflicts,
         "assessments": _assessment_feed(),
-        "tasks": moments,
+        "tasks": tasks,
         "todos": _todo_view(),
+        "filter": {
+            "states": states,
+            "states_options": list(STATES),
+            "q": str(params.get("q") or ""),
+            "tag": str(params.get("tag") or ""),
+            "per": str(per),
+            "page": page,
+            "pages": pages,
+            "total_filtered": total_filtered,
+        },
     }
 
 

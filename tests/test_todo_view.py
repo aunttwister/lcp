@@ -114,3 +114,78 @@ class TestTodoView:
         assert "zgx-fp8kv-cache — COMPLETED" in texts
         # arrows are prose and must survive
         assert "→" in texts[0]
+
+
+class TestTasksViewParams:
+    def _moments(self, tmp_path):
+        root = tmp_path / "tasks"
+        for state in ("in_progress", "new", "completed"):
+            for slug in ("alpha", "bravo", "charlie"):
+                d = root / state / slug
+                d.mkdir(parents=True)
+                (d / "PLAN.md").write_text("# %s\nplan text for %s" % (slug, slug),
+                                            encoding="utf-8")
+        import os
+        os.environ["LCP_WORK_TASKS_DIR"] = str(root)
+        os.environ.pop("LCP_WORK_TODO", None)
+        # tag one task via a fake classification index
+        layers = root / ".work-layers"
+        layers.mkdir(exist_ok=True)
+        import json
+        (layers / "classifications.json").write_text(json.dumps({
+            "by_label": {"infrastructure": 1},
+            "labels": {"infrastructure": {"label": "infrastructure", "exemplars": []}},
+            "tasks": {"alpha": {"label": "infrastructure", "score": 0.9}},
+        }), encoding="utf-8")
+
+    def test_default_only_in_progress(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        self._moments(tmp_path)
+        v = wt.tasks_view()
+        assert v["filter"]["states"] == ["in_progress"]
+        assert len(v["tasks"]) == 3  # alpha/bravo/charlie in_progress
+        assert v["filter"]["total_filtered"] == 3
+        assert v["filter"]["pages"] == 1
+
+    def test_multiselect_states(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        self._moments(tmp_path)
+        v = wt.tasks_view({"states": "in_progress,new"})
+        assert v["filter"]["total_filtered"] == 6
+
+    def test_states_all(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        self._moments(tmp_path)
+        v = wt.tasks_view({"states": "all"})
+        assert v["filter"]["total_filtered"] == 9
+
+    def test_search_matches_plan_text(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        self._moments(tmp_path)
+        v = wt.tasks_view({"states": "all", "q": "plan text for bravo"})
+        # bravo exists in every state -> 3 matches, all named bravo
+        assert v["filter"]["total_filtered"] == 3
+        assert {m["subject"] for m in v["tasks"]} == {"bravo"}
+
+    def test_tag_filter(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        self._moments(tmp_path)
+        v = wt.tasks_view({"states": "all", "tag": "infrastructure"})
+        # the index labels slug "alpha", which exists in every state
+        assert v["filter"]["total_filtered"] == 3
+        assert {m["subject"] for m in v["tasks"]} == {"alpha"}
+
+    def test_pagination(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        self._moments(tmp_path)
+        v = wt.tasks_view({"states": "all", "per": "4", "page": "2"})
+        assert v["filter"]["pages"] == 3
+        assert v["filter"]["page"] == 2
+        assert len(v["tasks"]) == 4
+
+    def test_per_all(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        self._moments(tmp_path)
+        v = wt.tasks_view({"states": "all", "per": "all"})
+        assert v["filter"]["pages"] == 1
+        assert len(v["tasks"]) == 9
