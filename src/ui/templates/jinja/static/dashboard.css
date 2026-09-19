@@ -1360,6 +1360,24 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 
 .work-warn { color: #d29922; font-weight: 600; }
 
+/* Cron page chips */
+.work-chip {
+  display: inline-block;
+  font-size: 0.68rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 9999px;
+  border: 1px solid var(--border, #30363d);
+  vertical-align: middle;
+}
+.work-chip-active { color: #3fb950; border-color: #3fb950; }
+.work-chip-paused { color: #d29922; border-color: #d29922; }
+.work-chip-disabled { color: var(--text-muted, #8b949e); }
+.work-chip-error { color: #f85149; border-color: #f85149; }
+.work-chip-ok { color: #3fb950; border-color: #3fb950; }
+.work-job-name { font-weight: 600; overflow-wrap: anywhere; }
+.work-rel { color: var(--text-muted, #8b949e); font-size: 0.72rem; }
+.work-script { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .work-scroll { overflow-x: auto; }
 
 .work-table {

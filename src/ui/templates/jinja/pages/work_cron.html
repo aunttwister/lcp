@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Cron — Work — LCP{% endblock %}
+{% set active_page = 'work_cron' %}
+
+{% block content %}
+<h1>Cron</h1>
+<p class="subtitle">
+  Every scheduled job across the Hermes gateway profiles, as of the last host-side
+  snapshot{% if view.generated_rel %} (<strong>{{ view.generated_rel }} old</strong>,
+  refreshed every 15&nbsp;min by <span class="mono">work-layers-cron.timer</span>){% endif %}.
+  LCP is a read-only window here — pause/resume/run stays on the CLI, and nothing on
+  this page calls a model.
+</p>
+
+{% if not view.available %}
+  <div class="empty">
+    <strong>Cron snapshot unavailable</strong><br>
+    <span class="muted">{{ view.hint or view.error }}</span>
+  </div>
+{% else %}
+
+  <div class="work-cards">
+    <div class="work-card"><div class="work-card-label">Total</div><div class="work-card-value">{{ view.counts.get('total', 0) }}</div></div>
+    <div class="work-card work-card-ok"><div class="work-card-label">Active</div><div class="work-card-value">{{ view.counts.get('active', 0) }}</div></div>
+    <div class="work-card{% if view.counts.get('paused', 0) %} work-card-warn{% else %} work-card-muted{% endif %}">
+      <div class="work-card-label">Paused</div><div class="work-card-value">{{ view.counts.get('paused', 0) }}</div></div>
+    <div class="work-card{% if view.counts.get('error', 0) %} work-card-bad{% else %} work-card-muted{% endif %}">
+      <div class="work-card-label">Error</div><div class="work-card-value">{{ view.counts.get('error', 0) }}</div></div>
+  </div>
+
+  {% for p in view.profiles %}
+    {% if p.jobs %}
+    <h2 class="work-h2">
+      {{ p.profile }}{% if p.legacy %} <span class="work-chip work-chip-disabled">legacy</span>{% endif %}
+      <span class="muted">· {{ p.counts.active }}/{{ p.counts.total }} active{% if p.counts.warned %} · {{ p.counts.warned }} flagged{% endif %}</span>
+    </h2>
+    {% if p.error %}<p class="work-warn">profile read error: {{ p.error }}</p>{% endif %}
+    <div class="work-scroll">
+      <table class="work-table">
+        <thead>
+          <tr><th>Status</th><th>Job</th><th>Schedule</th><th>Next run</th><th>Last run</th>
+              <th>Last status</th><th>Last exec</th><th>Detail</th></tr>
+        </thead>
+        <tbody>
+          {% for j in p.jobs %}
+            <tr>
+              <td data-label="Status">
+                <span class="work-chip work-chip-{{ j.status if j.status in ('active','paused','disabled') else 'disabled' }}{% if j.warn == 'error' %} work-chip-error{% endif %}">{{ j.status }}</span>
+              </td>
+              <td data-label="Job">
+                <div class="work-job-name{% if j.warn %} work-warn{% endif %}">{{ j.name or j.id }}</div>
+                {% if j.paused_reason %}<div class="muted" style="font-size:0.72rem">{{ j.paused_reason }}</div>{% endif %}
+              </td>
+              <td data-label="Schedule" class="mono">{{ j.schedule or j.get('schedule') or '—' }}</td>
+              <td data-label="Next run" class="mono muted">
+                {% if j.next_run_at %}{{ (j.next_run_at or '')[:16] }}{% if j.next_rel %} <span class="work-rel">{{ j.next_rel }}</span>{% endif %}
+                {% elif j.status == 'active' %}<span class="work-warn">never — check scheduler</span>
+                {% else %}—{% endif %}
+              </td>
+              <td data-label="Last run" class="mono muted">
+                {% if j.last_run_at %}{{ (j.last_run_at or '')[:16] }}{% if j.last_rel %} <span class="work-rel">{{ j.last_rel }}</span>{% endif %}
+                {% else %}—{% endif %}
+              </td>
+              <td data-label="Last status">
+                {% if j.last_status %}<span class="work-chip work-chip-{{ 'ok' if j.last_status in ('ok','completed','success') else 'error' if j.last_status in ('failed','error') else 'disabled' }}">{{ j.last_status }}</span>
+                {% else %}—{% endif %}
+              </td>
+              <td data-label="Last exec" class="mono muted">
+                {% if j.last_execution_status %}{{ j.last_execution_status }}{% if j.last_execution_finished_rel %} {{ j.last_execution_finished_rel }}{% endif %}
+                {% else %}—{% endif %}
+              </td>
+              <td data-label="Detail">
+                {% if j.no_agent %}<span class="work-chip work-chip-disabled">no-agent</span>{% else %}<span class="work-chip work-chip-active">agent</span>{% endif %}
+                {% if j.script %}<div class="mono muted work-script" title="{{ j.script }}">{{ j.script.split('/')[-1] }}</div>{% endif %}
+                {% if j.deliver %}<div class="muted" style="font-size:0.72rem">→ {{ j.deliver }}</div>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  {% endfor %}
+
+  {% for p in view.profiles %}
+    {% if p.error and not p.jobs %}
+    <h2 class="work-h2">{{ p.profile }}{% if p.legacy %} <span class="work-chip work-chip-disabled">legacy</span>{% endif %}</h2>
+    <p class="work-warn">could not read jobs: {{ p.error }}</p>
+    {% endif %}
+  {% endfor %}
+
+{% endif %}
+{% endblock %}

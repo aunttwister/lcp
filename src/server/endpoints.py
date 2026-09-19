@@ -3373,6 +3373,24 @@ class WorkEndpoints:
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
+    def _serve_work_cron_page(self):
+        """Server-rendered Work > Cron page."""
+        from ..ui.pages import render_work_cron_page
+        html = render_work_cron_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_work_cron_api(self):
+        """GET /api/work/cron — the Cron view as JSON."""
+        from ..api import work_cron
+
+        try:
+            self._send_json(work_cron.cron_view())
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _serve_work_status_api(self):
         """GET /api/work/status — the workspace MODULE's own health.
 

@@ -134,4 +134,27 @@ def render_work_fleet_page(config, engine=None) -> str:
                        active_page="work_fleet", view=view)
 
 
+def render_work_cron_page(config, engine=None) -> str:
+    """Render the Work > Cron page (Jinja2).
+
+    The payload comes from the host-side cron snapshot
+    (``.work-layers/cron-jobs.json``) written by ``work_layers.collect_cron``;
+    LCP itself is a read-only window onto the Hermes scheduler.
+    """
+    from .render import render_page
+    from ..api import work_cron
+    try:
+        view = work_cron.cron_view()
+    except Exception as e:  # never blank the page on a data error
+        view = {
+            "available": False,
+            "hint": "cron view failed: %s: %s" % (type(e).__name__, e),
+            "error": str(e), "generated_at": None, "generated_rel": None,
+            "counts": {"total": 0, "active": 0, "paused": 0, "disabled": 0, "error": 0},
+            "profiles": [],
+        }
+    return render_page("pages/work_cron.html", config, engine,
+                       active_page="work_cron", view=view)
+
+
 
