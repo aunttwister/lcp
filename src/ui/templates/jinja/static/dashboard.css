@@ -1413,51 +1413,105 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .work-label-merge_duplicate { color: #d29922; border-color: #d29922; }
 .work-label-escalate { color: #f85149; border-color: #f85149; }
 
-/* Task expander — the PLAN.md / RESULTS.md disclosure used by the Tasks view.
-   Inline disclosure keeps the review on the row instead of sending the user
-   to the terminal; truncation is flagged in the body, never silent. */
-.task-expander summary {
-  cursor: pointer;
-  color: #58a6ff;
-  font-size: 0.8rem;
-  user-select: none;
+/* Task row accordion — clicking a table row expands the detail row directly
+   below it. The detail row spans the full table width so long PLAN.md /
+   RESULTS.md content never overflows the row it belongs to. */
+.task-row { cursor: pointer; }
+.task-row:hover td { background: rgba(88, 166, 255, 0.05); }
+.task-chev-col { width: 2rem; }
+.task-chev {
+  color: var(--muted-foreground, #8b949e);
+  font-size: 0.7rem;
+  text-align: center;
 }
-.task-expander summary:hover { text-decoration: underline; }
-.task-expander-body {
-  margin: 0.5rem 0 0.9rem;
-  padding: 0.6rem 0.8rem;
-  border: 1px solid var(--card-border, #30363d);
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.22);
+.task-detail td {
+  padding: 0 !important;
+  border-top: none;
+  background: rgba(0, 0, 0, 0.18);
+}
+.task-detail-inner {
+  padding: 0.75rem 1rem 1rem;
+  border-left: 3px solid var(--card-border, #30363d);
 }
 .task-summary {
-  margin: 0 0 0.5rem;
+  margin: 0 0 0.7rem;
   font-size: 0.85rem;
   color: var(--foreground, #e6edf3);
 }
 .task-expander-h {
-  margin: 0.6rem 0 0.25rem;
+  margin: 0.9rem 0 0.3rem;
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted-foreground, #8b949e);
 }
-.task-plan {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 0.75rem;
-  line-height: 1.55;
-  max-height: 420px;
-  overflow: auto;
-  color: var(--foreground, #e6edf3);
-}
+.task-note { margin: 0.4rem 0 0; font-size: 0.75rem; }
 .task-artifacts {
   margin: 0.25rem 0 0;
   padding-left: 1.1rem;
   font-size: 0.75rem;
   color: var(--muted-foreground, #8b949e);
 }
+
+/* Rendered markdown (plan / results) — GitHub-dark-ish typography at a
+   readable panel size. The accordion is full-width, so no forced wrapping;
+   code blocks and tables scroll horizontally instead of wrecking the row. */
+.task-md { font-size: 0.82rem; line-height: 1.6; color: var(--foreground, #e6edf3); }
+.task-md > :first-child { margin-top: 0; }
+.task-md > :last-child { margin-bottom: 0; }
+.task-md h1,
+.task-md h2,
+.task-md h3,
+.task-md h4 {
+  margin: 0.9rem 0 0.4rem;
+  line-height: 1.3;
+  color: var(--foreground, #e6edf3);
+}
+.task-md h1 { font-size: 1.15rem; border-bottom: 1px solid var(--border, #30363d); padding-bottom: 0.3rem; }
+.task-md h2 { font-size: 1.02rem; }
+.task-md h3, .task-md h4 { font-size: 0.9rem; }
+.task-md p { margin: 0.45rem 0; }
+.task-md ul, .task-md ol { margin: 0.45rem 0; padding-left: 1.4rem; }
+.task-md li { margin: 0.2rem 0; }
+.task-md strong { color: var(--foreground, #e6edf3); }
+.task-md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78em;
+  background: rgba(110, 118, 129, 0.18);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.task-md pre {
+  margin: 0.55rem 0;
+  padding: 0.7rem 0.85rem;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.task-md pre code { background: none; padding: 0; font-size: 0.78rem; }
+.task-md blockquote {
+  margin: 0.5rem 0;
+  padding: 0.1rem 0.9rem;
+  border-left: 3px solid var(--border, #30363d);
+  color: var(--muted-foreground, #8b949e);
+}
+.task-md table {
+  margin: 0.55rem 0;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  max-width: 100%;
+  overflow: auto;
+  display: block;
+}
+.task-md th, .task-md td {
+  border: 1px solid var(--border, #30363d);
+  padding: 0.3rem 0.55rem;
+}
+.task-md th { background: rgba(110, 118, 129, 0.15); }
+.task-md a { color: #58a6ff; text-decoration: none; }
+.task-md a:hover { text-decoration: underline; }
+.task-md hr { border: none; border-top: 1px solid var(--border, #30363d); margin: 0.8rem 0; }
 
 @media (max-width: 768px) {
   .work-cards { grid-template-columns: 1fr; }

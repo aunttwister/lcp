@@ -110,3 +110,28 @@ class TestMomentPayload:
         (m,) = wt.task_moments()
         # errors="replace" keeps the text readable; the moment must exist.
         assert m["payload"]["has_plan"] is True
+
+
+class TestMarkdown:
+    def test_renders_headings_bold_code_lists(self):
+        html = wt._md_to_html("# T\n\n**bold** and `code`\n\n- a\n- b\n")
+        assert "<h1>T</h1>" in html
+        assert "<strong>bold</strong>" in html
+        assert "<code>code</code>" in html
+        assert "<li>a</li>" in html
+
+    def test_escapes_raw_html(self):
+        html = wt._md_to_html("hello <script>alert(1)</script>\n")
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+
+    def test_link_is_not_auto_linked(self):
+        html = wt._md_to_html("see https://example.com\n")
+        assert "<a href" not in html
+
+    def test_payload_carries_rendered_html(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, plan="# T\n\nBody line one.\n", results="# R\n\nDone.\n")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        (m,) = wt.task_moments()
+        assert m["payload"]["plan_html"] == "<h1>T</h1>\n<p>Body line one.</p>\n"
+        assert m["payload"]["results_html"] == "<h1>R</h1>\n<p>Done.</p>\n"

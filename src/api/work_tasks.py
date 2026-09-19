@@ -26,6 +26,19 @@ _PLAN_CAP = 8000
 _RESULTS_CAP = 2000
 
 
+def _md_to_html(text: str) -> str:
+    """CommonMark -> HTML with raw HTML escaped (html=False).
+
+    Task files are agent-written, but they are still untrusted input as far
+    as the browser is concerned; markdown-it with html=False renders any raw
+    HTML inside the document as escaped text instead of pasting it through.
+    """
+    from markdown_it import MarkdownIt
+
+    md = MarkdownIt("commonmark", {"html": False, "linkify": False})
+    return md.render(text)
+
+
 def _plan_summary(plan_text: str) -> Optional[str]:
     """The first substantive line of a PLAN.md, minus plumbing.
 
@@ -110,6 +123,7 @@ def task_moments() -> List[Dict[str, Any]]:
             plan_text = None
             plan_truncated = False
             plan_summary = None
+            plan_html = None
             if os.path.isfile(plan):
                 try:
                     with open(plan, "r", encoding="utf-8", errors="replace") as fh:
@@ -118,6 +132,7 @@ def task_moments() -> List[Dict[str, Any]]:
                 except OSError:
                     plan_text = None
                 plan_summary = _plan_summary(plan_text) if plan_text else None
+                plan_html = _md_to_html(plan_text) if plan_text else None
 
             # Completed tasks carry their output as RESULTS.md (when the agent
             # wrote one); the expander surfaces it so "review the output" does
@@ -125,6 +140,7 @@ def task_moments() -> List[Dict[str, Any]]:
             results_path = os.path.join(tdir, "RESULTS.md")
             results_text = None
             results_truncated = False
+            results_html = None
             if os.path.isfile(results_path):
                 try:
                     with open(results_path, "r", encoding="utf-8", errors="replace") as fh:
@@ -132,6 +148,7 @@ def task_moments() -> List[Dict[str, Any]]:
                     results_truncated = os.path.getsize(results_path) > _RESULTS_CAP
                 except OSError:
                     results_text = None
+                results_html = _md_to_html(results_text) if results_text else None
 
             artifacts = [f for f in files if f != "PLAN.md"]
 
@@ -150,8 +167,10 @@ def task_moments() -> List[Dict[str, Any]]:
                     "claimed_status": claimed,
                     "plan_summary": plan_summary,
                     "plan_text": plan_text,
+                    "plan_html": plan_html,
                     "plan_truncated": plan_truncated,
                     "results_text": results_text,
+                    "results_html": results_html,
                     "results_truncated": results_truncated,
                     "artifacts": artifacts,
                     # A task whose PLAN says one thing while sitting in another
