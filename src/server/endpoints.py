@@ -3289,6 +3289,8 @@ class SetupEndpoints:
                 result = setup_mod.remove_memory(self.engine)
             elif kind == "module" and name == "runboard":
                 result = setup_mod.remove_runboard(self.engine)
+            elif kind == "module" and name == "workspace":
+                result = setup_mod.remove_workspace(self.engine)
             else:
                 self._send_json({"error": f"unknown remove target: {kind}/{name}"}, 404)
                 return
@@ -3368,5 +3370,20 @@ class WorkEndpoints:
 
         try:
             self._send_json(work_fleet.fleet_view())
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_work_status_api(self):
+        """GET /api/work/status — the workspace MODULE's own health.
+
+        Distinct from a view's payload: this reports which read-only sources are
+        reachable and therefore which views can render. It exists so a missing
+        bind mount is diagnosable from the UI instead of looking like an empty
+        table.
+        """
+        from ..api import workspace
+
+        try:
+            self._send_json(workspace.workspace_status())
         except Exception as e:
             self._send_json({"error": str(e)}, 500)

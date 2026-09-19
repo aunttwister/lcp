@@ -874,6 +874,8 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_work_tasks_api())
     t.get("api.work.fleet", exact("/api/work/fleet"),
           lambda h, p: h._serve_work_fleet_api())
+    t.get("api.work.status", exact("/api/work/status"),
+          lambda h, p: h._serve_work_status_api())
 
     # ── cost / usage / logs ──
     t.get("api.daily-costs", exact("/api/daily-costs"),
