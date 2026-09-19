@@ -189,11 +189,124 @@ def _read_status_line(plan_path: str) -> Optional[str]:
     return m.group(1).strip().rstrip("*").strip()
 
 
-def task_moments() -> List[Dict[str, Any]]:
-    """Every task directory as a moment, ordered newest transition first."""
+def _moment_for(state: str, name: str, tdir: str,
+                cls_tasks: Dict[str, Any], lite: bool = False) -> Dict[str, Any]:
+    """Build one task moment for a directory.
+
+    ``lite`` skips every heavy read (PLAN.md body + markdown, RESULTS.md,
+    STATE-SUMMARY.md, SESSION-FACTS.md) — used by the lazy table so a page of
+    rows costs ~1 small head-read per directory, not 5 full-file reads each.
+    The detail endpoint uses the same builder for ONE directory.
+    """
+    try:
+        st = os.stat(tdir)
+    except OSError:
+        raise FileNotFoundError(tdir)
+
+    files: List[str] = []
+    try:
+        files = sorted(os.listdir(tdir))
+    except OSError:
+        pass
+
+    plan = os.path.join(tdir, "PLAN.md")
+    claimed = _read_status_line(plan) if os.path.isfile(plan) else None
+
+    classification = None
+    cls = cls_tasks.get(name)
+    if cls and cls.get("label"):
+        classification = {"label": cls["label"], "score": cls.get("score")}
+
+    payload: Dict[str, Any] = {
+        "state": state,
+        "files": files,
+        "n_files": len(files),
+        "has_plan": os.path.isfile(plan),
+        "claimed_status": claimed,
+        "classification": classification,
+        "status_conflict": bool(claimed) and _conflicts(claimed, state),
+    }
+    if lite:
+        return {
+            "id": "task:%s" % name,
+            "key": "%s/%s" % (state, name),
+            "t": st.st_mtime,
+            "computed_at": st.st_mtime,
+            "subject": name,
+            "actor": "filesystem",
+            "kind": "task.%s" % state,
+            "payload": payload,
+            "provenance": {"path": tdir},
+        }
+
+    # ── heavy reads (full payload for the detail endpoint) ──
+    plan_text = None
+    plan_truncated = False
+    plan_summary = None
+    plan_html = None
+    if os.path.isfile(plan):
+        try:
+            with open(plan, "r", encoding="utf-8", errors="replace") as fh:
+                plan_text = fh.read(_PLAN_CAP)
+            plan_truncated = os.path.getsize(plan) > _PLAN_CAP
+        except OSError:
+            plan_text = None
+        plan_summary = _plan_summary(plan_text) if plan_text else None
+        plan_html = _md_to_html(plan_text) if plan_text else None
+
+    results_path = os.path.join(tdir, "RESULTS.md")
+    results_text = None
+    results_truncated = False
+    results_html = None
+    if os.path.isfile(results_path):
+        try:
+            with open(results_path, "r", encoding="utf-8", errors="replace") as fh:
+                results_text = fh.read(_RESULTS_CAP)
+            results_truncated = os.path.getsize(results_path) > _RESULTS_CAP
+        except OSError:
+            results_text = None
+        results_html = _md_to_html(results_text) if results_text else None
+
+    payload.update({
+        "state_summary": _state_summary(tdir),
+        "session_facts": _session_facts(tdir),
+        "plan_summary": plan_summary,
+        "plan_text": plan_text,
+        "plan_html": plan_html,
+        "plan_truncated": plan_truncated,
+        "results_text": results_text,
+        "results_html": results_html,
+        "results_truncated": results_truncated,
+        "artifacts": [f for f in files
+                      if f not in ("PLAN.md", "STATE-SUMMARY.md", "SESSION-FACTS.md")],
+    })
+    return {
+        "id": "task:%s" % name,
+        "t": st.st_mtime,
+        "computed_at": st.st_mtime,
+        "subject": name,
+        "actor": "filesystem",
+        "kind": "task.%s" % state,
+        "payload": payload,
+        "provenance": {"path": tdir},
+    }
+
+
+def task_moments(lite: bool = False) -> List[Dict[str, Any]]:
+    """Every task directory as a moment, ordered newest transition first.
+
+    ``lite`` skips the heavy per-task reads (see ``_moment_for``) — the lazy
+    table path. Lite results are cached for a few seconds so rapid filter /
+    pagination clicks don't re-walk the tree.
+    """
     root = tasks_dir()
     if not os.path.isdir(root):
         return []
+
+    if lite:
+        now = time.time()
+        if _LITE_CACHE["ts"] and now - _LITE_CACHE["ts"] < _LITE_CACHE_TTL:
+            return _LITE_CACHE["moments"]
 
     cls_idx = _classification_index()
     cls_tasks = (cls_idx or {}).get("tasks") or {}
@@ -208,97 +321,19 @@ def task_moments() -> List[Dict[str, Any]]:
             if not os.path.isdir(tdir):
                 continue
             try:
-                st = os.stat(tdir)
-            except OSError:
+                moments.append(_moment_for(state, name, tdir, cls_tasks, lite=lite))
+            except (OSError, FileNotFoundError):
                 continue
 
-            files = []
-            try:
-                files = sorted(os.listdir(tdir))
-            except OSError:
-                pass
-
-            plan = os.path.join(tdir, "PLAN.md")
-            claimed = _read_status_line(plan) if os.path.isfile(plan) else None
-
-            # Task document of record (capped + flagged, never silently cut).
-            plan_text = None
-            plan_truncated = False
-            plan_summary = None
-            plan_html = None
-            if os.path.isfile(plan):
-                try:
-                    with open(plan, "r", encoding="utf-8", errors="replace") as fh:
-                        plan_text = fh.read(_PLAN_CAP)
-                    plan_truncated = os.path.getsize(plan) > _PLAN_CAP
-                except OSError:
-                    plan_text = None
-                plan_summary = _plan_summary(plan_text) if plan_text else None
-                plan_html = _md_to_html(plan_text) if plan_text else None
-
-            # Completed tasks carry their output as RESULTS.md (when the agent
-            # wrote one); the expander surfaces it so "review the output" does
-            # not mean opening the terminal.
-            results_path = os.path.join(tdir, "RESULTS.md")
-            results_text = None
-            results_truncated = False
-            results_html = None
-            if os.path.isfile(results_path):
-                try:
-                    with open(results_path, "r", encoding="utf-8", errors="replace") as fh:
-                        results_text = fh.read(_RESULTS_CAP)
-                    results_truncated = os.path.getsize(results_path) > _RESULTS_CAP
-                except OSError:
-                    results_text = None
-                results_html = _md_to_html(results_text) if results_text else None
-
-            artifacts = [f for f in files
-                 if f not in ("PLAN.md", "STATE-SUMMARY.md", "SESSION-FACTS.md")]
-
-            # Layer-1 classification (deterministic batch) + Layer-2 summary.
-            classification = None
-            cls = cls_tasks.get(name)
-            if cls and cls.get("label"):
-                classification = {
-                    "label": cls["label"],
-                    "score": cls.get("score"),
-                }
-            st_summary = _state_summary(tdir)
-            facts = _session_facts(tdir)
-
-            moments.append({
-                "id": "task:%s" % name,
-                "t": st.st_mtime,
-                "computed_at": st.st_mtime,
-                "subject": name,
-                "actor": "filesystem",
-                "kind": "task.%s" % state,
-                "payload": {
-                    "state": state,
-                    "files": files,
-                    "n_files": len(files),
-                    "has_plan": os.path.isfile(plan),
-                    "claimed_status": claimed,
-                    "classification": classification,
-                    "state_summary": st_summary,
-                    "session_facts": facts,
-                    "plan_summary": plan_summary,
-                    "plan_text": plan_text,
-                    "plan_html": plan_html,
-                    "plan_truncated": plan_truncated,
-                    "results_text": results_text,
-                    "results_html": results_html,
-                    "results_truncated": results_truncated,
-                    "artifacts": artifacts,
-                    # A task whose PLAN says one thing while sitting in another
-                    # directory is a real inconsistency, not a formatting nit.
-                    "status_conflict": bool(claimed) and _conflicts(claimed, state),
-                },
-                "provenance": {"path": tdir},
-            })
-
     moments.sort(key=lambda m: m["t"] or 0, reverse=True)
+    if lite:
+        _LITE_CACHE["ts"] = time.time()
+        _LITE_CACHE["moments"] = moments
     return moments
+
+
+_LITE_CACHE: Dict[str, Any] = {"ts": 0, "moments": []}
+_LITE_CACHE_TTL = 8
 
 
 def _conflicts(claimed: str, state: str) -> bool:
@@ -361,7 +396,13 @@ def tasks_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
       page    1-based                                (default: 1)
     """
     root = tasks_dir()
-    moments = task_moments()
+    params = params or {}
+    q = str(params.get("q") or "").lower().strip()
+    # Search must see PLAN text (part of the haystack), which the lite fast
+    # path does not read — queries fall back to the full walk.
+    lite = (str(params.get("lite") or "").lower() in ("1", "true", "yes")
+            and not q)
+    moments = task_moments(lite=lite)
     cls_idx = _classification_index()
 
     if not moments:
@@ -584,7 +625,7 @@ def task_detail(key: str) -> Dict[str, Any]:
 
     ``key`` is ``<state>/<slug>`` — the lite row's ``key`` field. Strictly
     validated: state must be a known state and the slug must resolve inside
-    the task tree (no traversal).
+    the task tree (no traversal). Reads ONLY that directory — no full walk.
     """
     if "/" in key:
         state, slug = key.split("/", 1)
@@ -596,11 +637,12 @@ def task_detail(key: str) -> Dict[str, Any]:
     if not os.path.isdir(tdir):
         raise FileNotFoundError("no task at %s" % key)
 
-    # Reuse the same moment builder path as the table for one directory.
-    for m in task_moments():
-        if m["subject"] == slug and m["payload"]["state"] == state:
-            return m
-    raise FileNotFoundError("task vanished: %s" % key)
+    cls_idx = _classification_index()
+    cls_tasks = (cls_idx or {}).get("tasks") or {}
+    try:
+        return _moment_for(state, slug, tdir, cls_tasks)
+    except FileNotFoundError:
+        raise FileNotFoundError("task vanished: %s" % key)
 
 
 _TODO_TIMELINE_CAP = 50
