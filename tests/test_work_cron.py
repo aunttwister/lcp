@@ -14,6 +14,8 @@ def snap_dir(tmp_path, monkeypatch):
     """Point tasks_dir() at a temp tree with a cron snapshot present."""
     layers = tmp_path / ".work-layers"
     layers.mkdir(parents=True)
+    ops = tmp_path / "cron-ops"
+    ops.mkdir(parents=True)
     now = time.time()
     snap = {
         "generated_at_ts": now - 300,
@@ -44,6 +46,7 @@ def snap_dir(tmp_path, monkeypatch):
     }
     (layers / "cron-jobs.json").write_text(json.dumps(snap), encoding="utf-8")
     monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path))
+    monkeypatch.setenv("LCP_CRON_OPS_DIR", str(ops))
     return tmp_path
 
 
@@ -89,3 +92,69 @@ class TestCronView:
         assert job["next_rel"]  # "in X" string
         assert job["last_rel"]
         assert v["generated_rel"]  # snapshot freshness
+
+
+class TestCronOps:
+    def test_submit_create(self, snap_dir):
+        op = work_cron.submit_cron_op({
+            "action": "create", "profile": "homelab-expert-l2",
+            "name": "Watchdog", "schedule": "0 * * * *", "prompt": "run the scan",
+            "deliver": "local"})
+        assert op["status"] == "pending"
+        f = snap_dir / "cron-ops" / "ops" / (op["id"] + ".json")
+        assert f.exists()
+        stored = json.loads(f.read_text(encoding="utf-8"))
+        assert stored["action"] == "create"
+        assert stored["no_agent"] is False
+
+    def test_submit_no_agent_script(self, snap_dir):
+        op = work_cron.submit_cron_op({
+            "action": "create", "profile": "homelab-expert-l2",
+            "name": "Watch", "schedule": "30m", "script": "watch.sh",
+            "no_agent": True, "deliver": "local"})
+        assert op["status"] == "pending"
+        assert op["script"] == "watch.sh"
+
+    def test_reject_unknown_action(self, snap_dir):
+        with pytest.raises(ValueError):
+            work_cron.submit_cron_op({"action": "explode", "profile": "homelab-expert-l2"})
+
+    def test_reject_unknown_profile(self, snap_dir):
+        with pytest.raises(ValueError):
+            work_cron.submit_cron_op({"action": "create", "profile": "nope",
+                                      "name": "x", "schedule": "30m", "prompt": "p"})
+
+    def test_reject_create_without_prompt_or_script(self, snap_dir):
+        with pytest.raises(ValueError):
+            work_cron.submit_cron_op({"action": "create", "profile": "homelab-expert-l2",
+                                      "name": "x", "schedule": "30m"})
+
+    def test_reject_script_with_slash(self, snap_dir):
+        with pytest.raises(ValueError):
+            work_cron.submit_cron_op({"action": "create", "profile": "homelab-expert-l2",
+                                      "name": "x", "schedule": "30m",
+                                      "script": "../evil.sh"})
+
+    def test_edit_known_job_ok(self, snap_dir):
+        op = work_cron.submit_cron_op({"action": "edit", "profile": "homelab-expert-l2",
+                                       "job_id": "a1", "fields": {"schedule": "0 3 * * *"}})
+        assert op["fields"]["schedule"] == "0 3 * * *"
+
+    def test_edit_unknown_job_rejected(self, snap_dir):
+        with pytest.raises(ValueError):
+            work_cron.submit_cron_op({"action": "edit", "profile": "homelab-expert-l2",
+                                      "job_id": "zzzz", "fields": {"schedule": "0 3 * * *"}})
+
+    def test_edit_empty_fields_rejected(self, snap_dir):
+        with pytest.raises(ValueError):
+            work_cron.submit_cron_op({"action": "edit", "profile": "homelab-expert-l2",
+                                      "job_id": "a1", "fields": {}})
+
+    def test_ops_view_empty_then_pending(self, snap_dir):
+        v = work_cron.cron_ops_view()
+        assert v["pending"] == [] and v["done"] == []
+        work_cron.submit_cron_op({"action": "pause", "profile": "homelab-expert-l2",
+                                  "job_id": "a1"})
+        v = work_cron.cron_ops_view()
+        assert len(v["pending"]) == 1
+        assert v["pending"][0]["job_id"] == "a1"

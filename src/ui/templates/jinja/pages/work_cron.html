@@ -8,8 +8,9 @@
   Every scheduled job across the Hermes gateway profiles, as of the last host-side
   snapshot{% if view.generated_rel %} (<strong>{{ view.generated_rel }} old</strong>,
   refreshed every 15&nbsp;min by <span class="mono">work-layers-cron.timer</span>){% endif %}.
-  LCP is a read-only window here — pause/resume/run stays on the CLI, and nothing on
-  this page calls a model.
+  Pause/resume/run/edit/create/delete below spool an <em>intent</em> that the host-side
+  executor applies through the real <span class="mono">hermes cron</span> CLI within a
+  minute — the panel itself never touches the scheduler.
 </p>
 
 {% if not view.available %}
@@ -18,6 +19,11 @@
     <span class="muted">{{ view.hint or view.error }}</span>
   </div>
 {% else %}
+
+  <div class="cron-toolbar">
+    <button id="cron-new-btn" class="btn btn-primary">+ New job</button>
+    <span class="muted" id="cron-op-hint"></span>
+  </div>
 
   <div class="work-cards">
     <div class="work-card"><div class="work-card-label">Total</div><div class="work-card-value">{{ view.counts.get('total', 0) }}</div></div>
@@ -36,14 +42,14 @@
     </h2>
     {% if p.error %}<p class="work-warn">profile read error: {{ p.error }}</p>{% endif %}
     <div class="work-scroll">
-      <table class="work-table">
+      <table class="work-table" data-profile="{{ p.profile }}">
         <thead>
           <tr><th>Status</th><th>Job</th><th>Schedule</th><th>Next run</th><th>Last run</th>
-              <th>Last status</th><th>Last exec</th><th>Detail</th></tr>
+              <th>Last status</th><th>Last exec</th><th>Detail</th><th>Actions</th></tr>
         </thead>
         <tbody>
           {% for j in p.jobs %}
-            <tr>
+            <tr data-job-id="{{ j.id }}" data-job-status="{{ j.status }}">
               <td data-label="Status">
                 <span class="work-chip work-chip-{{ j.status if j.status in ('active','paused','disabled') else 'disabled' }}{% if j.warn == 'error' %} work-chip-error{% endif %}">{{ j.status }}</span>
               </td>
@@ -51,7 +57,7 @@
                 <div class="work-job-name{% if j.warn %} work-warn{% endif %}">{{ j.name or j.id }}</div>
                 {% if j.paused_reason %}<div class="muted" style="font-size:0.72rem">{{ j.paused_reason }}</div>{% endif %}
               </td>
-              <td data-label="Schedule" class="mono">{{ j.schedule or j.get('schedule') or '—' }}</td>
+              <td data-label="Schedule" class="mono">{{ j.schedule or '—' }}</td>
               <td data-label="Next run" class="mono muted">
                 {% if j.next_run_at %}{{ (j.next_run_at or '')[:16] }}{% if j.next_rel %} <span class="work-rel">{{ j.next_rel }}</span>{% endif %}
                 {% elif j.status == 'active' %}<span class="work-warn">never — check scheduler</span>
@@ -74,6 +80,12 @@
                 {% if j.script %}<div class="mono muted work-script" title="{{ j.script }}">{{ j.script.split('/')[-1] }}</div>{% endif %}
                 {% if j.deliver %}<div class="muted" style="font-size:0.72rem">→ {{ j.deliver }}</div>{% endif %}
               </td>
+              <td data-label="Actions" class="cron-actions">
+                <button class="btn-mini cron-act" data-act="{% if j.status == 'paused' %}resume{% else %}pause{% endif %}" title="{% if j.status == 'paused' %}Resume{% else %}Pause{% endif %}">{% if j.status == 'paused' %}▶{% else %}⏸{% endif %}</button>
+                <button class="btn-mini cron-act" data-act="run" title="Run now">▶Run</button>
+                <button class="btn-mini cron-act" data-act="edit" title="Edit">✎</button>
+                <button class="btn-mini btn-danger cron-act" data-act="remove" title="Delete">✕</button>
+              </td>
             </tr>
           {% endfor %}
         </tbody>
@@ -89,5 +101,205 @@
     {% endif %}
   {% endfor %}
 
+  {% if view.ops %}
+  <h2 class="work-h2">Recent operations</h2>
+  <div class="work-scroll">
+    <table class="work-table">
+      <thead><tr><th>Status</th><th>Action</th><th>Profile</th><th>Job</th><th>When</th><th>Detail</th></tr></thead>
+      <tbody>
+        {% for o in view.ops %}
+          <tr>
+            <td data-label="Status"><span class="work-chip work-chip-{{ 'ok' if o.status == 'executed' else 'error' if o.status == 'failed' else 'paused' }}">{{ o.status }}</span></td>
+            <td data-label="Action" class="mono">{{ o.action }}</td>
+            <td data-label="Profile"><span class="work-actor">{{ o.profile }}</span></td>
+            <td data-label="Job" class="mono muted">{{ o.job_id or o.get('name') or '—' }}</td>
+            <td data-label="When" class="mono muted">{{ ((o.result and o.result.executed_at) or o.created_at or '')[:16] }}</td>
+            <td data-label="Detail"><span class="muted">{{ ((o.result and o.result.stderr) or '')[:120] or 'ok' }}</span></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+{% endif %}
+
+{% if view.available %}
+<div id="cron-modal" class="cron-modal" hidden>
+  <div class="cron-dialog">
+    <div class="cron-dialog-head">
+      <span id="cron-modal-title">New job</span>
+      <button class="btn-mini" id="cron-modal-close" title="Close">✕</button>
+    </div>
+    <form id="cron-form">
+      <input type="hidden" id="cf-action" name="action">
+      <input type="hidden" id="cf-job-id" name="job_id">
+      <div class="cron-field">
+        <label for="cf-profile">Profile</label>
+        <select id="cf-profile" name="profile">
+          {% for p in view.profiles %}<option value="{{ p.profile }}">{{ p.profile }}{% if p.legacy %} (legacy){% endif %}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="cron-field">
+        <label for="cf-name">Name</label>
+        <input type="text" id="cf-name" name="name" placeholder="Job name" autocomplete="off">
+      </div>
+      <div class="cron-field">
+        <label for="cf-schedule">Schedule</label>
+        <input type="text" id="cf-schedule" name="schedule" placeholder="e.g. 30m, every 2h, 0 9 * * *, 2030-01-01T08:00:00" autocomplete="off">
+      </div>
+      <div class="cron-field">
+        <label for="cf-prompt">Prompt (or script below — one of the two)</label>
+        <textarea id="cf-prompt" name="prompt" rows="5" placeholder="Self-contained task instruction..."></textarea>
+      </div>
+      <div class="cron-row">
+        <div class="cron-field">
+          <label for="cf-script">Script (bare filename in the profile scripts dir)</label>
+          <input type="text" id="cf-script" name="script" placeholder="e.g. watch.sh" autocomplete="off">
+        </div>
+        <div class="cron-field cron-check">
+          <label><input type="checkbox" id="cf-no-agent" name="no_agent" value="1"> no-agent (script IS the job)</label>
+        </div>
+      </div>
+      <div class="cron-row">
+        <div class="cron-field">
+          <label for="cf-deliver">Deliver</label>
+          <select id="cf-deliver" name="deliver">
+            <option value="origin">origin</option>
+            <option value="local">local</option>
+            <option value="all">all</option>
+          </select>
+        </div>
+        <div class="cron-field">
+          <label for="cf-repeat">Repeat (optional, 0 = forever)</label>
+          <input type="number" id="cf-repeat" name="repeat" min="0" max="1000" placeholder="0" autocomplete="off">
+        </div>
+        <div class="cron-field">
+          <label for="cf-skill">Skill (optional)</label>
+          <input type="text" id="cf-skill" name="skill" placeholder="skill name" autocomplete="off">
+        </div>
+      </div>
+      <div class="cron-field">
+        <label for="cf-workdir">Workdir (optional, under /your/data/)</label>
+        <input type="text" id="cf-workdir" name="workdir" placeholder="/your/data/docker-apps/..." autocomplete="off">
+      </div>
+      <p class="muted cron-note" id="cf-note"></p>
+      <div class="cron-dialog-foot">
+        <button type="button" class="btn" id="cron-form-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="cron-form-go">Queue op</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if view.available %}
+<script>
+(function () {
+  const modal = document.getElementById('cron-modal');
+  const hint = document.getElementById('cron-op-hint');
+  const note = document.getElementById('cf-note');
+  const form = document.getElementById('cron-form');
+  const F = (id) => document.getElementById(id);
+
+  function setHint(msg, cls) {
+    hint.textContent = msg;
+    hint.className = cls || 'muted';
+  }
+
+  function openModal(title, noteText) {
+    F('cron-modal-title').textContent = title;
+    note.textContent = noteText || '';
+    modal.hidden = false;
+    F('cf-prompt').focus && F('cf-prompt').focus();
+  }
+  function closeModal() { modal.hidden = true; }
+
+  F('cron-new-btn').addEventListener('click', () => {
+    form.reset();
+    F('cf-action').value = 'create';
+    F('cf-job-id').value = '';
+    F('cf-deliver').value = 'origin';
+    openModal('New job', 'New jobs take effect immediately after the executor applies them (within ~1 min).');
+  });
+  F('cron-modal-close').addEventListener('click', closeModal);
+  F('cron-form-cancel').addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+  let editNoAgentBase = false;
+  document.querySelectorAll('.cron-act').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tr = btn.closest('tr');
+      const profile = tr.closest('table').dataset.profile;
+      const jobId = tr.dataset.jobId;
+      const act = btn.dataset.act;
+      if (act === 'edit') {
+        const cells = tr.querySelectorAll('td');
+        form.reset();
+        F('cf-action').value = 'edit';
+        F('cf-job-id').value = jobId;
+        F('cf-profile').value = profile;
+        F('cf-name').value = tr.querySelector('.work-job-name').textContent.trim();
+        F('cf-schedule').value = tr.querySelectorAll('td')[2].textContent.trim().split(' ')[0];
+        const detail = tr.querySelectorAll('td')[7];
+        const wasNoAgent = detail.textContent.includes('no-agent');
+        F('cf-no-agent').checked = wasNoAgent;
+        editNoAgentBase = wasNoAgent;
+        openModal('Edit ' + jobId, 'Blank fields are left unchanged. Prompt/script are not shown back (snapshot does not store them).');
+        return;
+      }
+      if (act === 'remove' && !window.confirm('Delete job ' + jobId + ' from ' + profile + '?')) return;
+      if (act === 'run' && !window.confirm('Queue "run now" for ' + jobId + '?')) return;
+      queue({action: act, profile: profile, job_id: jobId});
+    });
+  });
+
+  function queue(payload) {
+    fetch('/api/work/cron/ops', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    }).then((r) => r.json().then((d) => ({ok: r.ok, d})))
+      .then(({ok, d}) => {
+        if (ok) setHint('Queued op ' + d.id + ' (' + d.action + ') — executor applies within ~1 min. Refresh to see the change.');
+        else setHint('Rejected: ' + (d.error || 'unknown'), 'work-warn');
+      })
+      .catch(() => setHint('Network error queueing op', 'work-warn'));
+  }
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const action = F('cf-action').value;
+    const payload = {action: action, profile: F('cf-profile').value};
+    if (action === 'create') {
+      payload.name = F('cf-name').value.trim();
+      payload.schedule = F('cf-schedule').value.trim();
+      payload.prompt = F('cf-prompt').value.trim();
+      payload.script = F('cf-script').value.trim();
+      payload.deliver = F('cf-deliver').value;
+      if (F('cf-repeat').value) payload.repeat = parseInt(F('cf-repeat').value, 10);
+      if (F('cf-skill').value.trim()) payload.skill = F('cf-skill').value.trim();
+      if (F('cf-workdir').value.trim()) payload.workdir = F('cf-workdir').value.trim();
+      payload.no_agent = F('cf-no-agent').checked;
+    } else if (action === 'edit') {
+      payload.job_id = F('cf-job-id').value;
+      const fields = {};
+      if (F('cf-name').value.trim()) fields.name = F('cf-name').value.trim();
+      if (F('cf-schedule').value.trim()) fields.schedule = F('cf-schedule').value.trim();
+      if (F('cf-prompt').value.trim()) fields.prompt = F('cf-prompt').value.trim();
+      if (F('cf-script').value.trim()) fields.script = F('cf-script').value.trim();
+      if (F('cf-deliver').value) fields.deliver = F('cf-deliver').value;
+      if (F('cf-no-agent').checked !== editNoAgentBase) fields.no_agent = F('cf-no-agent').checked;
+      payload.fields = fields;
+      if (Object.keys(fields).length === 0) { setHint('Edit needs at least one field', 'work-warn'); return; }
+    }
+    queue(payload);
+    closeModal();
+  });
+})();
+</script>
 {% endif %}
 {% endblock %}

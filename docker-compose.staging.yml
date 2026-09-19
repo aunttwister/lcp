@@ -48,6 +48,12 @@ services:
       # container -- the path has to be mounted or the read fails as if the file
       # were absent, which is a failure mode that looks like "no data".
       - /root/.hermes/profiles:/app/profiles:ro
+      # Cron op spool. The ONLY deliberately-writable mount in the work layer:
+      # the Cron page cannot see /root/.hermes/profiles, so edit/create/delete
+      # intents are spooled here and a host-side executor
+      # (work-layers-cron-executor.timer) applies them via the real hermes CLI.
+      # The panel writes intents; it never touches jobs.json itself.
+      - /your/data/app/lcp/cron-ops:/app/cron-ops:rw
     env_file:
       - .env
     environment:
@@ -59,6 +65,7 @@ services:
       - LCP_WORK_DECISIONS_DB=/app/work/decisions.db
       - LCP_WORK_TASKS_DIR=/app/work-tree/tasks
       - LCP_WORK_TODO=/app/work-tree/todo.md
+      - LCP_CRON_OPS_DIR=/app/cron-ops
       # The Fleet view reads LCP's OWN provider/profile APIs rather than a
       # second copy of the chain data, so what it shows is the chain LCP will
       # actually use. Inside the container that is loopback on the internal port.

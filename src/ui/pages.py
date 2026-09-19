@@ -153,6 +153,14 @@ def render_work_cron_page(config, engine=None) -> str:
             "counts": {"total": 0, "active": 0, "paused": 0, "disabled": 0, "error": 0},
             "profiles": [],
         }
+    try:
+        view["ops"] = work_cron.cron_ops_view(limit=10).get("pending", []) + \
+            work_cron.cron_ops_view(limit=10).get("done", [])[:10]
+        # newest first
+        view["ops"].sort(key=lambda o: (o.get("result") or {}).get("executed_at")
+                         or o.get("created_at") or "", reverse=True)
+    except Exception:
+        view["ops"] = []
     return render_page("pages/work_cron.html", config, engine,
                        active_page="work_cron", view=view)
 

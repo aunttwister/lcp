@@ -3391,6 +3391,34 @@ class WorkEndpoints:
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
+    def _serve_work_cron_ops_get(self):
+        """GET /api/work/cron/ops — pending + recent executed cron ops."""
+        from ..api import work_cron
+
+        try:
+            self._send_json(work_cron.cron_ops_view())
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_work_cron_ops_post(self):
+        """POST /api/work/cron/ops — validate + spool a cron mutation intent."""
+        from ..api import work_cron
+
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        try:
+            op = work_cron.submit_cron_op(body)
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 400)
+            return
+        except Exception as e:
+            self._send_json({"error": "internal: %s" % e}, 500)
+            return
+        self._send_json(op, 201)
+
     def _serve_work_status_api(self):
         """GET /api/work/status — the workspace MODULE's own health.
 
