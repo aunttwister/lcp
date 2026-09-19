@@ -116,6 +116,25 @@ def router_models_dir() -> str:
     return os.path.join(modules_dir(), "models", "router")
 
 
+def runboard_site() -> str:
+    """Return the persistent deps dir for the RUNBOARD observability module.
+
+    ``<LCP_MODULES_DIR>/runboard`` — pip installs ``--target`` here (the judge's
+    sentence-transformers/torch stack) so it survives container recreation and
+    can be removed independently of the router and memory modules.
+    """
+    return os.path.join(modules_dir(), "runboard")
+
+
+def runboard_models_dir() -> str:
+    """Return the directory used to cache the runboard judge model weights.
+
+    ``<LCP_MODULES_DIR>/models/runboard`` — keeps the rlcd-modernbert weights
+    out of the shared ``models`` root so removing the module removes them.
+    """
+    return os.path.join(modules_dir(), "models", "runboard")
+
+
 def _db_path_from_engine(engine) -> Optional[str]:
     """Return the SQLite file path backing *engine* (or None)."""
     try:
@@ -320,11 +339,49 @@ def router_step(engine=None) -> dict:
     }
 
 
+def runboard_step(engine=None) -> dict:
+    """Build the RUNBOARD observability module manifest entry.
+
+    runboard is the run/telemetry board (engine pressure, throughput, latency,
+    hygiene) plus the notice board. It was previously a standalone Flask service
+    on :8090; it now installs into LCP as a module so there is ONE surface.
+
+    ``required`` is False: LCP is fully functional without it. Note the module
+    is READ-ONLY against its data dir by design — host-side collectors write
+    ``state.json``/``zgx.json``, and the judge's verdicts are merged into
+    ``state.json`` rather than written from inside a read-only container.
+    """
+    return {
+        "kind": "module",
+        "name": "runboard",
+        "title": "Runboard (run telemetry + notice board)",
+        "description": (
+            "Run telemetry board and notice board, merged in from the former "
+            "standalone runboard service. Serves the run registry, live engine "
+            "metrics, benchmarks and ZGX adapters, and hosts the judged notice "
+            "board. Install the judge's embedding stack at runtime."
+        ),
+        "required": False,
+        "installed": os.path.isdir(runboard_site()),
+        "baked": False,
+        "blocked_reason": None,
+        "status": {"available": os.path.isdir(runboard_site())},
+        "install_path": runboard_site(),
+        "models_path": runboard_models_dir(),
+        "installing": None,
+    }
+
+
 def manifest(config, engine=None) -> dict:
     """Return the full setup manifest (provider steps + benchmark + modules)."""
     return {
         "steps": provider_steps(config),
-        "modules": [benchmark_step(engine), router_step(engine), memory_step()],
+        "modules": [
+            benchmark_step(engine),
+            router_step(engine),
+            memory_step(),
+            runboard_step(engine),
+        ],
     }
 
 

@@ -1,0 +1,42 @@
+# LCP REVIEW / STAGING INSTANCE — built from the feat/runboard-merge branch.
+#
+# Purpose: let the admin inspect runboard-merge changes OUTSIDE production.
+# Prod (`lcp`, 8734) is untouched by this file.
+#
+# Deliberate differences from docker-compose.yml (ALL required to avoid
+# colliding with prod):
+#   service/container name  lcp        -> lcp-staging
+#   host port               8734       -> 8735
+#   data volume             .../lcp/data -> .../lcp-staging/data  (COPY, not shared)
+#   project name            lcp        -> lcp-staging (via -p)
+#
+# The modules directory IS deliberately shared with prod: it holds installed
+# Python deps (~12 GB) and re-installing them per instance is wasteful. Nothing
+# in normal operation writes there except the Setup page's module installer.
+#
+# NEVER run `down`/`stop` against the prod project from this file. Bring this
+# instance up with:
+#   docker compose -f docker-compose.staging.yml -p lcp-staging up -d --build
+services:
+  lcp-staging:
+    build:
+      context: .
+      args:
+        WITH_ROUTER: ${WITH_ROUTER:-0}
+        WITH_MEMORY: ${WITH_MEMORY:-0}
+        WITH_BENCH: ${WITH_BENCH:-0}
+    container_name: lcp-staging
+    restart: unless-stopped
+    ports:
+      - "8735:8734"
+    volumes:
+      - /your/data/app/lcp-staging/data:/app/data
+      - /your/data/app/lcp/modules:/opt/lcp-modules
+    env_file:
+      - .env
+    environment:
+      - COST_DB=/app/data/costs.db
+      - LISTEN_PORT=8734
+      - TIKTOKEN_CACHE_DIR=/app/data/tiktoken_cache
+      - LCP_SECRET_KEY=${LCP_SECRET_KEY}
+      - LCP_MODULES_DIR=/opt/lcp-modules
