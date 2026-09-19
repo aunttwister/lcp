@@ -864,6 +864,25 @@ def remove_memory(engine) -> dict:
     return {"removed": True, "module": "memory", "paths": removed}
 
 
+def remove_runboard(engine) -> dict:
+    """Remove the runboard module's runtime deps and clear setup state.
+
+    Does NOT delete the ledger or the board's data. Those live under the app
+    data dir (``state.json``, ``decisions.db``, ``zgx.json``) and are written by
+    host-side collectors, not by LCP -- removing the module uninstalls its
+    embedding stack, it does not destroy history.
+    """
+    removed: list[str] = []
+    for path in (runboard_site(), runboard_models_dir()):
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path)
+
+    set_state(engine, "module:runboard", "removed")
+    logger.info("setup_runboard_removed", removed=removed)
+    return {"removed": True, "module": "runboard", "paths": removed}
+
+
 # ── Semantic routing module install (background + progress) ─────────────────
 # Mirrors the memory module install but with its OWN deps dir (router_site) so
 # semantic task classification is independent of the memory plugin.

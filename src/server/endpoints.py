@@ -3287,6 +3287,8 @@ class SetupEndpoints:
                 result = setup_mod.remove_router(self.engine)
             elif kind == "module" and name == "memory":
                 result = setup_mod.remove_memory(self.engine)
+            elif kind == "module" and name == "runboard":
+                result = setup_mod.remove_runboard(self.engine)
             else:
                 self._send_json({"error": f"unknown remove target: {kind}/{name}"}, 404)
                 return
@@ -3295,4 +3297,40 @@ class SetupEndpoints:
             self._send_json({"error": str(e)}, 400)
         except Exception as e:
             logger.error("setup_remove_failed", kind=kind, name=name, error=str(e))
+            self._send_json({"error": str(e)}, 500)
+
+
+class WorkEndpoints:
+    """Work layer: the moments LCP records about sessions, tasks, providers.
+
+    This is the work-surface half of LCP, merged in as a module by admin
+    direction. It reads the runboard decisions ledger read-only and renders
+    moments -- it never writes to the board, so a Work view cannot change what
+    was published.
+    """
+
+    config: Any
+    engine: Any
+    _send_json: Any
+    send_response: Any
+    send_header: Any
+    end_headers: Any
+    wfile: Any
+
+    def _serve_work_decisions_page(self):
+        """Server-rendered Work > Decisions page."""
+        from ..ui.pages import render_work_decisions_page
+        html = render_work_decisions_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_work_decisions_api(self):
+        """GET /api/work/decisions — the Decisions view as JSON."""
+        from ..api import work as work_api
+
+        try:
+            self._send_json(work_api.decisions_view())
+        except Exception as e:
             self._send_json({"error": str(e)}, 500)

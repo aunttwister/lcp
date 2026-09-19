@@ -1295,3 +1295,123 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   .setup-step { flex-direction: column; }
   .setup-step-actions { width: 100%; justify-content: flex-start; }
 }
+
+/* ===========================================================================
+   Work section — the work layer merged into LCP as a module.
+
+   These views render *moments*. Two rules drive the styling:
+     * The actor is always visible (a rule table and an engine are different
+       things and must never look the same).
+     * Subject time and computation time are visually distinct, so "this verdict
+       is old" is readable at a glance.
+   ========================================================================= */
+
+.work-h2 {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, #8b949e);
+}
+
+.work-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.work-card {
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  background: var(--bg-elevated, #161b22);
+}
+
+.work-card-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, #8b949e);
+}
+
+.work-card-value {
+  font-size: 1.6rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.work-card-ok .work-card-value { color: #3fb950; }
+.work-card-muted .work-card-value { color: var(--text-muted, #8b949e); }
+
+.work-rule {
+  font-size: 0.8rem;
+  margin: 0.35rem 0 0.75rem;
+}
+
+.work-rule code {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  background: var(--bg-elevated, #161b22);
+}
+
+.work-warn { color: #d29922; font-weight: 600; }
+
+.work-scroll { overflow-x: auto; }
+
+.work-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.work-table th,
+.work-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border, #30363d);
+  white-space: nowrap;
+}
+
+.work-table thead th {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #8b949e);
+  border-bottom-width: 2px;
+}
+
+.work-table tfoot th {
+  border-top: 2px solid var(--border, #30363d);
+  font-size: 0.78rem;
+}
+
+.work-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* The actor chip — deliberately monospace + outlined so a rule-table actor
+   (policy) never reads as a model actor (rlcd). */
+.work-actor {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 3px;
+}
+
+.work-label {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  border: 1px solid var(--border, #30363d);
+}
+
+.work-label-publish { color: #3fb950; border-color: #3fb950; }
+.work-label-suppress { color: var(--text-muted, #8b949e); }
+.work-label-merge_duplicate { color: #d29922; border-color: #d29922; }
+.work-label-escalate { color: #f85149; border-color: #f85149; }
+
+@media (max-width: 768px) {
+  .work-cards { grid-template-columns: 1fr; }
+  .work-table { font-size: 0.75rem; }
+}

@@ -69,4 +69,26 @@ def render_setup_page(config, engine=None) -> str:
     return render_page("pages/setup.html", config, engine, active_page="setup")
 
 
+def render_work_decisions_page(config, engine=None) -> str:
+    """Render the Work > Decisions page (Jinja2).
+
+    The Work section is the work layer merged into LCP as a module: the moments
+    the board recorded, attributed to the actor that decided each one.
+    """
+    from .render import render_page
+    from ..api import work as work_api
+    try:
+        view = work_api.decisions_view()
+    except Exception as e:  # never blank the page on a data error
+        view = {
+            "available": False,
+            "empty": {"reason": "could not read the decisions ledger",
+                      "hint": "%s: %s" % (type(e).__name__, e)},
+            "funnel": None,
+            "ledger": None,
+        }
+    return render_page("pages/work_decisions.html", config, engine,
+                       active_page="work_decisions", view=view)
+
+
 

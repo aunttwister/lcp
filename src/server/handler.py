@@ -51,6 +51,7 @@ from .endpoints import (
     SetupEndpoints,
     SettingsEndpoints,
     MemoryEndpoints,
+    WorkEndpoints,
 )
 
 from .router import (
@@ -128,6 +129,7 @@ class LCPHandler(
     SetupEndpoints,
     SettingsEndpoints,
     MemoryEndpoints,
+    WorkEndpoints,
     BaseHTTPRequestHandler,
 ):
     """HTTP request handler for LCP gateway."""
@@ -810,6 +812,9 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_models_page())
     t.get("page.setup", exact("/setup"),
           lambda h, p: h._serve_setup_page())
+    # ── Work section (work layer merged into LCP as a module) ──
+    t.get("page.work.decisions", exact("/work/decisions"),
+          lambda h, p: h._serve_work_decisions_page())
     t.get("page.usage", exact("/usage"),
           lambda h, p: h._serve_usage_page())
     t.get("page.logs", exact("/logs"),
@@ -858,6 +863,9 @@ def _build_routes() -> RouteTable:
     t.get("api.setup", exact("/api/setup"), lambda h, p: h._serve_setup_api())
     t.get("api.setup.progress", exact("/api/setup/progress"),
           lambda h, p: h._serve_setup_progress_api())
+    # ── Work layer ──
+    t.get("api.work.decisions", exact("/api/work/decisions"),
+          lambda h, p: h._serve_work_decisions_api())
 
     # ── cost / usage / logs ──
     t.get("api.daily-costs", exact("/api/daily-costs"),

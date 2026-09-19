@@ -44,8 +44,25 @@ def _fmt_cost(c) -> str:
     return f"${float(c):.6f}"
 
 
+def _fmt_ts(t) -> str:
+    """Format a POSIX timestamp as a compact UTC stamp.
+
+    Used by the Work views, which must show SUBJECT time and COMPUTATION time as
+    separate columns -- so this deliberately renders an explicit UTC suffix
+    rather than a bare local-looking string that invites the two to be conflated.
+    """
+    if t is None:
+        return "—"
+    try:
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(float(t), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    except (TypeError, ValueError, OSError):
+        return str(t)
+
+
 _env.filters["fmt_num"] = _fmt_num
 _env.filters["fmt_cost"] = _fmt_cost
+_env.filters["fmt_ts"] = _fmt_ts
 
 
 def _compute_monthly(engine) -> dict:
