@@ -3460,6 +3460,43 @@ class WorkEndpoints:
             return
         self._send_json({"saved": True, "sources": saved})
 
+    def _serve_work_conversations_page(self):
+        """Server-rendered Work > Conversations page."""
+        from ..ui.pages import render_work_conversations_page
+        from urllib.parse import parse_qs, urlsplit
+        qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+        html = render_work_conversations_page(self.config, self.engine, qs)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_work_conversations_api(self):
+        """GET /api/work/conversations — grouped conversation list."""
+        from ..api import work_conversations
+        from urllib.parse import parse_qs, urlsplit
+
+        try:
+            qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            self._send_json(work_conversations.conversations_view(qs))
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_work_conversations_detail_api(self):
+        """GET /api/work/conversations/detail?cid=… — chronological events."""
+        from ..api import work_conversations
+        from urllib.parse import parse_qs, urlsplit
+
+        try:
+            qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            cid = qs.get("cid") or ""
+            if not cid:
+                self._send_json({"error": "cid required"}, 400)
+                return
+            self._send_json(work_conversations.conversation_detail(cid))
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _serve_work_status_api(self):
         """GET /api/work/status — the workspace MODULE's own health.
 

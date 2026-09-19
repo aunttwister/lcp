@@ -951,10 +951,19 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config,
 
 def record_cost(engine, profile: str, model: str, provider: str, cost_info: dict,
                 success: bool, error_type: str | None, tools_blocked: list[str],
-                error_detail: str | None = None) -> None:
-    """Record cost data to SQLite and track against budgets."""
+                error_detail: str | None = None,
+                conversation_id: str | None = None) -> None:
+    """Record cost data to SQLite and track against budgets.
+
+    ``conversation_id`` (optional): the client's real per-conversation id
+    (``x-opencode-session``). Stamped onto the new row AND the routing
+    decisions written during this call, so the unified Conversations view can
+    group request + provider logs by conversation. NULL (no header present /
+    legacy) is later covered by the deterministic burst backfill.
+    """
     cost = cost_info.get("cost", 0)
 
+    rid = None
     with get_session(engine) as session:
         req = RequestModel(
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -974,6 +983,20 @@ def record_cost(engine, profile: str, model: str, provider: str, cost_info: dict
         )
         session.add(req)
         session.commit()
+        rid = req.id
+
+    # Stamp the conversation correlation id (client's real session header) onto
+    # this request row + the routing rows written during the call. Best-effort:
+    # a stamping failure must never fail the request that was already recorded.
+    if conversation_id and rid is not None:
+        try:
+            from .work_conversations import stamp_new
+            ts = req.timestamp
+            stamp_new(request_id=rid, conversation_id=conversation_id,
+                      profile=profile, ts=ts)
+        except Exception:  # noqa: BLE001
+            logger.warning("conversation_stamp_failed", profile=profile,
+                           error="")
 
     # Track spend against key (when key auth is wired in)
 

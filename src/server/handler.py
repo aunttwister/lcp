@@ -508,7 +508,8 @@ class LCPHandler(
                         "cost": estimation["estimated_total_cost"],
                         "latency_ms": latency_ms,
                     }
-                record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools)
+                record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools,
+                            conversation_id=conversation_id if self.headers.get("x-opencode-session") else None)
 
                 # Increment budget spend and fire alerts
                 try:
@@ -557,7 +558,8 @@ class LCPHandler(
             cost_info["latency_ms"] = latency_ms
 
             # Record cost
-            record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools)
+            record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools,
+                            conversation_id=conversation_id if self.headers.get("x-opencode-session") else None)
 
             # Budget spend tracking — unified: increments profile + key budgets
             # and syncs ApiKey.total_spend with key-scoped budgets.
@@ -825,6 +827,8 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_work_cron_page())
     t.get("page.work.config", exact("/work/config"),
           lambda h, p: h._serve_work_config_page())
+    t.get("page.work.conversations", exact("/work/conversations"),
+          lambda h, p: h._serve_work_conversations_page())
     t.get("page.usage", exact("/usage"),
           lambda h, p: h._serve_usage_page())
     t.get("page.logs", exact("/logs"),
@@ -890,6 +894,10 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_work_sources_get())
     t.put("api.work.sources", exact("/api/work/sources"),
           lambda h, p: h._serve_work_sources_put())
+    t.get("api.work.conversations", exact("/api/work/conversations"),
+          lambda h, p: h._serve_work_conversations_api())
+    t.get("api.work.conversations.detail", exact("/api/work/conversations/detail"),
+          lambda h, p: h._serve_work_conversations_detail_api())
     t.get("api.work.status", exact("/api/work/status"),
           lambda h, p: h._serve_work_status_api())
 
