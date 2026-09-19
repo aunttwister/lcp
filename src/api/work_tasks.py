@@ -367,12 +367,19 @@ def tasks_view() -> Dict[str, Any]:
         "conflicts": conflicts,
         "assessments": _assessment_feed(),
         "tasks": moments,
-        "todos": _todo_summary(),
+        "todos": _todo_view(),
     }
 
 
-def _todo_summary() -> Optional[Dict[str, Any]]:
-    """Line count + last-updated line from the profile's todo.md."""
+def _todo_view() -> Optional[Dict[str, Any]]:
+    """The profile's todo.md, parsed into a renderable overview.
+
+    The ledger file is never rewritten (task-management standard), so this is
+    purely a presentation parse: the ``> Updated:`` blockquote run becomes a
+    timeline, ``##`` headings become sections, and each ``###`` task line
+    becomes a bulleted item. Tables are skipped for the overview — the full
+    content stays in the file. Truncation is flagged, never silent.
+    """
     p = todos_path()
     if not os.path.isfile(p):
         return None
@@ -382,10 +389,52 @@ def _todo_summary() -> Optional[Dict[str, Any]]:
     except OSError:
         return None
     m = re.search(r"Updated:\s*([^\n]+)", text)
-    return {
+    out = {
         "path": p,
         "lines": text.count("\n") + 1,
         "updated": m.group(1).strip() if m else None,
         "open_boxes": text.count("- [ ]"),
         "done_boxes": text.count("- [x]"),
+        "timeline": [],
+        "sections": [],
     }
+    section: Optional[Dict[str, Any]] = None
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("> "):
+            if len(out["timeline"]) >= _TODO_TIMELINE_CAP:
+                continue
+            body = s[2:].strip(" \t")
+            # separator: em/en dash (or hyphen) followed by whitespace —
+            # the date itself contains hyphens, so `—` without the \s+ would
+            # swallow "2026-09-18" down to "2026".
+            pm = re.match(r"^Updated[:：]?[\s　]*(.*?)[\s　]*[—–-][\s　]+(.*)$", body)
+            if pm and pm.group(1):
+                date = pm.group(1).strip()
+                piece = pm.group(2).strip()
+            else:
+                date, piece = None, body
+            out["timeline"].append({
+                "date": date or "update",
+                "text": piece,
+                "html": _md_to_html(piece[:_TODO_ENTRY_CAP]),
+                "truncated": len(piece) > _TODO_ENTRY_CAP,
+            })
+        elif s.startswith("## "):
+            # NOTE: key is `entries`, not `items` — Jinja's attribute access
+            # would resolve `sec.items` to the dict METHOD first.
+            section = {"title": s[3:].strip(), "entries": []}
+            out["sections"].append(section)
+        elif s.startswith("### ") and section is not None:
+            t = s[4:].strip()
+            section["entries"].append({
+                "text": t,
+                "html": _md_to_html(t[:_TODO_ITEM_CAP]),
+                "truncated": len(t) > _TODO_ITEM_CAP,
+            })
+    return out
+
+
+_TODO_TIMELINE_CAP = 10
+_TODO_ENTRY_CAP = 500
+_TODO_ITEM_CAP = 180

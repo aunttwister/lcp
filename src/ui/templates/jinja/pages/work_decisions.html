@@ -4,12 +4,9 @@
 
 {% block content %}
 <h1>Decisions</h1>
-<p class="subtitle">
-  Every decision the board has recorded, as <em>moments</em>. Each row names the
-  <strong>actor</strong> that decided it &mdash; a rule table and an engine are not the
-  same thing and are not shown as if they were. Subject time and computation time are
-  printed separately, so &ldquo;this verdict is old&rdquo; is expressible.
-</p>
+  <p class="subtitle">
+    Every decision the board recorded — its actor, subject time, and when it was judged.
+  </p>
 
 {% if not view.available %}
   <div class="empty">
