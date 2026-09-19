@@ -234,3 +234,43 @@ into its own `models/<module>` dir.
   `tests/test_router_db_config.py`, `tests/test_memory_runtime.py`,
   `tests/test_memory_setup.py` cover classification, the semantic gate,
   the rationale, and the install/remove lifecycle.
+
+## 8. Pitfall: a host path is invisible inside a container
+
+**This has now cost two debugging cycles. Read it before adding any module that
+reads a file from the host.**
+
+A path that exists on the host does **not** exist inside the container unless it
+is explicitly mounted. The read fails with `FileNotFoundError` (or SQLite's
+`unable to open database file`) — which is **indistinguishable from "there is no
+data"**. There is no error that says "you forgot a bind mount".
+
+It bit the Work layer twice:
+
+| case | symptom | fix |
+|---|---|---|
+| runboard decisions ledger | page rendered, `available: False` | mount `/your/data/app/runboard/decisions.db:/app/work/decisions.db:ro` |
+| profile session DBs | `OperationalError: unable to open database file` for every profile | mount `/root/.hermes/profiles:/app/profiles:ro` |
+
+**Rules that follow:**
+
+1. **Every module that reads host state must declare its path as an env var**
+   (`LCP_WORK_DECISIONS_DB`, `LCP_WORK_TASKS_DIR`, `LCP_SELF_BASE`) *and* have the
+   mount documented next to it. The env var alone is not enough — the path will
+   resolve and then fail.
+2. **Mount `:ro` by default.** A view of what happened must not be able to change
+   what was recorded. Read-only is enforced at the container boundary, not by the
+   code remembering to open SQLite read-only.
+3. **Prefer a `available: False` sentinel over a blank page.** When the source is
+   genuinely absent the view should say so, naming the resolved path — otherwise
+   the next person sees an empty table and blames the query.
+4. **SQLite in WAL mode is readable `:ro`** provided the `-wal`/`-shm` files are
+   visible too, which mounting the *directory* gives you. Mounting a single `.db`
+   file out of a WAL database can read stale. Verified against live files:
+   `l2` 2,794 sessions / 122,351 messages, `l1` 204 / 29,393, `blog-writer` 59 / 3,007.
+5. **A module's model weights and venv are part of the module.** They install
+   under `<LCP_MODULES_DIR>/…` and are present **only when the module is
+   installed**. Never assume a runtime exists because the code imports it — probe
+   it (`*_available()`) and fail soft. This includes the runboard judge:
+   `rlcd-modernbert` and its venv belong to the runboard module, not to LCP
+   core.
