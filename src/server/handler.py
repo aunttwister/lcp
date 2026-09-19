@@ -817,8 +817,6 @@ def _build_routes() -> RouteTable:
     t.get("page.setup", exact("/setup"),
           lambda h, p: h._serve_setup_page())
     # ── Work section (work layer merged into LCP as a module) ──
-    t.get("page.work.decisions", exact("/work/decisions"),
-          lambda h, p: h._serve_work_decisions_page())
     t.get("page.work.tasks", exact("/work/tasks"),
           lambda h, p: h._serve_work_tasks_page())
     t.get("page.work.fleet", exact("/work/fleet"),
@@ -827,8 +825,6 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_work_cron_page())
     t.get("page.work.config", exact("/work/config"),
           lambda h, p: h._serve_work_config_page())
-    t.get("page.work.conversations", exact("/work/conversations"),
-          lambda h, p: h._serve_work_conversations_page())
     t.get("page.usage", exact("/usage"),
           lambda h, p: h._serve_usage_page())
     t.get("page.logs", exact("/logs"),

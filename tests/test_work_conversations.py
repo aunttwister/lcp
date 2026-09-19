@@ -14,6 +14,7 @@ def db(tmp_path, monkeypatch):
     path = tmp_path / "costs.db"
     monkeypatch.setenv("LCP_COSTS_DB", str(path))
     con = sqlite3.connect(str(path))
+    con.row_factory = sqlite3.Row
     con.executescript("""
         CREATE TABLE requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,
@@ -126,9 +127,42 @@ class TestStampNew:
                           (rid,)).fetchone()[0] == "existing"
 
 
+class TestSync:
+    def test_generates_and_persists_name_summary(self, db):
+        wc.ensure_schema()
+        _req(db, "2026-09-19T10:00:00+00:00", profile="l2", model="a")
+        _route(db, "2026-09-19T10:00:30+00:00", conv=json.dumps(
+            [{"role": "user", "content": "Please analyze the zgx metrics now"}])
+        )
+        db.commit()
+        wc.backfill_conversations()
+        got = wc.sync_conversations()
+        assert got["created"] == 1 and got["updated"] == 0
+        row = db.execute("SELECT name, summary, calls FROM conversations").fetchone()
+        assert row["name"] == "Please analyze the zgx metrics now"
+        assert "1 calls" in row["summary"]
+        # second sync only updates
+        got2 = wc.sync_conversations()
+        assert got2["created"] == 0 and got2["updated"] == 1
+        # name/summary were NOT overwritten
+        row2 = db.execute("SELECT name FROM conversations").fetchone()
+        assert row2["name"] == "Please analyze the zgx metrics now"
+
+    def test_fallback_name(self, db):
+        wc.ensure_schema()
+        _req(db, "2026-09-19T10:00:00+00:00", profile="l2", model="a")
+        db.commit()
+        wc.backfill_conversations()
+        wc.sync_conversations()
+        row = db.execute("SELECT name, summary FROM conversations").fetchone()
+        assert row["name"] == "Conversation %s" % (
+            db.execute("SELECT conversation_id FROM conversations").fetchone()[0])
+        assert "no user turns captured" in row["summary"]
+
+
 class TestViews:
     def test_conversations_view_and_detail(self, db):
-        rid1 = _req(db, "2026-09-19T10:00:00+00:00", profile="l2", model="a")
+        _req(db, "2026-09-19T10:00:00+00:00", profile="l2", model="a")
         _req(db, "2026-09-19T10:01:00+00:00", profile="l2", model="a")
         _req(db, "2026-09-19T11:00:00+00:00", profile="l1", model="b")
         _route(db, "2026-09-19T10:00:30+00:00", profile="l2", task="research",

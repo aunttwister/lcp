@@ -45,10 +45,39 @@ def render_usage_page(config, engine=None) -> str:
     return render_page("pages/usage.html", config, engine, active_page="usage")
 
 
-def render_logs_page(config, engine=None) -> str:
-    """Render the Logs page (Jinja2)."""
+def render_logs_page(config, engine=None, params=None) -> str:
+    """Render the unified Logs page (Jinja2).
+
+    One tab bar over all the log realms: conversations (grouped + summarized),
+    raw requests, provider routing decisions, and the board decisions ledger.
+    ``?view=`` selects the active tab; every tab is server-rendered with
+    pagination so URLs stay shareable.
+    """
     from .render import render_page
-    return render_page("pages/logs.html", config, engine, active_page="logs")
+    params = params or {}
+    tab = str(params.get("view") or "conversations")
+    view = {"tab": tab}
+    try:
+        from ..api import work_conversations, work as work_api
+        if tab == "conversations":
+            v = work_conversations.conversations_view(params)
+            for c in v.get("conversations", []):
+                det = work_conversations.conversation_detail(c["id"], limit=50)
+                c["detail"] = det.get("events", [])
+                c["detail_truncated"] = det.get("truncated", False)
+            view.update(v)
+        elif tab == "requests":
+            view.update(work_conversations.requests_view(params))
+        elif tab == "providers":
+            view.update(work_conversations.provider_decisions_view(params))
+        elif tab == "decisions":
+            view.update({"decisions": work_api.decisions_view()})
+        else:
+            view.update({"tab_error": "unknown view %r" % tab})
+    except Exception as e:  # never blank the page on a data error
+        view["error"] = "%s: %s" % (type(e).__name__, e)
+    return render_page("pages/logs.html", config, engine, active_page="logs",
+                       view=view)
 
 
 def render_alerts_page(config, engine=None) -> str:

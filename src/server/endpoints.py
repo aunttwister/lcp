@@ -2338,9 +2338,11 @@ class DashboardEndpoints:
         self.wfile.write(html.encode("utf-8"))
 
     def _serve_logs_page(self):
-        """Server-rendered Logs page."""
+        """Server-rendered unified Logs page (?view=conversations|requests|providers|decisions)."""
         from ..ui.pages import render_logs_page
-        html = render_logs_page(self.config, self.engine)
+        from urllib.parse import parse_qs, urlsplit
+        qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+        html = render_logs_page(self.config, self.engine, qs)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()

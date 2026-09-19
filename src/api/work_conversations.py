@@ -66,16 +66,112 @@ def _backfill_id(profile: str, model: str, first_ts: str) -> str:
 
 
 def ensure_schema() -> None:
-    """Idempotent ALTER: add conversation_id to both tables."""
+    """Idempotent ALTER: add conversation_id to both tables + the persisted
+    conversations table (name/summary generated once and stored)."""
     con = _connect()
     try:
         for table in ("requests", "routing_decisions"):
             cols = {r[1] for r in con.execute("PRAGMA table_info(%s)" % table)}
             if "conversation_id" not in cols:
                 con.execute("ALTER TABLE %s ADD COLUMN conversation_id TEXT" % table)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                conversation_id TEXT PRIMARY KEY,
+                name TEXT,
+                summary TEXT,
+                profile TEXT,
+                model TEXT,
+                first_seen TEXT,
+                last_seen TEXT,
+                calls INTEGER,
+                tokens INTEGER,
+                cost REAL,
+                errors INTEGER,
+                generated_at TEXT
+            )
+        """)
         con.commit()
     finally:
         con.close()
+
+
+def _generate_name(first_user: Optional[str], cid: str) -> str:
+    """Deterministic generated name from the first user turn."""
+    if first_user:
+        words = first_user.split()[:7]
+        if words:
+            return " ".join(words)[:48]
+    return "Conversation %s" % cid
+
+
+def sync_conversations(force: bool = False) -> Dict[str, int]:
+    """Upsert persisted conversations from requests; generate name/summary once.
+
+    Returns counts of created/updated rows. Name + summary are generated on
+    first creation and never overwritten by later syncs (the summary may be
+    upgraded by an LLM pass later, but only by explicit intent).
+    """
+    ensure_schema()
+    con = _connect()
+    created = updated = 0
+    try:
+        rows = con.execute(
+            """
+            SELECT conversation_id, profile, model,
+                   COUNT(*) AS calls,
+                   SUM(prompt_tokens + completion_tokens) AS tokens,
+                   SUM(cost) AS cost,
+                   SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS errors,
+                   MIN(timestamp) AS first_seen,
+                   MAX(timestamp) AS last_seen
+            FROM requests WHERE conversation_id IS NOT NULL
+            GROUP BY conversation_id, profile, model
+            """
+        ).fetchall()
+        for r in rows:
+            cid = r["conversation_id"]
+            existing = con.execute(
+                "SELECT name, summary FROM conversations WHERE conversation_id=?",
+                (cid,)).fetchone()
+            if existing is not None:
+                con.execute(
+                    """
+                    UPDATE conversations SET profile=?, model=?, calls=?, tokens=?,
+                        cost=?, errors=?, first_seen=?, last_seen=?
+                    WHERE conversation_id=?
+                    """, (r["profile"], r["model"], r["calls"], r["tokens"] or 0,
+                          r["cost"] or 0.0, r["errors"] or 0,
+                          r["first_seen"], r["last_seen"], cid))
+                updated += 1
+                continue
+
+            # NEW conversation: generate + persist name and summary once.
+            first_user = None
+            route = con.execute(
+                "SELECT conversation_json FROM routing_decisions "
+                "WHERE conversation_id=? ORDER BY ts DESC LIMIT 1", (cid,)).fetchone()
+            if route:
+                first_user = _extract_first_user(route["conversation_json"])
+            name = _generate_name(first_user, cid)
+            summary = "%s · %d calls · $%.4f" % (
+                (first_user or "no user turns captured")[:_CONV_SUMMARY_CAP],
+                r["calls"], r["cost"] or 0.0)
+            con.execute(
+                """
+                INSERT INTO conversations
+                    (conversation_id, name, summary, profile, model,
+                     first_seen, last_seen, calls, tokens, cost, errors,
+                     generated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (cid, name, summary, r["profile"], r["model"],
+                      r["first_seen"], r["last_seen"], r["calls"],
+                      r["tokens"] or 0, r["cost"] or 0.0, r["errors"] or 0,
+                      time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+            created += 1
+        con.commit()
+    finally:
+        con.close()
+    return {"created": created, "updated": updated}
 
 
 def _last_backfill_ts() -> Optional[str]:
@@ -234,86 +330,189 @@ def _extract_first_user(conversation_json: Optional[str]) -> Optional[str]:
 _CONV_SUMMARY_CAP = 240
 
 
-def conversations_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Paginated conversation list + per-conversation summary."""
+def requests_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Paginated raw request log (Requests tab)."""
     params = params or {}
+    per = _per(params)
+    try:
+        page = max(1, int(params.get("page") or 1))
+    except (TypeError, ValueError):
+        page = 1
+    profile_filter = str(params.get("profile") or "").strip()
+    where = ""
+    args: List[Any] = []
+    if profile_filter:
+        where = " WHERE profile = ?"
+        args = [profile_filter]
+    con = _connect()
+    try:
+        total = con.execute("SELECT COUNT(*) FROM requests" + where, args).fetchone()[0]
+        pages = 1
+        if per != "all":
+            pages = max(1, -(-total // per))
+            page = min(page, pages)
+        rows = con.execute(
+            "SELECT id, timestamp, profile, model, provider, prompt_tokens, "
+            "completion_tokens, cost, latency_ms, success, error_type, "
+            "conversation_id FROM requests" + where +
+            " ORDER BY id DESC LIMIT ? OFFSET ?" if per != "all" else
+            "SELECT id, timestamp, profile, model, provider, prompt_tokens, "
+            "completion_tokens, cost, latency_ms, success, error_type, "
+            "conversation_id FROM requests" + where + " ORDER BY id DESC",
+            args + ([per, (page - 1) * per] if per != "all" else [])).fetchall()
+        con.close()
+    finally:
+        pass
+    return {
+        "rows": [dict(r) for r in rows],
+        "total": total,
+        "filter": {"per": str(per), "page": page, "pages": pages,
+                   "profile": profile_filter, "profiles": _profiles()},
+    }
+
+
+def provider_decisions_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Paginated provider-routing decisions log (Provider decisions tab)."""
+    params = params or {}
+    per = _per(params)
+    try:
+        page = max(1, int(params.get("page") or 1))
+    except (TypeError, ValueError):
+        page = 1
+    con = _connect()
+    try:
+        total = con.execute(
+            "SELECT COUNT(*) FROM routing_decisions").fetchone()[0]
+        pages = 1
+        if per != "all":
+            pages = max(1, -(-total // per))
+            page = min(page, pages)
+        base = ("SELECT id, ts, profile, task, policy, action, provider, model, "
+                "score, note, conversation_id FROM routing_decisions "
+                "ORDER BY id DESC")
+        if per != "all":
+            rows = con.execute(base + " LIMIT ? OFFSET ?",
+                               [per, (page - 1) * per]).fetchall()
+        else:
+            rows = con.execute(base).fetchall()
+        con.close()
+    finally:
+        pass
+    return {
+        "rows": [dict(r) for r in rows],
+        "total": total,
+        "filter": {"per": str(per), "page": page, "pages": pages},
+    }
+
+
+def _per(params: Dict[str, Any]) -> Any:
     per_raw = str(params.get("per") or "20")
     if per_raw == "all":
-        per = "all"
-    else:
+        return "all"
+    try:
+        return max(1, min(500, int(per_raw)))
+    except (TypeError, ValueError):
+        return 20
+
+
+_SYNC_STALE_SECONDS = 300
+
+
+def _set_sync_ts(ts: Optional[str] = None) -> None:
+    con = _connect()
+    try:
+        con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+        ts = ts or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         try:
-            per = max(1, min(500, int(per_raw)))
-        except (TypeError, ValueError):
-            per = 20
+            con.execute("INSERT OR REPLACE INTO settings(key, value, updated_at) "
+                        "VALUES(?,?,?)", ("convo_sync_ts", ts, ts))
+        except sqlite3.Error:
+            con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?,?)",
+                        ("convo_sync_ts", ts))
+        con.commit()
+    finally:
+        con.close()
+
+
+def _maybe_sync() -> None:
+    """Lazy sync: refresh the persisted conversations table when stale."""
+    from datetime import datetime
+    try:
+        con = _connect()
+        row = con.execute("SELECT value FROM settings "
+                          "WHERE key='convo_sync_ts'").fetchone()
+        con.close()
+        if row:
+            try:
+                last = datetime.fromisoformat(row["value"])
+                if time.time() - last.timestamp() < _SYNC_STALE_SECONDS:
+                    return  # fresh enough
+            except (ValueError, AttributeError, OSError):
+                pass
+        sync_conversations()
+        _set_sync_ts()
+    except sqlite3.Error:
+        pass
+
+
+def conversations_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Paginated conversation list, read from the PERSISTED conversations
+    table (name + summary generated once by sync_conversations)."""
+    try:
+        _maybe_sync()
+    except Exception:  # noqa: BLE001 — view must not die on sync failure
+        pass
+
+    params = params or {}
+    per = _per(params)
     try:
         page = max(1, int(params.get("page") or 1))
     except (TypeError, ValueError):
         page = 1
     profile_filter = str(params.get("profile") or "").strip()
 
-    ensure_schema()
     con = _connect()
     try:
-        where = "WHERE r.conversation_id IS NOT NULL"
+        where = "WHERE 1=1"
         args: List[Any] = []
         if profile_filter:
-            where += " AND r.profile = ?"
+            where += " AND profile = ?"
             args.append(profile_filter)
 
-        total = con.execute(
-            "SELECT COUNT(DISTINCT conversation_id) FROM requests r " + where,
-            args).fetchone()[0]
-
-        base = """
-            SELECT r.conversation_id AS cid,
-                   r.profile AS profile,
-                   r.model AS model,
-                   COUNT(*) AS calls,
-                   SUM(r.prompt_tokens + r.completion_tokens) AS tokens,
-                   SUM(r.cost) AS cost,
-                   SUM(CASE WHEN r.success = 0 THEN 1 ELSE 0 END) AS errors,
-                   MIN(r.timestamp) AS started_at,
-                   MAX(r.timestamp) AS last_at
-            FROM requests r
-            {where}
-            GROUP BY r.conversation_id, r.profile, r.model
-            ORDER BY last_at DESC, cid
-        """
-        if per == "all":
-            rows = con.execute(base.format(where=where), args).fetchall()
-            page = 1
-            pages = 1
-        else:
+        total = con.execute("SELECT COUNT(*) FROM conversations " + where,
+                            args).fetchone()[0]
+        pages = 1
+        if per != "all":
             pages = max(1, -(-total // per))
             page = min(page, pages)
-            rows = con.execute(base.format(where=where) + " LIMIT ? OFFSET ?",
+        base = ("SELECT conversation_id, name, summary, profile, model, calls, "
+                "tokens, cost, errors, first_seen, last_seen "
+                "FROM conversations " + where + " ORDER BY last_seen DESC")
+        if per != "all":
+            rows = con.execute(base + " LIMIT ? OFFSET ?",
                                args + [per, (page - 1) * per]).fetchall()
+        else:
+            rows = con.execute(base).fetchall()
 
         conversations = []
         for r in rows:
-            cid = r["cid"]
-            # routing context for this conversation: task labels + a slice of
-            # the conversation content that drove routing (for the summary)
+            cid = r["conversation_id"]
             route = con.execute(
-                """
-                SELECT task, action, conversation_json FROM routing_decisions
-                WHERE conversation_id = ? ORDER BY ts DESC LIMIT 1
-                """, (cid,)).fetchone()
-            first_user = None
-            if route:
-                first_user = _extract_first_user(route["conversation_json"])
+                "SELECT task FROM routing_decisions WHERE conversation_id=? "
+                "ORDER BY ts DESC LIMIT 1", (cid,)).fetchone()
             conversations.append({
                 "id": cid,
+                "name": r["name"],
+                "summary": r["summary"],
                 "profile": r["profile"],
                 "model": r["model"],
                 "calls": r["calls"],
                 "tokens": r["tokens"] or 0,
                 "cost": round(r["cost"] or 0.0, 6),
                 "errors": r["errors"] or 0,
-                "started_at": r["started_at"],
-                "last_at": r["last_at"],
+                "started_at": r["first_seen"],
+                "last_at": r["last_seen"],
                 "task": route["task"] if route else None,
-                "summary": first_user,
             })
         con.close()
     except sqlite3.Error:

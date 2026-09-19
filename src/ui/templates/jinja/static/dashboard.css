@@ -1439,6 +1439,11 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   font-size: 0.78rem; padding: 0.3rem 0; border-bottom: 1px dashed var(--border, #30363d);
 }
 .convo-ts { flex-shrink: 0; width: 9.2rem; font-size: 0.7rem; }
+.convo-id { font-size: 0.68rem; }
+
+/* Logs page tab bar */
+.logs-tabs { display: flex; gap: 0.35rem; flex-wrap: wrap; margin: 0.35rem 0 0.85rem; }
+.logs-tabs .tab-btn.active { border-color: hsl(var(--primary)); color: hsl(var(--primary)); }
 
 /* Cron page controls — toolbar and row actions use the panel's shadcn-style
    .btn-sm vocabulary (no custom button shapes). */
