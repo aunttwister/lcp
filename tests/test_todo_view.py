@@ -18,6 +18,7 @@ SAMPLE = textwrap.dedent('''\
     | col | val |
     |---|---|
     | state | in_progress |
+    | priority | high |
 
     ### apple-ai-compute-thesis (created 2026-09-13)
     - [ ] research phase
@@ -61,11 +62,19 @@ class TestTodoView:
     def test_sections_and_items_tables_skipped(self, todo_tree):
         v = wt._todo_view()
         titles = [s["title"] for s in v["sections"]]
-        assert titles == ["🔴 In Progress (2)", "✅ Completed (89)"]
+        assert titles == ["In Progress (2)", "Completed (89)"]
         inprog = v["sections"][0]
-        assert len(inprog["entries"]) == 2
-        assert "mimo-style-run-dashboard" in inprog["entries"][0]["text"]
-        # the table row between h3s did not become an item
+        assert inprog["expanded"] is True
+        assert v["sections"][1]["expanded"] is False
+        # h3 items + table data rows (header + separator dropped)
+        assert [e["text"] for e in inprog["entries"]] == [
+            "mimo-style-run-dashboard (CREATED 2026-09-18 — aunttwister)",
+            "state · in_progress",
+            "priority · high",
+            "apple-ai-compute-thesis (created 2026-09-13)",
+        ]
+        assert inprog["entries"][1]["table_row"] is True
+        # no row carries the pipe char itself
         assert all("|" not in i["text"] for s in v["sections"] for i in s["entries"])
 
     def test_truncation_flagged(self, todo_tree, monkeypatch):

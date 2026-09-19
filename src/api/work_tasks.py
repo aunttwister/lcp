@@ -423,7 +423,13 @@ def _todo_view() -> Optional[Dict[str, Any]]:
         elif s.startswith("## "):
             # NOTE: key is `entries`, not `items` — Jinja's attribute access
             # would resolve `sec.items` to the dict METHOD first.
-            section = {"title": s[3:].strip(), "entries": []}
+            raw_title = s[3:].strip()
+            # The section markers (🆕🔴🟡📋✅ …) are decorative; the overview
+            # shows clean titles. `expanded` remembers the 🔴 marker because
+            # "In Progress" is the one group that should open by default.
+            expanded = raw_title.startswith("🔴")
+            title = raw_title.lstrip("🆕🔴🟡📋✅⚪🟢").strip()
+            section = {"title": title, "expanded": expanded, "entries": []}
             out["sections"].append(section)
         elif s.startswith("### ") and section is not None:
             t = s[4:].strip()
@@ -432,9 +438,26 @@ def _todo_view() -> Optional[Dict[str, Any]]:
                 "html": _md_to_html(t[:_TODO_ITEM_CAP]),
                 "truncated": len(t) > _TODO_ITEM_CAP,
             })
+        elif s.startswith("|") and section is not None:
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if not cells or all(re.fullmatch(r":?-+:?", c) for c in cells):
+                # |---|---| separator: the row just before it was the table
+                # header — drop it so it never becomes an overview bullet.
+                if section["entries"] and section["entries"][-1].get("table_row"):
+                    section["entries"].pop()
+                continue
+            t = " · ".join(c for c in cells if c)
+            if not t:
+                continue
+            section["entries"].append({
+                "text": t,
+                "html": _md_to_html(t[:_TODO_ITEM_CAP]),
+                "truncated": len(t) > _TODO_ITEM_CAP,
+                "table_row": True,
+            })
     return out
 
 
-_TODO_TIMELINE_CAP = 10
+_TODO_TIMELINE_CAP = 50
 _TODO_ENTRY_CAP = 500
 _TODO_ITEM_CAP = 180

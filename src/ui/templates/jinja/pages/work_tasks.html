@@ -54,32 +54,35 @@
     </div>
 
     {% if view.todos.timeline %}
-      <h3 class="todo-sub">Recent updates</h3>
-      <ul class="todo-list">
-        {% for t in view.todos.timeline %}
-          <li class="todo-entry">
-            <div class="todo-text">{{ t.html | safe }}{% if t.truncated %}<span class="work-rel">…</span>{% endif %}</div>
-            <span class="work-rel mono todo-date">{{ t.date }}</span>
-          </li>
-        {% endfor %}
-      </ul>
+      <details class="todo-group" open>
+        <summary class="todo-sub">Recent updates <span class="muted">({{ view.todos.timeline | length }})</span></summary>
+        <ul class="todo-list" id="todo-g0">
+          {% for t in view.todos.timeline %}
+            <li class="todo-entry{% if loop.index0 >= 4 %} todo-hidden{% endif %}">
+              <div class="todo-text">{{ t.html | safe }}{% if t.truncated %}<span class="work-rel">…</span>{% endif %}</div>
+              <span class="work-rel mono todo-date">{{ t.date }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+        {% if view.todos.timeline | length > 4 %}
+          <button class="btn-sm todo-more" data-target="todo-g0" data-step="4">Show more ({{ view.todos.timeline | length - 4 }})</button>
+        {% endif %}
+      </details>
     {% endif %}
 
     {% for sec in view.todos.sections %}
       {% if sec.entries %}
-        {% if sec.title.startswith('✅') or sec.title.startswith('📋') %}
-          <details class="todo-section">
-            <summary class="todo-sub">{{ sec.title }} <span class="muted">({{ sec.entries | length }})</span></summary>
-            <ul class="todo-list">
-              {% for item in sec.entries %}<li class="todo-item">{{ item.html | safe }}{% if item.truncated %} <span class="work-rel">…</span>{% endif %}</li>{% endfor %}
-            </ul>
-          </details>
-        {% else %}
-          <h3 class="todo-sub">{{ sec.title }} <span class="muted">({{ sec.entries | length }})</span></h3>
-          <ul class="todo-list">
-            {% for item in sec.entries %}<li class="todo-item">{{ item.html | safe }}{% if item.truncated %} <span class="work-rel">…</span>{% endif %}</li>{% endfor %}
+        <details class="todo-group"{% if sec.expanded %} open{% endif %}>
+          <summary class="todo-sub">{{ sec.title }} <span class="muted">({{ sec.entries | length }})</span></summary>
+          <ul class="todo-list" id="todo-g{{ loop.index }}">
+            {% for item in sec.entries %}
+              <li class="todo-item{% if loop.index0 >= 10 %} todo-hidden{% endif %}">{{ item.html | safe }}{% if item.truncated %} <span class="work-rel">…</span>{% endif %}</li>
+            {% endfor %}
           </ul>
-        {% endif %}
+          {% if sec.entries | length > 10 %}
+            <button class="btn-sm todo-more" data-target="todo-g{{ loop.index }}" data-step="10">Show more ({{ sec.entries | length - 10 }})</button>
+          {% endif %}
+        </details>
       {% endif %}
     {% endfor %}
   {% endif %}
@@ -297,5 +300,23 @@ function toggleTaskDetail(id, row) {
     if (chev) chev.textContent = '▸';
   }
 }
+
+/* todo.md pagination: "Show more" reveals the next page of a group. */
+document.querySelectorAll('.todo-more').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var ul = document.getElementById(btn.getAttribute('data-target'));
+    if (!ul) return;
+    var step = parseInt(btn.getAttribute('data-step'), 10) || 10;
+    var hidden = ul.querySelectorAll('li.todo-hidden');
+    var shown = 0;
+    for (var i = 0; i < hidden.length && shown < step; i++) {
+      hidden[i].classList.remove('todo-hidden');
+      shown++;
+    }
+    var remaining = ul.querySelectorAll('li.todo-hidden').length;
+    if (remaining === 0) { btn.remove(); }
+    else { btn.textContent = 'Show more (' + remaining + ' remaining)'; }
+  });
+});
 </script>
 {% endblock %}
