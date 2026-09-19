@@ -1407,6 +1407,22 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 }
 .todo-section summary { cursor: pointer; list-style-position: inside; }
 .todo-section summary::-webkit-details-marker { color: hsl(var(--muted-foreground)); }
+.todo-group summary { cursor: pointer; list-style-position: inside; }
+.todo-group summary::-webkit-details-marker { color: hsl(var(--muted-foreground)); }
+.todo-hidden { display: none; }
+.todo-more { margin: 0.5rem 0 0.25rem; }
+
+/* Tasks page — search + tag filter toolbar */
+.task-toolbar { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.35rem 0 0.75rem; }
+.task-search {
+  background: var(--bg-elevated, #161b22); color: var(--foreground);
+  border: 1px solid var(--border, #30363d); border-radius: var(--radius);
+  padding: 0.45rem 0.7rem; font-size: 0.85rem; width: 100%; max-width: 460px;
+  box-sizing: border-box;
+}
+.task-search:focus { outline: 1px solid hsl(var(--primary)); }
+.task-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.task-tag-btn.active { border-color: hsl(var(--primary)); color: hsl(var(--primary)); }
 
 /* Cron page controls — toolbar and row actions use the panel's shadcn-style
    .btn-sm vocabulary (no custom button shapes). */
@@ -1609,6 +1625,9 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   .work-table thead { display: none; }
   .work-table tbody { display: block; width: 100%; }
   .work-table tr { display: block; width: 100%; max-width: 100%; }
+  /* CRITICAL: display:block above would defeat the UA [hidden] rule on the
+     accordion detail rows — without this, every task is "expanded" on mobile. */
+  .work-table tr[hidden] { display: none !important; }
   .work-table tr.task-group {
     margin-bottom: 0.7rem;
     border: 1px solid var(--card-border, #30363d);
