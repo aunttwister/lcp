@@ -91,4 +91,47 @@ def render_work_decisions_page(config, engine=None) -> str:
                        active_page="work_decisions", view=view)
 
 
+def render_work_tasks_page(config, engine=None) -> str:
+    """Render the Work > Tasks page (Jinja2).
+
+    A task's state is its directory, so this view reads the tree rather than a
+    status field -- the state cannot drift from where the item actually lives.
+    """
+    from .render import render_page
+    from ..api import work_tasks
+    try:
+        view = work_tasks.tasks_view()
+    except Exception as e:  # never blank the page on a data error
+        view = {
+            "available": False,
+            "empty": {"reason": "could not read the task tree",
+                      "hint": "%s: %s" % (type(e).__name__, e)},
+            "counts": {}, "total": 0, "tasks": [], "todos": None, "conflicts": [],
+        }
+    return render_page("pages/work_tasks.html", config, engine,
+                       active_page="work_tasks", view=view)
+
+
+def render_work_fleet_page(config, engine=None) -> str:
+    """Render the Work > Fleet page (Jinja2).
+
+    Reads LCP's own provider/profile APIs, so the chain shown is the chain LCP
+    will actually use -- not a second copy that can drift from it.
+    """
+    from .render import render_page
+    from ..api import work_fleet
+    try:
+        view = work_fleet.fleet_view()
+    except Exception as e:  # never blank the page on a data error
+        view = {
+            "available": False,
+            "empty": {"reason": "could not read the fleet",
+                      "hint": "%s: %s" % (type(e).__name__, e)},
+            "summary": None, "flaky": [], "profiles": [],
+            "failover_moments": [], "failover_stats": None, "routing": None,
+        }
+    return render_page("pages/work_fleet.html", config, engine,
+                       active_page="work_fleet", view=view)
+
+
 

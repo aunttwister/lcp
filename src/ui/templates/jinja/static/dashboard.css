@@ -1343,6 +1343,8 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 
 .work-card-ok .work-card-value { color: #3fb950; }
 .work-card-muted .work-card-value { color: var(--text-muted, #8b949e); }
+.work-card-warn .work-card-value { color: #d29922; }
+.work-card-bad .work-card-value { color: #f85149; }
 
 .work-rule {
   font-size: 0.8rem;

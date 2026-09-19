@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Tasks — Work — LCP{% endblock %}
+{% set active_page = 'work_tasks' %}
+
+{% block content %}
+<h1>Tasks</h1>
+<p class="subtitle">
+  The task tree as <em>moments</em>. A task's state <strong>is its directory</strong>, so the
+  transition time is the directory mtime and the state cannot drift from where the
+  item actually lives. Where a <code>PLAN.md</code> contradicts its own directory,
+  that disagreement is shown rather than smoothed over.
+</p>
+
+{% if not view.available %}
+  <div class="empty">
+    <strong>{{ view.empty.reason }}</strong><br>
+    <span class="muted">{{ view.empty.hint }}</span>
+  </div>
+{% else %}
+
+  <h2 class="work-h2">By state</h2>
+  <div class="work-cards">
+    {% for state in ['new', 'in_progress', 'completed', 'cancelled'] %}
+      <div class="work-card{% if state == 'in_progress' %} work-card-ok{% else %} work-card-muted{% endif %}">
+        <div class="work-card-label">{{ state.replace('_', ' ') }}</div>
+        <div class="work-card-value">{{ view.counts.get(state, 0) }}</div>
+      </div>
+    {% endfor %}
+  </div>
+  <p class="muted work-rule">
+    {{ view.total }} task directories.
+    {% if view.conflicts %}
+      <span class="work-warn">{{ view.conflicts | length }} status conflict(s) — a PLAN.md
+      disagrees with the directory it sits in.</span>
+    {% endif %}
+  </p>
+
+  {% if view.todos %}
+    <h2 class="work-h2">todo.md</h2>
+    <p class="muted work-rule">
+      <code>{{ view.todos.path }}</code> — {{ view.todos.lines }} lines ·
+      {{ view.todos.open_boxes }} open · {{ view.todos.done_boxes }} done
+      {% if view.todos.updated %}<br>Last updated: {{ view.todos.updated }}{% endif %}
+    </p>
+  {% endif %}
+
+  {% if view.conflicts %}
+    <h2 class="work-h2">Status conflicts</h2>
+    <div class="work-scroll">
+      <table class="work-table">
+        <thead>
+          <tr><th>Task</th><th>Directory</th><th>PLAN.md claims</th></tr>
+        </thead>
+        <tbody>
+          {% for m in view.conflicts %}
+            <tr>
+              <td>{{ m.subject }}</td>
+              <td><span class="work-actor">{{ m.payload.state }}</span></td>
+              <td class="muted">{{ m.payload.claimed_status }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
+  <h2 class="work-h2">In progress and new</h2>
+  {% set focus = view.tasks | selectattr('payload.state', 'in', ['in_progress', 'new']) | list %}
+  {% if not focus %}
+    <div class="empty">Nothing in progress or new.</div>
+  {% else %}
+    <div class="work-scroll">
+      <table class="work-table">
+        <thead>
+          <tr>
+            <th>Last transition</th>
+            <th>Task</th>
+            <th>State</th>
+            <th class="num">Files</th>
+            <th>Plan</th>
+            <th>PLAN.md status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for m in focus %}
+            <tr>
+              <td class="mono muted">{{ m.t | fmt_ts }}</td>
+              <td>{{ m.subject }}</td>
+              <td><span class="work-actor">{{ m.payload.state }}</span></td>
+              <td class="num">{{ m.payload.n_files }}</td>
+              <td>
+                {% if m.payload.has_plan %}<span class="work-label work-label-publish">yes</span>
+                {% else %}<span class="muted">no</span>{% endif %}
+              </td>
+              <td class="muted">
+                {% if m.payload.claimed_status %}
+                  {{ m.payload.claimed_status | truncate(70) }}
+                {% else %}<span class="muted">—</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
+  <h2 class="work-h2">Recently completed</h2>
+  <div class="work-scroll">
+    <table class="work-table">
+      <thead>
+        <tr><th>Last transition</th><th>Task</th><th class="num">Files</th></tr>
+      </thead>
+      <tbody>
+        {% for m in view.tasks | selectattr('payload.state', 'equalto', 'completed') | batch(12) | first %}
+          <tr>
+            <td class="mono muted">{{ m.t | fmt_ts }}</td>
+            <td>{{ m.subject }}</td>
+            <td class="num">{{ m.payload.n_files }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted work-rule">
+    Showing the 12 most recently completed of {{ view.counts.get('completed', 0) }}.
+  </p>
+
+{% endif %}
+{% endblock %}

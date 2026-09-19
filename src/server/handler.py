@@ -815,6 +815,10 @@ def _build_routes() -> RouteTable:
     # ── Work section (work layer merged into LCP as a module) ──
     t.get("page.work.decisions", exact("/work/decisions"),
           lambda h, p: h._serve_work_decisions_page())
+    t.get("page.work.tasks", exact("/work/tasks"),
+          lambda h, p: h._serve_work_tasks_page())
+    t.get("page.work.fleet", exact("/work/fleet"),
+          lambda h, p: h._serve_work_fleet_page())
     t.get("page.usage", exact("/usage"),
           lambda h, p: h._serve_usage_page())
     t.get("page.logs", exact("/logs"),
@@ -866,6 +870,10 @@ def _build_routes() -> RouteTable:
     # ── Work layer ──
     t.get("api.work.decisions", exact("/api/work/decisions"),
           lambda h, p: h._serve_work_decisions_api())
+    t.get("api.work.tasks", exact("/api/work/tasks"),
+          lambda h, p: h._serve_work_tasks_api())
+    t.get("api.work.fleet", exact("/api/work/fleet"),
+          lambda h, p: h._serve_work_fleet_api())
 
     # ── cost / usage / logs ──
     t.get("api.daily-costs", exact("/api/daily-costs"),

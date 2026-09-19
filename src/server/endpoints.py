@@ -3334,3 +3334,39 @@ class WorkEndpoints:
             self._send_json(work_api.decisions_view())
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
+
+    def _serve_work_tasks_page(self):
+        """Server-rendered Work > Tasks page."""
+        from ..ui.pages import render_work_tasks_page
+        html = render_work_tasks_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_work_tasks_api(self):
+        """GET /api/work/tasks — the Tasks view as JSON."""
+        from ..api import work_tasks
+
+        try:
+            self._send_json(work_tasks.tasks_view())
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_work_fleet_page(self):
+        """Server-rendered Work > Fleet page."""
+        from ..ui.pages import render_work_fleet_page
+        html = render_work_fleet_page(self.config, self.engine)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _serve_work_fleet_api(self):
+        """GET /api/work/fleet — the Fleet view as JSON."""
+        from ..api import work_fleet
+
+        try:
+            self._send_json(work_fleet.fleet_view())
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)

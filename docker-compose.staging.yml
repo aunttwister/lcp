@@ -37,6 +37,11 @@ services:
       # the container boundary, not merely by the code choosing to open SQLite
       # read-only.
       - /your/data/app/runboard/decisions.db:/app/work/decisions.db:ro
+      # The task tree. READ-ONLY for the same reason as the ledger: a view of
+      # pending work must not be able to move a task, and mounting read-only
+      # makes that structural. The state of a task IS its directory, so a
+      # writable mount would let a dashboard silently complete your work.
+      - /root/.hermes/profiles/homelab-expert-l2/work:/app/work-tree:ro
     env_file:
       - .env
     environment:
@@ -46,3 +51,9 @@ services:
       - LCP_SECRET_KEY=${LCP_SECRET_KEY}
       - LCP_MODULES_DIR=/opt/lcp-modules
       - LCP_WORK_DECISIONS_DB=/app/work/decisions.db
+      - LCP_WORK_TASKS_DIR=/app/work-tree/tasks
+      - LCP_WORK_TODO=/app/work-tree/todo.md
+      # The Fleet view reads LCP's OWN provider/profile APIs rather than a
+      # second copy of the chain data, so what it shows is the chain LCP will
+      # actually use. Inside the container that is loopback on the internal port.
+      - LCP_SELF_BASE=http://127.0.0.1:8734
