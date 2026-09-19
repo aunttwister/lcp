@@ -95,21 +95,29 @@ def ensure_schema() -> None:
         con.close()
 
 
-def _generate_name(first_user: Optional[str], cid: str) -> str:
-    """Deterministic generated name from the first user turn."""
-    if first_user:
-        words = first_user.split()[:7]
+def _generate_name(head: Optional[str], cid: str,
+                   task: Optional[str] = None, last_seen: Optional[str] = None) -> str:
+    """Deterministic generated name: leading words of the first user turn (or
+    assistant text when the window has no user turn), else the routing task
+    label plus the activity date, else a bare fallback."""
+    if head:
+        words = head.split()[:7]
         if words:
             return " ".join(words)[:48]
+    if task:
+        date = (last_seen or "")[:10]
+        return "%s %s" % (task, date) if date else task
     return "Conversation %s" % cid
 
 
 def sync_conversations(force: bool = False) -> Dict[str, int]:
     """Upsert persisted conversations from requests; generate name/summary once.
 
-    Returns counts of created/updated rows. Name + summary are generated on
-    first creation and never overwritten by later syncs (the summary may be
-    upgraded by an LLM pass later, but only by explicit intent).
+    ``force`` regenerates name + summary for EVERY conversation (used when the
+    generation logic improves — e.g. the assistant-text fallback — and the
+    operator explicitly wants existing rows upgraded). By default, name +
+    summary are written only on first creation so operator-made names survive
+    syncs.
     """
     ensure_schema()
     con = _connect()
@@ -133,7 +141,11 @@ def sync_conversations(force: bool = False) -> Dict[str, int]:
             existing = con.execute(
                 "SELECT name, summary FROM conversations WHERE conversation_id=?",
                 (cid,)).fetchone()
-            if existing is not None:
+
+            # Optional: refresh the generated fields (explicit upgrade).
+            refresh_gen = force
+
+            if existing is not None and not refresh_gen:
                 con.execute(
                     """
                     UPDATE conversations SET profile=?, model=?, calls=?, tokens=?,
@@ -145,17 +157,31 @@ def sync_conversations(force: bool = False) -> Dict[str, int]:
                 updated += 1
                 continue
 
-            # NEW conversation: generate + persist name and summary once.
-            first_user = None
+            head = None
+            task = None
             route = con.execute(
-                "SELECT conversation_json FROM routing_decisions "
+                "SELECT conversation_json, task FROM routing_decisions "
                 "WHERE conversation_id=? ORDER BY ts DESC LIMIT 1", (cid,)).fetchone()
             if route:
-                first_user = _extract_first_user(route["conversation_json"])
-            name = _generate_name(first_user, cid)
+                head = _conversation_head(route["conversation_json"])
+                task = route["task"]
+            name = _generate_name(head, cid, task, r["last_seen"])
             summary = "%s · %d calls · $%.4f" % (
-                (first_user or "no user turns captured")[:_CONV_SUMMARY_CAP],
+                (head or "no user or assistant text captured")[:_CONV_SUMMARY_CAP],
                 r["calls"], r["cost"] or 0.0)
+            if existing is not None:
+                con.execute(
+                    """
+                    UPDATE conversations SET name=?, summary=?, profile=?, model=?,
+                        calls=?, tokens=?, cost=?, errors=?, first_seen=?,
+                        last_seen=?, generated_at=?
+                    WHERE conversation_id=?
+                    """, (name, summary, r["profile"], r["model"], r["calls"],
+                          r["tokens"] or 0, r["cost"] or 0.0, r["errors"] or 0,
+                          r["first_seen"], r["last_seen"],
+                          time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), cid))
+                updated += 1
+                continue
             con.execute(
                 """
                 INSERT INTO conversations
@@ -306,6 +332,7 @@ def stamp_new(request_id: int, conversation_id: str, profile: str,
 
 
 def _extract_first_user(conversation_json: Optional[str]) -> Optional[str]:
+    """First real user turn in the captured window (None if absent)."""
     if not conversation_json:
         return None
     try:
@@ -315,15 +342,55 @@ def _extract_first_user(conversation_json: Optional[str]) -> Optional[str]:
     if not isinstance(msgs, list):
         return None
     for m in msgs:
-        if isinstance(m, dict) and m.get("role") == "user":
-            c = m.get("content")
-            if isinstance(c, str) and c.strip():
-                return re.sub(r"\s+", " ", c).strip()[:_CONV_SUMMARY_CAP]
-            if isinstance(c, list):
-                parts = [p.get("text", "") for p in c if isinstance(p, dict)]
-                joined = " ".join(parts).strip()
-                if joined:
-                    return joined[:_CONV_SUMMARY_CAP]
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            cleaned = _clean_marker(c)
+            if cleaned:
+                return re.sub(r"\s+", " ", cleaned).strip()[:_CONV_SUMMARY_CAP]
+        if isinstance(c, list):
+            parts = [p.get("text", "") for p in c if isinstance(p, dict)]
+            joined = re.sub(r"\s+", " ", " ".join(parts)).strip()
+            cleaned = _clean_marker(joined)
+            if cleaned:
+                return cleaned[:_CONV_SUMMARY_CAP]
+    return None
+
+
+def _clean_marker(text: str) -> str:
+    """Strip the '[N older messages omitted]' truncation markers the router
+    inserts when it drops old turns — they are not conversation content."""
+    t = re.sub(r"\[\d+ older messages? omitted\]", "", text)
+    t = re.sub(r"\[\d+ messages? omitted\]", "", t)
+    return t.strip()
+
+
+def _conversation_head(conversation_json: Optional[str]) -> Optional[str]:
+    """Best readable head of the captured window: first real user turn,
+    else first real assistant text, else None. Used for names + summaries
+    because most captured windows are tool-execution slices without a user
+    sentence (the router stores the tail of the message list)."""
+    if not conversation_json:
+        return None
+    try:
+        msgs = json.loads(conversation_json)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(msgs, list):
+        return None
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content")
+        if not isinstance(c, str) or not c.strip():
+            continue
+        role = m.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        cleaned = _clean_marker(c)
+        if cleaned and "omitted messages" not in cleaned:
+            return re.sub(r"\s+", " ", cleaned).strip()[:_CONV_SUMMARY_CAP]
     return None
 
 

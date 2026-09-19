@@ -155,9 +155,25 @@ class TestSync:
         wc.backfill_conversations()
         wc.sync_conversations()
         row = db.execute("SELECT name, summary FROM conversations").fetchone()
+        # no user/assistant text and no routing task -> bare fallback
         assert row["name"] == "Conversation %s" % (
             db.execute("SELECT conversation_id FROM conversations").fetchone()[0])
-        assert "no user turns captured" in row["summary"]
+        assert "no user or assistant text captured" in row["summary"]
+
+    def test_task_based_name_when_no_text(self, db):
+        wc.ensure_schema()
+        _req(db, "2026-09-19T10:00:00+00:00", profile="l2", model="a")
+        _route(db, "2026-09-19T10:00:30+00:00", task="debugging",
+               conv=json.dumps([{"role": "tool", "content": "result"}])
+               )
+        _route(db, "2026-09-19T10:00:31+00:00", task="research",
+               conv=json.dumps([{"role": "tool", "content": "x"}])
+               )
+        db.commit()
+        wc.backfill_conversations()
+        wc.sync_conversations()
+        row = db.execute("SELECT name FROM conversations").fetchone()
+        assert row["name"] == "research 2026-09-19"  # latest routing row's task
 
 
 class TestViews:
