@@ -32,6 +32,11 @@ services:
     volumes:
       - /your/data/app/lcp-staging/data:/app/data
       - /your/data/app/lcp/modules:/opt/lcp-modules
+      # Work layer reads the board's ledger. Mounted READ-ONLY on purpose: the
+      # "a Work view cannot change what was published" property is enforced at
+      # the container boundary, not merely by the code choosing to open SQLite
+      # read-only.
+      - /your/data/app/runboard/decisions.db:/app/work/decisions.db:ro
     env_file:
       - .env
     environment:
@@ -40,3 +45,4 @@ services:
       - TIKTOKEN_CACHE_DIR=/app/data/tiktoken_cache
       - LCP_SECRET_KEY=${LCP_SECRET_KEY}
       - LCP_MODULES_DIR=/opt/lcp-modules
+      - LCP_WORK_DECISIONS_DB=/app/work/decisions.db
