@@ -1393,6 +1393,7 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
   border-radius: 0 4px 4px 0;
 }
 .todo-entry .work-chip { flex-shrink: 0; margin-top: 0.15rem; }
+.todo-date { margin-left: auto; flex-shrink: 0; margin-top: 0.2rem; }
 .todo-text { font-size: 0.78rem; overflow-wrap: anywhere; }
 .todo-text p { margin: 0 0 0.35rem; }
 .todo-text p:last-child { margin-bottom: 0; }

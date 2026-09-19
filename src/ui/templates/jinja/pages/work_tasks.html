@@ -51,7 +51,6 @@
       <code class="work-todo-path">{{ view.todos.path }}</code><br>
       <span class="work-chip work-chip-disabled">{{ view.todos.lines }} lines</span>
       <span class="work-chip work-chip-ok">{{ view.todos.open_boxes }} open · {{ view.todos.done_boxes }} done</span>
-      {% if view.todos.updated %}<span class="work-chip work-chip-paused">last updated {{ view.todos.updated }}</span>{% endif %}
     </div>
 
     {% if view.todos.timeline %}
@@ -59,8 +58,8 @@
       <ul class="todo-list">
         {% for t in view.todos.timeline %}
           <li class="todo-entry">
-            <span class="work-chip work-chip-paused">{{ t.date }}</span>
             <div class="todo-text">{{ t.html | safe }}{% if t.truncated %}<span class="work-rel">…</span>{% endif %}</div>
+            <span class="work-rel mono todo-date">{{ t.date }}</span>
           </li>
         {% endfor %}
       </ul>
