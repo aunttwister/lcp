@@ -3521,6 +3521,28 @@ class WorkEndpoints:
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
+    def _serve_work_requests_api(self):
+        """GET /api/work/requests — raw request log (paginated)."""
+        from ..api import work_conversations
+        from urllib.parse import parse_qs, urlsplit
+
+        try:
+            qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            self._send_json(work_conversations.requests_view(qs))
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_work_provider_decisions_api(self):
+        """GET /api/work/provider-decisions — routing decisions log."""
+        from ..api import work_conversations
+        from urllib.parse import parse_qs, urlsplit
+
+        try:
+            qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            self._send_json(work_conversations.provider_decisions_view(qs))
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _serve_work_status_api(self):
         """GET /api/work/status — the workspace MODULE's own health.
 

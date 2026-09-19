@@ -1,0 +1,194 @@
+[
+ {
+  "id": "pg-001",
+  "group": "pages",
+  "title": "Dashboard",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/dashboard')\" = \"200\" ] && out=$(curl -s '{{BASE}}/dashboard') && echo \"$out\" | grep -q 'Monitor' && out=$(curl -s '{{BASE}}/dashboard') && echo \"$out\" | grep -q 'Providers'"
+ },
+ {
+  "id": "pg-002",
+  "group": "pages",
+  "title": "Usage page",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/usage')\" = \"200\" ] && out=$(curl -s '{{BASE}}/usage') && echo \"$out\" | grep -q 'Usage'"
+ },
+ {
+  "id": "pg-003",
+  "group": "pages",
+  "title": "Logs unified",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/logs')\" = \"200\" ] && out=$(curl -s '{{BASE}}/logs') && echo \"$out\" | grep -q 'Conversations' && out=$(curl -s '{{BASE}}/logs') && echo \"$out\" | grep -q 'Requests' && out=$(curl -s '{{BASE}}/logs') && echo \"$out\" | grep -q 'Provider decisions' && out=$(curl -s '{{BASE}}/logs') && echo \"$out\" | grep -q 'Board decisions'"
+ },
+ {
+  "id": "pg-004",
+  "group": "pages",
+  "title": "Logs conversations tab",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/logs?view=conversations')\" = \"200\" ] && out=$(curl -s '{{BASE}}/logs?view=conversations') && echo \"$out\" | grep -q 'tab-btn'"
+ },
+ {
+  "id": "pg-005",
+  "group": "pages",
+  "title": "Logs requests tab",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/logs?view=requests')\" = \"200\" ] && out=$(curl -s '{{BASE}}/logs?view=requests') && echo \"$out\" | grep -q 'tab-btn'"
+ },
+ {
+  "id": "pg-006",
+  "group": "pages",
+  "title": "Logs providers tab",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/logs?view=providers')\" = \"200\" ] && out=$(curl -s '{{BASE}}/logs?view=providers') && echo \"$out\" | grep -q 'tab-btn'"
+ },
+ {
+  "id": "pg-007",
+  "group": "pages",
+  "title": "Logs decisions tab",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/logs?view=decisions')\" = \"200\" ] && out=$(curl -s '{{BASE}}/logs?view=decisions') && echo \"$out\" | grep -q 'tab-btn'"
+ },
+ {
+  "id": "pg-008",
+  "group": "pages",
+  "title": "Alerts page",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/alerts')\" = \"200\" ] && out=$(curl -s '{{BASE}}/alerts') && echo \"$out\" | grep -q 'Alerts'"
+ },
+ {
+  "id": "pg-009",
+  "group": "pages",
+  "title": "Providers page",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/providers')\" = \"200\" ] && out=$(curl -s '{{BASE}}/providers') && echo \"$out\" | grep -q 'Providers'"
+ },
+ {
+  "id": "pg-010",
+  "group": "pages",
+  "title": "Models page",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/models')\" = \"200\" ] && out=$(curl -s '{{BASE}}/models') && echo \"$out\" | grep -q 'Models'"
+ },
+ {
+  "id": "pg-011",
+  "group": "pages",
+  "title": "Profiles page",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/profiles')\" = \"200\" ] && out=$(curl -s '{{BASE}}/profiles') && echo \"$out\" | grep -q 'Profiles'"
+ },
+ {
+  "id": "pg-012",
+  "group": "pages",
+  "title": "API Keys page",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/keys')\" = \"200\" ] && out=$(curl -s '{{BASE}}/keys') && echo \"$out\" | grep -q 'API Keys'"
+ },
+ {
+  "id": "pg-013",
+  "group": "pages",
+  "title": "Tasks page",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/work/tasks')\" = \"200\" ] && out=$(curl -s '{{BASE}}/work/tasks') && echo \"$out\" | grep -q 'task-search' && out=$(curl -s '{{BASE}}/work/tasks') && echo \"$out\" | grep -q 'task-rows'"
+ },
+ {
+  "id": "pg-014",
+  "group": "pages",
+  "title": "Fleet page",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/work/fleet')\" = \"200\" ] && out=$(curl -s '{{BASE}}/work/fleet') && echo \"$out\" | grep -q 'Fleet'"
+ },
+ {
+  "id": "pg-015",
+  "group": "pages",
+  "title": "Cron page",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/work/cron')\" = \"200\" ] && out=$(curl -s '{{BASE}}/work/cron') && echo \"$out\" | grep -q 'cron-new-btn' && out=$(curl -s '{{BASE}}/work/cron') && echo \"$out\" | grep -q 'work-chip'"
+ },
+ {
+  "id": "pg-016",
+  "group": "pages",
+  "title": "Work config page",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/work/config')\" = \"200\" ] && out=$(curl -s '{{BASE}}/work/config') && echo \"$out\" | grep -q 'sources-form' && out=$(curl -s '{{BASE}}/work/config') && echo \"$out\" | grep -q 'Save sources'"
+ },
+ {
+  "id": "pg-017",
+  "group": "pages",
+  "title": "Setup page",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/setup')\" = \"200\" ] && out=$(curl -s '{{BASE}}/setup') && echo \"$out\" | grep -q 'Setup'"
+ },
+ {
+  "id": "pg-018",
+  "group": "pages",
+  "title": "Nav groups ordered Work/Gateway/Monitor/Admin",
+  "cmd": "curl -s \"{{BASE}}/work/tasks\" | python3 -c \"import sys; h=sys.stdin.read(); w=h.find('nav-label\\\">Work</div>'); g=h.find('nav-label\\\">Gateway</div>'); m=h.find('nav-label\\\">Monitor</div>'); a=h.find('nav-label\\\">Admin</div>'); assert -1 < w < g < m < a, (w,g,m,a)\""
+ },
+ {
+  "id": "api-001",
+  "group": "api",
+  "title": "/api/setup",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/setup')\" = \"200\" ]"
+ },
+ {
+  "id": "api-002",
+  "group": "api",
+  "title": "/api/daily-costs",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/daily-costs')\" = \"200\" ]"
+ },
+ {
+  "id": "api-003",
+  "group": "api",
+  "title": "/api/providers",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/providers')\" = \"200\" ]"
+ },
+ {
+  "id": "api-004",
+  "group": "api",
+  "title": "/api/models/registry",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/models/registry')\" = \"200\" ]"
+ },
+ {
+  "id": "api-005",
+  "group": "api",
+  "title": "/api/profiles",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/profiles')\" = \"200\" ]"
+ },
+ {
+  "id": "api-006",
+  "group": "api",
+  "title": "/api/work/tasks?lite=1&per=5",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/tasks?lite=1&per=5')\" = \"200\" ] && curl -s '{{BASE}}/api/work/tasks?lite=1&per=5' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('tasks') is not None, 'missing key tasks'\""
+ },
+ {
+  "id": "api-007",
+  "group": "api",
+  "title": "/api/work/tasks/detail?task=in_progress%2Flcp-pentest-fixes",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/tasks/detail?task=in_progress%2Flcp-pentest-fixes')\" = \"200\" ] ; code=$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/tasks/detail?task=in_progress%2Flcp-pentest-fixes'); [ \"$code\" = \"200\" ] || [ \"$code\" = \"404\" ]"
+ },
+ {
+  "id": "api-008",
+  "group": "api",
+  "title": "/api/work/tasks?states=all&per=5",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/tasks?states=all&per=5')\" = \"200\" ] && curl -s '{{BASE}}/api/work/tasks?states=all&per=5' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('total') is not None, 'missing key total'\""
+ },
+ {
+  "id": "api-009",
+  "group": "api",
+  "title": "/api/work/conversations?per=5",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/conversations?per=5')\" = \"200\" ] && curl -s '{{BASE}}/api/work/conversations?per=5' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('conversations') is not None, 'missing key conversations'\""
+ },
+ {
+  "id": "api-010",
+  "group": "api",
+  "title": "/api/work/cron",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/cron')\" = \"200\" ] && curl -s '{{BASE}}/api/work/cron' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('counts') is not None, 'missing key counts'\""
+ },
+ {
+  "id": "api-011",
+  "group": "api",
+  "title": "/api/work/cron/ops",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/cron/ops')\" = \"200\" ] && curl -s '{{BASE}}/api/work/cron/ops' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('pending') is not None, 'missing key pending'\""
+ },
+ {
+  "id": "api-012",
+  "group": "api",
+  "title": "/api/work/sources",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/sources')\" = \"200\" ] && curl -s '{{BASE}}/api/work/sources' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('profiles') is not None, 'missing key profiles'\""
+ },
+ {
+  "id": "api-013",
+  "group": "api",
+  "title": "/api/work/fleet",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/fleet')\" = \"200\" ] && curl -s '{{BASE}}/api/work/fleet' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('summary') is not None, 'missing key summary'\""
+ },
+ {
+  "id": "api-014",
+  "group": "api",
+  "title": "/api/work/status",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/status')\" = \"200\" ] && curl -s '{{BASE}}/api/work/status' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('available') is not None, 'missing key available'\""
+ }
+]

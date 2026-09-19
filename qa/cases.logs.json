@@ -1,0 +1,98 @@
+[
+ {
+  "id": "lg-01",
+  "group": "logs-convo",
+  "title": "Logs tab conversations renders",
+  "cmd": "out=$(curl -s '{{BASE}}/logs?view=conversations'); echo \"$out\" | grep -q 'Conversations' && echo \"$out\" | grep -q 'tab-btn'"
+ },
+ {
+  "id": "lg-02",
+  "group": "logs-convo",
+  "title": "Logs tab requests renders",
+  "cmd": "out=$(curl -s '{{BASE}}/logs?view=requests'); echo \"$out\" | grep -q 'Requests' && echo \"$out\" | grep -q 'tab-btn'"
+ },
+ {
+  "id": "lg-03",
+  "group": "logs-convo",
+  "title": "Logs tab providers renders",
+  "cmd": "out=$(curl -s '{{BASE}}/logs?view=providers'); echo \"$out\" | grep -q 'Provider decisions' && echo \"$out\" | grep -q 'tab-btn'"
+ },
+ {
+  "id": "lg-04",
+  "group": "logs-convo",
+  "title": "Logs tab decisions renders",
+  "cmd": "out=$(curl -s '{{BASE}}/logs?view=decisions'); echo \"$out\" | grep -q 'Board decisions' && echo \"$out\" | grep -q 'tab-btn'"
+ },
+ {
+  "id": "lg-005",
+  "group": "logs-convo",
+  "title": "requests tab renders with rows",
+  "cmd": "out=$(curl -s '{{BASE}}/logs?view=requests&per=5'); echo \"$out\" | grep -q 'work-table' && echo \"$out\" | grep -q 'requests'"
+ },
+ {
+  "id": "lg-006",
+  "group": "logs-convo",
+  "title": "requests API rows have conversation links when stamped",
+  "cmd": "curl -s '{{BASE}}/api/work/requests?per=10' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d['total']>0\""
+ },
+ {
+  "id": "lg-010",
+  "group": "logs-convo",
+  "title": "conversations exist with names",
+  "cmd": "curl -s '{{BASE}}/api/work/conversations?per=5' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d['total']>0; assert all(c.get('name') for c in d['conversations'])\""
+ },
+ {
+  "id": "lg-011",
+  "group": "logs-convo",
+  "title": "conversations paginate",
+  "cmd": "curl -s '{{BASE}}/api/work/conversations?per=3' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert len(d['conversations'])<=3; assert d['filter']['per']=='3'\""
+ },
+ {
+  "id": "lg-012",
+  "group": "logs-convo",
+  "title": "profile filter works",
+  "cmd": "curl -s '{{BASE}}/api/work/conversations?per=5&profile=l2' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d['total']>=0\""
+ },
+ {
+  "id": "lg-013",
+  "group": "logs-convo",
+  "title": "LLM summaries present (summary_source=llm rows)",
+  "cmd": "curl -s '{{BASE}}/api/work/conversations?per=5' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert sum(1 for c in d['conversations'] if c.get('summary'))>=1\""
+ },
+ {
+  "id": "lg-020",
+  "group": "logs-convo",
+  "title": "detail returns chronological events",
+  "cmd": "cid=$(curl -s '{{BASE}}/api/work/conversations?per=1' | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"conversations\"][0][\"id\"])'); curl -s \"{{BASE}}/api/work/conversations/detail?cid=$cid\" | python3 -c 'import sys,json; ts=[e[\"ts\"] for e in json.load(sys.stdin)[\"events\"]]; assert ts==sorted(ts), \"not chronological\"'"
+ },
+ {
+  "id": "lg-021",
+  "group": "logs-convo",
+  "title": "detail requires cid",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/conversations/detail')\" = \"400\" ]"
+ },
+ {
+  "id": "lg-022",
+  "group": "logs-convo",
+  "title": "detail unknown cid returns events empty (not 500)",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/conversations/detail?cid=nope')\" != \"500\" ]"
+ },
+ {
+  "id": "lg-030",
+  "group": "logs-convo",
+  "title": "decisions view accessible",
+  "cmd": "[ \"$(curl -s -o /dev/null -w '{{HTTP}}' '{{BASE}}/api/work/decisions')\" = \"200\" ]"
+ },
+ {
+  "id": "lg-040",
+  "group": "logs-convo",
+  "title": "provider decisions list has rows",
+  "cmd": "curl -s '{{BASE}}/api/work/provider-decisions?per=5' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d['total']>0\""
+ },
+ {
+  "id": "lg-041",
+  "group": "logs-convo",
+  "title": "provider decisions paginate",
+  "cmd": "curl -s '{{BASE}}/api/work/provider-decisions?per=3' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert len(d['rows'])<=3\""
+ }
+]
