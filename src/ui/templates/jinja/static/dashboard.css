@@ -1481,42 +1481,74 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .task-flag { color: #d29922; font-size: 0.8rem; margin-left: 0.3rem; }
 .work-h2-note { font-size: 0.75rem; font-weight: normal; letter-spacing: normal; }
 
-/* Mobile: the task tables become stacked cards. Header row is dropped, every
-   cell carries its column name via data-label and the accordion still works
-   because the JS only toggles the sibling detail row's hidden attribute. */
+/* Mobile: the whole page becomes a single column of stacked cards.
+   The tables lose their header row and every data cell becomes a label +
+   value line (label from data-label). The accordion still works because the
+   JS only toggles the sibling detail row's hidden attribute. The hard rule:
+   nothing may force horizontal page scroll — long lines wrap, tables stay
+   contained in .work-scroll (client-scroll), and the body loses its desktop
+   2rem padding. */
 @media (max-width: 720px) {
-  .work-scroll { overflow: visible; }
+  html, body { overflow-x: hidden; max-width: 100%; }
+  body { padding: 0; }
+  .main-content { padding: 0.75rem; padding-top: 3.25rem; max-width: 100%; }
+
+  /* Cards: two per row is too cramped for category labels; stack cleanly. */
+  .work-cards { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 0.5rem; }
+  .work-card { padding: 0.55rem 0.7rem; min-width: 0; }
+  .work-card-label { font-size: 0.62rem; overflow-wrap: anywhere; }
+  .work-card-value { font-size: 1.1rem; }
+
+  .work-h2 { font-size: 0.92rem; }
+
+  /* Contain every scroll region; never unclip to the page level. */
+  .work-scroll { overflow-x: auto; max-width: 100%; }
+
+  .work-table { display: block; width: 100%; max-width: 100%; }
   .work-table thead { display: none; }
-  .work-table, .work-table tbody, .work-table tr { display: block; width: 100%; }
+  .work-table tbody { display: block; width: 100%; }
+  .work-table tr { display: block; width: 100%; max-width: 100%; }
   .work-table tr.task-group {
     margin-bottom: 0.7rem;
     border: 1px solid var(--card-border, #30363d);
     border-radius: 8px;
     background: rgba(127, 127, 127, 0.04);
   }
-  .work-table tr.task-row td {
-    display: grid;
-    grid-template-columns: 118px 1fr;
-    gap: 0.35rem 0.6rem;
-    padding: 0.4rem 0.65rem !important;
-    border: none;
-    align-items: baseline;
+  .work-table tr.task-row td { border: none; }
+  .work-table td {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.1rem;
+    padding: 0.35rem 0.65rem !important;
+    min-width: 0;
+    width: 100%;
+    /* the desktop base rule sets white-space: nowrap on th/td; on a phone
+       that forbids wrapping and blows the row to min-content width. */
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
-  .work-table tr.task-row td::before {
+  .work-table td[data-label]::before {
     content: attr(data-label);
-    font-size: 0.66rem;
+    font-size: 0.62rem;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
     color: var(--muted-foreground, #8b949e);
   }
-  .work-table tr.task-row td.num::before,
-  .work-table tr.task-row td.mono::before { content: attr(data-label); }
+  .work-table td:not([data-label]) { padding: 0.25rem 0.65rem !important; }
   .work-table td.task-chev { display: none; }
-  .work-table tr.task-detail td { padding: 0 !important; }
-  .task-detail-inner { border-left: none; padding: 0.6rem 0.75rem 0.75rem; }
-  /* Compact the by-state / by-category cards into two per row. */
-  .work-cards { grid-template-columns: repeat(2, 1fr); }
-  .work-card-value { font-size: 1.05rem; }
+  .work-table tr.task-detail td { display: block; padding: 0 !important; }
+  .task-detail-inner { border-left: none; padding: 0.6rem 0.75rem 0.8rem; }
+
+  /* Long agent-written lines must wrap; never min-content the page. */
+  .task-md p, .task-md li, .task-md blockquote { overflow-wrap: anywhere; }
+  .task-md pre { white-space: pre-wrap; word-break: break-word; }
+  .task-md code { word-break: break-all; overflow-wrap: anywhere; }
+  .task-md table { display: block; overflow-x: auto; }
+  .task-summary, .work-rule { overflow-wrap: anywhere; }
+  .work-rule code { word-break: break-all; }
+  .task-chip { white-space: normal; overflow-wrap: anywhere; }
+  .work-actor { white-space: normal; }
 }
 
 /* Rendered markdown (plan / results) — GitHub-dark-ish typography at a

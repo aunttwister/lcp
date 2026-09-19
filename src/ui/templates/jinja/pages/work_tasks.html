@@ -66,9 +66,9 @@
         <tbody>
           {% for m in view.conflicts %}
             <tr>
-              <td>{{ m.subject }}</td>
-              <td><span class="work-actor">{{ m.payload.state }}</span></td>
-              <td class="muted">{{ m.payload.claimed_status }}</td>
+              <td data-label="Task">{{ m.subject }}</td>
+              <td data-label="Directory"><span class="work-actor">{{ m.payload.state }}</span></td>
+              <td data-label="PLAN.md claims" class="muted">{{ m.payload.claimed_status }}</td>
             </tr>
           {% endfor %}
         </tbody>
@@ -86,11 +86,11 @@
         <tbody>
           {% for a in view.assessments[:8] %}
             <tr>
-              <td class="mono muted">{{ a.ts_iso }}</td>
-              <td><span class="task-chip">{{ a.action }}</span></td>
-              <td><code>{{ a.slug or '-' }}</code></td>
-              <td class="muted">{{ a.summary or a.reason or '' | truncate(110) }}</td>
-              <td>{% if a.applied %}<span class="work-actor">applied</span>{% else %}<span class="muted">skipped ({{ a.reason or '' }})</span>{% endif %}</td>
+              <td data-label="When" class="mono muted">{{ a.ts_iso }}</td>
+              <td data-label="Action"><span class="task-chip">{{ a.action }}</span></td>
+              <td data-label="Task"><code>{{ a.slug or '-' }}</code></td>
+              <td data-label="Finding" class="muted">{{ a.summary or a.reason or '' | truncate(110) }}</td>
+              <td data-label="Status">{% if a.applied %}<span class="work-actor">applied</span>{% else %}<span class="muted">skipped ({{ a.reason or '' }})</span>{% endif %}</td>
             </tr>
           {% endfor %}
         </tbody>
