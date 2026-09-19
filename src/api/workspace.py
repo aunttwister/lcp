@@ -59,7 +59,11 @@ def _probe(path: str, kind: str) -> Dict[str, Any]:
         if kind == "sqlite":
             import sqlite3
             con = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
-            con.execute("SELECT 1").fetchone()
+            # SELECT 1 is a constant expression that never touches the file,
+            # so a corrupt ledger sailed through the probe as "readable
+            # read-only". Querying sqlite_master forces a real read and
+            # surfaces "file is not a database" for garbage input.
+            con.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
             info["detail"] = "readable read-only"
             con.close()
         elif kind == "tasks":
