@@ -63,8 +63,18 @@ def _plan_summary(plan_text: str) -> Optional[str]:
 
 
 def tasks_dir() -> str:
-    """Resolve the task tree root, allowing an env override."""
-    return os.environ.get("LCP_WORK_TASKS_DIR", DEFAULT_TASKS_DIR)
+    """Resolve the task tree root: env override, then configured sources."""
+    env = os.environ.get("LCP_WORK_TASKS_DIR")
+    if env:
+        return env
+    try:
+        from . import work_sources
+        src = work_sources.load_sources()
+        if src and src.get("tasks_root"):
+            return src["tasks_root"]
+    except Exception:  # noqa: BLE001
+        pass
+    return DEFAULT_TASKS_DIR
 
 
 def todos_path() -> str:

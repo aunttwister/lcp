@@ -161,6 +161,11 @@ def render_work_cron_page(config, engine=None) -> str:
                          or o.get("created_at") or "", reverse=True)
     except Exception:
         view["ops"] = []
+    try:
+        from ..api import work_sources
+        view["sources"] = work_sources.resolved_view()
+    except Exception:
+        view["sources"] = None
     return render_page("pages/work_cron.html", config, engine,
                        active_page="work_cron", view=view)
 

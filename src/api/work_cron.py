@@ -29,8 +29,18 @@ _WARN_STATUSES = {"disabled", "paused"}
 
 
 def tasks_dir() -> str:
-    """Resolve the task tree root, allowing an env override."""
-    return os.environ.get("LCP_WORK_TASKS_DIR", DEFAULT_TASKS_DIR)
+    """Resolve the task tree root: env override, then configured sources."""
+    env = os.environ.get("LCP_WORK_TASKS_DIR")
+    if env:
+        return env
+    try:
+        from . import work_sources
+        src = work_sources.load_sources()
+        if src and src.get("tasks_root"):
+            return src["tasks_root"]
+    except Exception:  # noqa: BLE001
+        pass
+    return DEFAULT_TASKS_DIR
 
 
 def _snapshot_path() -> str:
@@ -111,6 +121,7 @@ def cron_view() -> Dict[str, Any]:
         prof = {
             "profile": p.get("profile"),
             "legacy": bool(p.get("legacy")),
+            "hidden": bool(p.get("hidden")),
             "error": p.get("error"),
             "jobs": [_decorate_job(j, now) for j in (p.get("jobs") or [])],
         }

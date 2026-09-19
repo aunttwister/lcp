@@ -3419,6 +3419,34 @@ class WorkEndpoints:
             return
         self._send_json(op, 201)
 
+    def _serve_work_sources_get(self):
+        """GET /api/work/sources — resolved work-layer source configuration."""
+        from ..api import work_sources
+
+        try:
+            self._send_json(work_sources.resolved_view())
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _serve_work_sources_put(self):
+        """PUT /api/work/sources — validate + persist source configuration."""
+        from ..api import work_sources
+
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        try:
+            saved = work_sources.save_sources(body)
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 400)
+            return
+        except Exception as e:
+            self._send_json({"error": "internal: %s" % e}, 500)
+            return
+        self._send_json({"saved": True, "sources": saved})
+
     def _serve_work_status_api(self):
         """GET /api/work/status — the workspace MODULE's own health.
 

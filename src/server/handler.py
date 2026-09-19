@@ -646,6 +646,8 @@ class LCPHandler(
             self._serve_profile_update(profile)
         elif self.path == "/api/alerts/config":
             self._serve_alerts_config_update()
+        elif self.path == "/api/work/sources":
+            self._serve_work_sources_put()
         elif self.path.startswith("/api/budgets/") and len(self.path.split("/")) == 4:
             budget_id = self.path.split("/")[3]
             self._serve_budget_update(budget_id)
@@ -882,6 +884,10 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_work_cron_ops_get())
     t.post("api.work.cron.ops", exact("/api/work/cron/ops"),
            lambda h, p: h._serve_work_cron_ops_post())
+    t.get("api.work.sources", exact("/api/work/sources"),
+          lambda h, p: h._serve_work_sources_get())
+    t.put("api.work.sources", exact("/api/work/sources"),
+          lambda h, p: h._serve_work_sources_put())
     t.get("api.work.status", exact("/api/work/status"),
           lambda h, p: h._serve_work_status_api())
 
