@@ -212,15 +212,24 @@ function renderPemChain() {
     html = '<li class="empty" style="padding:0.5rem;font-size:0.6875rem">No providers in chain</li>';
   } else {
     _editProfileChain.forEach(function(s, i) {
+      // Model sync: if the stored model is not offered by the selected
+      // provider (e.g. provider was re-pointed at a new upstream), snap to the
+      // provider's first offered model. Without this the <select> displays the
+      // first option while _editProfileChain[i].model keeps the stale value,
+      // and Save persists the stale model.
+      var provModels = (_allProviders[s.provider] || {}).models || [];
+      if (provModels.length && provModels.indexOf(s.model) === -1) {
+        s.model = provModels[0];
+      }
       html += '<li class="chain-item" data-idx="' + i + '">';
       html += '<span class="drag-handle">⋮⋮</span>';
-      html += '<select onchange="_editProfileChain[' + i + '].provider = this.value; renderPemChain();" style="background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:4px;color:hsl(var(--foreground));padding:0.125rem 0.375rem;font-size:0.6875rem">';
+      html += '<select onchange="_editProfileChain[' + i + '].provider = this.value; var _pm = ((_allProviders[this.value] || {}).models || []); _editProfileChain[' + i + '].model = (_pm.length ? _pm[0] : _editProfileChain[' + i + '].model); renderPemChain();" style="background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:4px;color:hsl(var(--foreground));padding:0.125rem 0.375rem;font-size:0.6875rem">';
       provNames.forEach(function(pn) {
         var sel = s.provider === pn ? ' selected' : '';
         html += '<option value="' + pn + '"' + sel + '>' + pn + '</option>';
       });
       html += '</select>';
-      var models = (_allProviders[s.provider] || {}).models || [];
+      var models = provModels;
       html += '<select onchange="_editProfileChain[' + i + '].model = this.value" style="background:hsl(var(--background));border:1px solid hsl(var(--card-border));border-radius:4px;color:hsl(var(--foreground));padding:0.125rem 0.375rem;font-size:0.6875rem">';
       models.forEach(function(m) {
         var sel = s.model === m ? ' selected' : '';
