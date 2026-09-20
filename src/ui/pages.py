@@ -126,11 +126,24 @@ def render_work_tasks_page(config, engine=None, params=None) -> str:
     A task's state is its directory, so this view reads the tree rather than a
     status field -- the state cannot drift from where the item actually lives.
     ``params`` carries the server-side filter/pagination query string.
+
+    Two tabs, one page: ``?view=tasks`` (default) is the task tree itself;
+    ``?view=assessments`` is the session-assessment ledger the 4h L1 round
+    writes. They share a sidebar entry because they describe the same objects —
+    a task's directory state, and what the round decided about it.
     """
     from .render import render_page
     from ..api import work_tasks
+
+    params = params or {}
+    tab = str(params.get("view") or "tasks").strip().lower()
+    if tab not in ("tasks", "assessments"):
+        tab = "tasks"
     try:
-        view = work_tasks.tasks_view(params or {})
+        if tab == "assessments":
+            view = work_tasks.assessments_view()
+        else:
+            view = work_tasks.tasks_view(params)
     except Exception as e:  # never blank the page on a data error
         view = {
             "available": False,
@@ -138,6 +151,7 @@ def render_work_tasks_page(config, engine=None, params=None) -> str:
                       "hint": "%s: %s" % (type(e).__name__, e)},
             "counts": {}, "total": 0, "tasks": [], "todos": None, "conflicts": [],
         }
+    view["tab"] = tab
     return render_page("pages/work_tasks.html", config, engine,
                        active_page="work_tasks", view=view)
 

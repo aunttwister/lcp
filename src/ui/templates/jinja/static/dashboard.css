@@ -1410,6 +1410,15 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .todo-group summary { cursor: pointer; list-style-position: inside; }
 .todo-group summary::-webkit-details-marker { color: hsl(var(--muted-foreground)); }
 .todo-hidden { display: none; }
+
+/* Assessments tab hides whole rows client-side (action filter + "Show more"),
+   so it needs the same !important guard the [hidden] accordion rows needed: the
+   mobile block authors `display: block` on .work-table tr, and a plain class
+   rule loses to that. */
+.work-table tr.assess-hidden { display: none !important; }
+.assess-title { font-size: 0.75rem; margin-top: 0.1rem; }
+.assess-meta { font-size: 0.72rem; margin: 0.6rem 0 0; }
+.assess-meta code { font-size: 0.7rem; }
 .todo-more { margin: 0.5rem 0 0.25rem; }
 
 /* Tasks page — server-side filter toolbar + pager */

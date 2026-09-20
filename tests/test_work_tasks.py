@@ -228,7 +228,9 @@ class TestAssessmentFeed:
         assert feed[0]["ts_iso"].startswith("1970")
         assert feed[1]["applied"] is True
 
-    def test_view_includes_assessments(self, tmp_path, monkeypatch):
+    def test_tasks_view_no_longer_carries_assessments(self, tmp_path, monkeypatch):
+        """The ledger moved to its own tab — the task-tree payload must not keep
+        paying for it on every lazy fetch."""
         root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
         wl = tmp_path / ".work-layers"
         wl.mkdir()
@@ -237,9 +239,110 @@ class TestAssessmentFeed:
                         "summary": "touched", "applied": True, "reason": None}) + "\n",
             encoding="utf-8")
         monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
-        v = wt.tasks_view()
-        assert len(v["assessments"]) == 1
-        assert v["assessments"][0]["action"] == "note"
+        assert "assessments" not in wt.tasks_view()
+
+    def test_assessments_view_rollup_and_rich_fields(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        wl = tmp_path / ".work-layers"
+        wl.mkdir()
+        (wl / "assessments.jsonl").write_text(
+            json.dumps({"ts": 300.0, "round_actor": "homelab-expert-l1",
+                        "action": "complete", "slug": "demo-task",
+                        "title": "Demo task", "summary": "finding " * 400,
+                        "evidence": ["sess-1", "sess-2"], "applied": True}) + "\n"
+            + json.dumps({"ts": 200.0, "round_actor": "homelab-expert-l1",
+                          "action": "complete", "slug": "other",
+                          "title": "Other", "summary": "dup", "evidence": [],
+                          "applied": False, "reason": "duplicate"}) + "\n",
+            encoding="utf-8")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        v = wt.assessments_view()
+        assert v["total"] == 2 and v["applied"] == 1 and v["skipped"] == 1
+        assert v["by_action"] == {"complete": 2}
+        newest = v["records"][0]                    # newest first
+        assert newest["round_actor"] == "homelab-expert-l1"
+        assert newest["title"] == "Demo task"
+        assert newest["evidence"] == ["sess-1", "sess-2"]
+        assert newest["n_evidence"] == 2
+        assert newest["summary_html"]               # markdown-rendered finding
+        assert len(newest["summary"]) == wt._ASSESS_SUMMARY_CAP
+        assert newest["summary_truncated"] is True
+        assert v["records"][1]["reason"] == "duplicate"
+
+    def test_assessments_view_tolerates_scalar_evidence(self, tmp_path, monkeypatch):
+        """One malformed record must not blank the tab."""
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        wl = tmp_path / ".work-layers"
+        wl.mkdir()
+        (wl / "assessments.jsonl").write_text(
+            json.dumps({"ts": 1.0, "action": "note", "slug": "d",
+                        "evidence": "sess-solo", "applied": True}) + "\n",
+            encoding="utf-8")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        feed = wt.assessments_view()["records"]
+        assert feed[0]["evidence"] == ["sess-solo"]
+        assert feed[0]["n_evidence"] == 1
+        assert feed[0]["title"] == ""
+
+    def test_assessments_view_empty_when_no_ledger(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        v = wt.assessments_view()
+        assert v["records"] == [] and v["total"] == 0 and v["by_action"] == {}
+
+
+class TestTasksPageTabs:
+    """The page renders two tabs off one route; these are the smoke tests that
+    catch a Jinja-level break (the 500 class of bug that unit-testing the API
+    alone cannot see)."""
+
+    @staticmethod
+    def _cfg():
+        from unittest.mock import MagicMock
+        cfg = MagicMock()
+        cfg._data = {}
+        return cfg
+
+    def test_assessments_tab_renders_ledger_rows(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        wl = tmp_path / ".work-layers"
+        wl.mkdir()
+        (wl / "assessments.jsonl").write_text(
+            json.dumps({"ts": 300.0, "action": "complete", "slug": "demo-task",
+                        "title": "Demo", "summary": "did a thing",
+                        "evidence": ["s1"], "applied": True,
+                        "round_actor": "homelab-expert-l1"}) + "\n",
+            encoding="utf-8")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        from src.ui.pages import render_work_tasks_page
+        html = render_work_tasks_page(self._cfg(), None, {"view": "assessments"})
+        assert 'id="assess-body"' in html
+        assert "did a thing" in html
+        assert "homelab-expert-l1" in html
+        assert 'class="tab-btn active"' in html
+        # the task link must widen the state filter: the tasks view defaults to
+        # in_progress, so a slug sitting in new/ would otherwise match nothing.
+        assert '/work/tasks?q=demo-task&amp;states=all' in html
+        # the tasks-tab init blob reads view.filter, which the ledger view does
+        # not have — it must not be emitted here (undefined -> tojson raises).
+        assert 'id="tasks-init"' not in html
+
+    def test_tasks_tab_hides_the_conflicts_section(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, state="completed", slug="demo-task",
+                        plan="# T\n\n**Status:** in_progress\n")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        from src.ui.pages import render_work_tasks_page
+        html = render_work_tasks_page(self._cfg(), None, {})
+        assert wt.tasks_view()["conflicts"]          # the API still reports it
+        assert "Status conflicts" not in html        # the page no longer shows it
+        assert 'id="tasks-init"' in html
+
+    def test_unknown_tab_falls_back_to_tasks(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        from src.ui.pages import render_work_tasks_page
+        html = render_work_tasks_page(self._cfg(), None, {"view": "../../etc/passwd"})
+        assert 'id="tasks-init"' in html and 'id="assess-body"' not in html
 
 
 class TestMarkdown:

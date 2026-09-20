@@ -26,6 +26,10 @@ STATES = ("new", "in_progress", "completed", "cancelled")
 # full (capped) text inside the expander. Truncation is flagged, not silent.
 _PLAN_CAP = 8000
 _RESULTS_CAP = 2000
+# Assessments tab: how many ledger records to carry, and how much of each
+# finding (the rest is explicitly flagged, never silently cut).
+_ASSESS_CAP = 200
+_ASSESS_SUMMARY_CAP = 2000
 
 
 def _md_to_html(text: str) -> str:
@@ -130,12 +134,17 @@ def _session_facts(tdir: str) -> Dict[str, Any]:
     return {"text": text, "html": _md_to_html(text), "present": True, "truncated": truncated}
 
 
-def _assessment_feed(limit: int = 40) -> List[Dict[str, Any]]:
+def _assessment_feed(limit: int = _ASSESS_CAP) -> List[Dict[str, Any]]:
     """Newest decisions from .work-layers/assessments.jsonl (append-only).
 
     The ledger is written by the 4h session-assessment round; a corrupt or
     absent file must never crash the view, so record-level tolerance is
     mandatory (one bad line is skipped, not fatal).
+
+    The record is carried WHOLE (summary markdown-rendered, evidence session
+    ids, the assessor actor, the skip reason) because the Assessments tab's job
+    is to let the operator SEE what the round decided and why — the old 200-char
+    one-liner hid exactly the part that explains a skipped decision.
     """
     root = tasks_dir()
     p = os.path.join(root, ".work-layers", "assessments.jsonl")
@@ -157,17 +166,55 @@ def _assessment_feed(limit: int = 40) -> List[Dict[str, Any]]:
     records.sort(key=lambda r: r.get("ts", 0) or 0, reverse=True)
     out = []
     for r in records[:limit]:
+        raw_summary = r.get("summary") or ""
+        summary = raw_summary[:_ASSESS_SUMMARY_CAP]
+        evidence = r.get("evidence")
+        if evidence is None:
+            evidence = r.get("evidence_sessions") or []
+        if not isinstance(evidence, list):
+            evidence = [str(evidence)]
+        evidence = [str(e) for e in evidence if str(e).strip()]
         out.append({
             "ts": r.get("ts"),
             "ts_iso": time.strftime("%Y-%m-%d %H:%M",
                                     time.gmtime(r.get("ts", 0) or 0)),
-            "action": r.get("action"),
+            "action": r.get("action") or "?",
             "slug": r.get("slug"),
-            "summary": (r.get("summary") or "")[:200],
+            "title": (r.get("title") or "").strip(),
+            "summary": summary,
+            "summary_html": _md_to_html(summary) if summary else None,
+            "summary_truncated": len(raw_summary) > _ASSESS_SUMMARY_CAP,
+            "n_evidence": len(evidence),
+            "evidence": evidence[:8],
+            "round_actor": r.get("round_actor"),
             "applied": bool(r.get("applied")),
             "reason": r.get("reason"),
         })
     return out
+
+
+def assessments_view(records: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """The Work › Tasks › Assessments tab: the session-assessment ledger.
+
+    Returns the feed plus the rollup the tab's stat cards need (how many
+    decisions the round reached, how many it actually applied, and the
+    per-action split) — an assessment round that applied nothing is a signal
+    worth seeing at a glance, not something to infer from a table.
+    """
+    if records is None:
+        records = _assessment_feed()
+    by_action: Dict[str, int] = {}
+    for r in records:
+        by_action[r["action"]] = by_action.get(r["action"], 0) + 1
+    applied = sum(1 for r in records if r["applied"])
+    return {
+        "available": os.path.isdir(tasks_dir()),
+        "records": records,
+        "total": len(records),
+        "applied": applied,
+        "skipped": len(records) - applied,
+        "by_action": dict(sorted(by_action.items(), key=lambda kv: -kv[1])),
+    }
 
 
 def _read_status_line(plan_path: str) -> Optional[str]:
@@ -493,7 +540,6 @@ def tasks_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "by_label": by_label,
         "labels_meta": labels_meta,
         "conflicts": conflicts,
-        "assessments": _assessment_feed(),
         "tasks": tasks,
         "todos": _todo_view(),
         "filter": {
@@ -654,7 +700,9 @@ _TODO_TIMELINE_CAP = 50
 _TODO_ENTRY_CAP = 500
 _TODO_ITEM_CAP = 180
 # todo.md groups that duplicate the All Tasks state filters below — dropped.
-_TODO_SKIP_SECTIONS = ("in progress", "new / pending", "completed")
+# "queued" goes too: the Queued group is a dispatch buffer, not task state, and
+# the operator asked for it off this page (2026-09-20).
+_TODO_SKIP_SECTIONS = ("in progress", "new / pending", "completed", "queued")
 
 # Decorated status markers used INSIDE task descriptions (✅ ⏸ 🆕 ⚠ …).
 # Arrows (→) and other prose symbols are deliberately NOT in the set.

@@ -70,17 +70,30 @@ class TestTodoView:
     def test_sections_skip_table_duplicates(self, todo_tree):
         v = wt._todo_view()
         titles = [s["title"] for s in v["sections"]]
-        # the state groups duplicated by the All Tasks filter are dropped;
-        # only non-state groups (Queued etc.) survive
+        # the state groups duplicated by the All Tasks filter are dropped, and so
+        # is Queued — a dispatch buffer, not task state (operator, 2026-09-20).
+        # SAMPLE has no other group, so nothing survives.
         assert "In Progress (2)" not in titles
         assert "New / Pending (33)" not in titles
         assert "Completed (89)" not in titles
-        assert titles == ["Queued (2)"]
-        queued = v["sections"][0]
-        assert queued["expanded"] is False
-        assert [e["text"] for e in queued["entries"]] == ["zgx-night-batch-pipeline (queued)"]
-        # no row carries the pipe char itself
-        assert all("|" not in i["text"] for s in v["sections"] for i in s["entries"])
+        assert not any(t.lower().startswith("queued") for t in titles)
+        assert titles == []
+
+    def test_non_state_section_still_renders(self, tmp_path, monkeypatch):
+        """Skipping state + Queued groups must not swallow a real one."""
+        tree = tmp_path / "work" / "tasks"
+        tree.mkdir(parents=True)
+        (tmp_path / "work" / "todo.md").write_text(textwrap.dedent('''\
+            # T
+            ## Blocked on hardware (1)
+
+            ### nas-audit-phase7 (blocked)
+        '''), encoding="utf-8")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tree))
+        v = wt._todo_view()
+        assert [s["title"] for s in v["sections"]] == ["Blocked on hardware (1)"]
+        assert [e["text"] for e in v["sections"][0]["entries"]] == \
+            ["nas-audit-phase7 (blocked)"]
 
     def test_truncation_flagged(self, todo_tree, monkeypatch):
         import os
@@ -107,7 +120,7 @@ class TestTodoView:
         tree.mkdir(parents=True)
         (tmp_path / "work" / "todo.md").write_text(textwrap.dedent('''\
             # T
-            ## Queued (2)
+            ## Blocked on hardware (2)
 
             ### serbian-tts-stt — ⏸ PARKED 2026-09-06 → next step
             ### zgx-fp8kv-cache — ✅ COMPLETED
