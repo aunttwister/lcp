@@ -436,9 +436,12 @@ class HealthEndpoints:
                 "failures": h["consecutive_failures"],
                 "last_success": h["last_success"],
                 "last_failure": h["last_failure"],
-                "last_failure_reason": h.get("last_failure_reason"),
-                "base_url": url,
                 "tripped_until": tripped_until,
+                # base_url / last_failure_reason are intentionally REDACTED:
+                # /health is served unauthenticated (uptime checks, link
+                # checkers). The private provider endpoint map was disclosed
+                # through this route (CWE-200, Strix 09-10); status/failure
+                # counters are all the health consumers need.
             }
         self._send_json({
             "status": "ok",

@@ -78,3 +78,54 @@ class TestSecretKeyResolution:
             fh.write(key)
         with patch.dict(os.environ, {}, clear=True):
             assert crypto.get_secret_key(temp_data_dir) == key
+
+
+class TestCryptoFailClosed:
+    """CWE-310 hardening: the fallback key path must fail loudly and
+    deterministically, never hand out an absent/falsy key."""
+
+    def test_fallback_io_error_raises_not_none_key(self, temp_data_dir):
+        import errno
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("src.api.crypto.os.open", side_effect=OSError(errno.EACCES, "permission denied")):
+                with pytest.raises(RuntimeError):
+                    crypto.get_secret_key(temp_data_dir)
+
+    def test_fallback_loader_returns_none_but_get_secret_key_raises(self, temp_data_dir):
+        import errno
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("src.api.crypto.os.open", side_effect=OSError(errno.EACCES, "permission denied")):
+                assert crypto._load_or_create_fallback_key(temp_data_dir) is None
+                with pytest.raises(RuntimeError):
+                    crypto.get_secret_key(temp_data_dir)
+
+    def test_fallback_created_key_matches_persisted_file(self, temp_data_dir):
+        import os.path as _osp
+        with patch.dict(os.environ, {}, clear=True):
+            k = crypto.get_secret_key(temp_data_dir)
+            with open(_osp.join(temp_data_dir, ".lcp_secret_key"), "rb") as fh:
+                persisted = fh.read()
+        assert k == persisted
+
+    def test_decrypt_bad_tag_logs_distinct_event(self, temp_data_dir):
+        """A present-but-tampered token must log crypto_decrypt_bad_tag, not the
+        catch-all crypto_decrypt_failed, so 'no token' and 'bad tag' differ."""
+        with patch.dict(os.environ, {"LCP_SECRET_KEY": "master-key-123"}):
+            token = crypto.encrypt_secret("sk-x", temp_data_dir)
+            tampered = token[:-6] + "AAAAAA" + token[-6:]
+            with patch("src.api.crypto.logger.warning") as mw:
+                out = crypto.decrypt_secret(tampered, temp_data_dir)
+            with patch("src.api.crypto.logger.error") as me:
+                crypto.decrypt_secret(tampered, temp_data_dir)
+        assert out == ""
+        warn_events = [c.args[0] for c in mw.call_args_list if c.args]
+        err_events = [c.args[0] for c in me.call_args_list if c.args]
+        assert any("crypto_decrypt_bad_tag" in e for e in warn_events)
+        assert not any("crypto_decrypt_failed" in e for e in err_events)
+
+    def test_decrypt_empty_token_no_log(self, temp_data_dir):
+        with patch.dict(os.environ, {"LCP_SECRET_KEY": "master-key-123"}):
+            with patch("src.api.crypto.logger.warning") as mw, patch("src.api.crypto.logger.error") as me:
+                assert crypto.decrypt_secret("", temp_data_dir) == ""
+        assert mw.call_count == 0
+        assert me.call_count == 0

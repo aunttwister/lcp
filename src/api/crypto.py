@@ -54,10 +54,13 @@ def _load_or_create_fallback_key(data_dir: str | Path) -> bytes | None:
             return path.read_bytes()
         key = os.urandom(32)
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Write with 0o600 so only the owner can read it.
+        # Write with 0o600 so only the owner can read it. os.write can return
+        # short counts, so loop until the whole key is persisted.
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            os.write(fd, key)
+            view = memoryview(key)
+            while view:
+                view = view[os.write(fd, view):]
         finally:
             os.close(fd)
         logger.warning(
@@ -65,9 +68,17 @@ def _load_or_create_fallback_key(data_dir: str | Path) -> bytes | None:
             path=str(path),
             hint=f"Set {SECRET_KEY_ENV} to control the master key instead.",
         )
-        return key
+        # Deterministic: return exactly what was persisted, not the in-memory
+        # buffer, so the key handed out always matches the file the next boot
+        # reads (CWE-310 hardening).
+        return path.read_bytes()
     except Exception as e:
-        logger.error("crypto_fallback_key_failed", error=str(e))
+        logger.error(
+            "crypto_fallback_key_failed",
+            path=str(path),
+            errno=getattr(e, "errno", None),
+            error=str(e),
+        )
         return None
 
 
@@ -111,6 +122,11 @@ def decrypt_secret(token: str, data_dir: str | Path = "data") -> str:
     try:
         fernet = Fernet(derive_fernet_key(get_secret_key(data_dir)))
         return fernet.decrypt(token.encode("utf-8")).decode("utf-8")
-    except (InvalidToken, Exception) as e:
+    except InvalidToken:
+        # Distinct log key: token PRESENT but the HMAC tag did not verify —
+        # callers can tell "no token" (empty input) from "tampered/bad key".
+        logger.warning("crypto_decrypt_bad_tag")
+        return ""
+    except Exception as e:
         logger.error("crypto_decrypt_failed", error=str(e))
         return ""

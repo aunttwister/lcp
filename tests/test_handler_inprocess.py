@@ -112,10 +112,14 @@ class TestDoGet:
         assert h.send_response.called
         combined = _get_written_bytes(h)
         assert b"providers" in combined
-        # Verify provider health includes last_failure_reason field
+        # CWE-200 redaction: provider health must NOT expose base_url or
+        # last_failure_reason (private provider endpoint map) on this
+        # unauthenticated route; status counters remain.
         data = json.loads(combined)
         for key, info in data.get("providers", {}).items():
-            assert "last_failure_reason" in info, f"provider {key} missing last_failure_reason"
+            assert "base_url" not in info, f"provider {key} leaks base_url"
+            assert "last_failure_reason" not in info, f"provider {key} leaks last_failure_reason"
+            assert "status" in info
 
     def test_models(self, temp_db):
         LCPHandler.config.profiles = {"l2": {"chain": []}, "l1": {"chain": []}}

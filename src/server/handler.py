@@ -363,6 +363,18 @@ class LCPHandler(
                                 f"Budget '{blocked}' has been exceeded for this key/profile"
                             )
                     self._current_key_id = key_info.get("id")
+                else:
+                    # Fail CLOSED when the key-manager service cannot be
+                    # resolved: an unavailable verifier must not behave as
+                    # "no key needed" (CWE-287). Same 401 an invalid or
+                    # revoked key produces.
+                    logger.error(
+                        "auth_failed",
+                        reason="key_manager_unavailable",
+                        profile=profile,
+                        client_ip=self.client_address[0],
+                    )
+                    raise AuthError("Key manager unavailable — authentication cannot be verified. Try again later.")
         except (AuthError, CreditExhaustedError, ForbiddenError) as e:
             self._send_error(e)
             return
