@@ -24,6 +24,14 @@ SAMPLE = textwrap.dedent('''\
     - [ ] research phase
     - [x] outline
 
+    ## 🟡 New / Pending (33)
+
+    ### dashboard-ui-components (pending item)
+
+    ## 🆕 Queued (2)
+
+    ### zgx-night-batch-pipeline (queued)
+
     ## ✅ Completed (89)
 
     ### zgx-fp8kv-cache — ✅ COMPLETED
@@ -59,21 +67,18 @@ class TestTodoView:
         assert "decision-pipeline-taskboard" in v["timeline"][0]["text"]
         assert v["timeline"][0]["html"].startswith("<p>")  # markdown-rendered
 
-    def test_sections_and_items_tables_skipped(self, todo_tree):
+    def test_sections_skip_table_duplicates(self, todo_tree):
         v = wt._todo_view()
         titles = [s["title"] for s in v["sections"]]
-        assert titles == ["In Progress (2)", "Completed (89)"]
-        inprog = v["sections"][0]
-        assert inprog["expanded"] is True
-        assert v["sections"][1]["expanded"] is False
-        # h3 items + table data rows (header + separator dropped)
-        assert [e["text"] for e in inprog["entries"]] == [
-            "mimo-style-run-dashboard (CREATED 2026-09-18 — aunttwister)",
-            "state · in_progress",
-            "priority · high",
-            "apple-ai-compute-thesis (created 2026-09-13)",
-        ]
-        assert inprog["entries"][1]["table_row"] is True
+        # the state groups duplicated by the All Tasks filter are dropped;
+        # only non-state groups (Queued etc.) survive
+        assert "In Progress (2)" not in titles
+        assert "New / Pending (33)" not in titles
+        assert "Completed (89)" not in titles
+        assert titles == ["Queued (2)"]
+        queued = v["sections"][0]
+        assert queued["expanded"] is False
+        assert [e["text"] for e in queued["entries"]] == ["zgx-night-batch-pipeline (queued)"]
         # no row carries the pipe char itself
         assert all("|" not in i["text"] for s in v["sections"] for i in s["entries"])
 
@@ -102,7 +107,7 @@ class TestTodoView:
         tree.mkdir(parents=True)
         (tmp_path / "work" / "todo.md").write_text(textwrap.dedent('''\
             # T
-            ## In Progress (1)
+            ## Queued (2)
 
             ### serbian-tts-stt — ⏸ PARKED 2026-09-06 → next step
             ### zgx-fp8kv-cache — ✅ COMPLETED

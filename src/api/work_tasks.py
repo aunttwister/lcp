@@ -567,6 +567,11 @@ def _todo_view() -> Optional[Dict[str, Any]]:
             # "In Progress" is the one group that should open by default.
             expanded = raw_title.startswith("🔴")
             title = raw_title.lstrip("🆕🔴🟡📋✅⚪🟢").strip()
+            # The All Tasks table below already covers these states with
+            # filters/search — the todo.md groups are redundant noise.
+            if title.lower().startswith(_TODO_SKIP_SECTIONS):
+                section = None
+                continue
             section = {"title": title, "expanded": expanded, "entries": []}
             out["sections"].append(section)
         elif s.startswith("### ") and section is not None:
@@ -648,6 +653,8 @@ def task_detail(key: str) -> Dict[str, Any]:
 _TODO_TIMELINE_CAP = 50
 _TODO_ENTRY_CAP = 500
 _TODO_ITEM_CAP = 180
+# todo.md groups that duplicate the All Tasks state filters below — dropped.
+_TODO_SKIP_SECTIONS = ("in progress", "new / pending", "completed")
 
 # Decorated status markers used INSIDE task descriptions (✅ ⏸ 🆕 ⚠ …).
 # Arrows (→) and other prose symbols are deliberately NOT in the set.
