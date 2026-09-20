@@ -35,7 +35,7 @@ CASES += [
              "assert not any(c['name'].startswith('Conversation c') for c in d['conversations'])\"")},
     {"id": "ms-conv-2", "group": G, "title": "LLM summary coverage > 500 conversations",
      "cmd": ("python3 -c \"import sqlite3; "
-             "con=sqlite3.connect('/your/data/app/lcp-staging/data/costs.db'); "
+             "con=sqlite3.connect('/your/data/app/lcp/data/costs.db'); "
              "n=con.execute(\\\"SELECT count(*) FROM conversations WHERE summary_source='llm'\\\").fetchone()[0]; "
              "assert n>500, n\"")},
     {"id": "ms-conv-3", "group": G, "title": "conversations page shows names in table",
