@@ -624,7 +624,10 @@ class TestDiscoverEdges:
         assert result["models"] == [{"id": "model-a"}, {"id": "model-b"}]
 
     @patch("urllib.request.urlopen")
-    def test_discover_llamacpp_meta(self, mock_urlopen, temp_db):
+    def test_discover_llamacpp_meta(self, mock_urlopen, temp_db, monkeypatch):
+        # llama.cpp on loopback is blocked by the SSRF guard by default; the
+        # operator escape hatch (LCP_SSRF_ALLOWLIST) restores local discovery.
+        monkeypatch.setenv("LCP_SSRF_ALLOWLIST", "127.0.0.0/8")
         mock_resp = MagicMock()
         mock_resp.read.return_value = json.dumps({
             "data": [{

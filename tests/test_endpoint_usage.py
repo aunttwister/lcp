@@ -390,8 +390,10 @@ class TestProviderTest:
         h.do_POST()
         assert _status(h) == 400
 
-    def test_works_without_api_key(self, temp_db):
-        """llama.cpp (local) needs no API key — test connection must proceed without one."""
+    def test_works_without_api_key(self, temp_db, monkeypatch):
+        """llama.cpp (local) needs no API key — test connection must proceed without one.
+        Loopback here is explicitly allowlisted (the SSRF guard's default blocks it)."""
+        monkeypatch.setenv("LCP_SSRF_ALLOWLIST", "127.0.0.0/8")
         body = {"api_base": "http://localhost:8080/v1", "api_key": "", "provider": "llamacpp", "model": "m"}
         h = self._body_handler(temp_db, body)
         mock_resp = MagicMock()

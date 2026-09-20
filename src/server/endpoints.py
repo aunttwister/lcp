@@ -44,7 +44,10 @@ targets, accepting worse ergonomics), not a code cleanup. Do that deliberately
 if ever, not as a drive-by.
 """
 
+import ipaddress
 import json
+import os
+import socket
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
@@ -72,6 +75,99 @@ def _credential_store_for(handler):
         "credential_store",
         fallback=lambda: get_credential_store(handler.engine),
     )
+
+
+# Networks a provider test/discover fetch must never reach unless explicitly
+# allowlisted (SSRF guard, CWE-918). Covers RFC1918, loopback, link-local
+# (includes the cloud metadata address 169.254.169.254), CGNAT, multicast,
+# reserved, IPv6 loopback/ULA/link-local/multicast and the documentation range.
+_PRIVATE_NETWORKS = (
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.0.0.0/24"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("224.0.0.0/4"),
+    ipaddress.ip_network("240.0.0.0/4"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("::/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("ff00::/8"),
+    ipaddress.ip_network("2001:db8::/32"),
+)
+
+
+def _ssrf_allowlist() -> list:
+    """Parse LCP_SSRF_ALLOWLIST (comma-separated CIDRs) into ip_network objects.
+
+    Invalid entries are logged and skipped; the default (unset) policy is
+    public-only, i.e. provider test/discover may only fetch public addresses.
+    Set it (e.g. ``LCP_SSRF_ALLOWLIST=192.168.1.0/24`` in docker-compose) for
+    operators who deliberately test providers that live on private networks.
+    """
+    networks: list = []
+    for token in os.environ.get("LCP_SSRF_ALLOWLIST", "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(token, strict=False))
+        except ValueError:
+            logger.warning("ssrf_allowlist_invalid_cidr", cidr=token)
+    # Loopback has two representations (127.0.0.0/8 and ::1). Allowlisting
+    # either one must permit both, otherwise dual-stack localhost resolution
+    # (127.0.0.1 + ::1) still gets rejected despite an explicit 127/8 allow.
+    if any(ipaddress.ip_network("127.0.0.0/8").subnet_of(net) for net in networks):
+        networks.append(ipaddress.ip_network("::1/128"))
+    return networks
+
+
+def _validate_api_base_destination(api_base: str) -> str | None:
+    """Return None when *api_base* may be fetched by provider test/discover,
+    else a human-readable rejection reason.
+
+    Rules:
+      * scheme must be http or https (no file://, gopher://, ...)
+      * host must be present and the port valid
+      * every resolved address must be PUBLIC unless it matches an entry in
+        LCP_SSRF_ALLOWLIST (comma-separated IPv4/IPv6 CIDRs)
+      * a host that fails to resolve is allowed through — the subsequent
+        urlopen fails naturally and no internal address is reachable.
+
+    The all-resolved-addresses check runs against the post-resolution IPs so
+    literal loopback/link-local forms are handled explicitly, and mixed
+    public+private result sets are rejected.
+    """
+    parsed = urlparse(api_base)
+    if parsed.scheme not in ("http", "https"):
+        return f"unsupported scheme '{parsed.scheme or 'none'}' — only http/https are allowed"
+    host = parsed.hostname
+    if not host:
+        return "missing host"
+    try:
+        port = parsed.port
+    except ValueError:
+        return "invalid port"
+    if port is not None and not (1 <= port <= 65535):
+        return "invalid port"
+    try:
+        infos = socket.getaddrinfo(
+            host, port or (443 if parsed.scheme == "https" else 80),
+            proto=socket.IPPROTO_TCP,
+        )
+    except socket.gaierror:
+        return None  # unresolvable → urlopen fails naturally; nothing reachable
+    allow = _ssrf_allowlist()
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if any(ip in net for net in _PRIVATE_NETWORKS) and not any(ip in net for net in allow):
+            return f"destination '{host}' resolves to non-public address {ip}"
+    return None
 
 
 def _engine_db_path(engine) -> str:
@@ -994,6 +1090,12 @@ class ProviderEndpoints:
             self._send_json({"error": "missing 'api_base'"}, 400)
             return
 
+        ssrf_reason = _validate_api_base_destination(api_base)
+        if ssrf_reason:
+            logger.warning("provider_test_blocked_ssrf", api_base=api_base, reason=ssrf_reason)
+            self._send_json({"error": f"api_base not allowed: {ssrf_reason}"}, 400)
+            return
+
         url = f"{api_base}/chat/completions"
         test_model = model or "gpt-3.5-turbo"
         test_body = json.dumps({
@@ -1125,6 +1227,12 @@ class ProviderEndpoints:
         provider = body.get("provider", "")
         if not api_base:
             self._send_json({"error": "missing 'api_base'"}, 400)
+            return
+
+        ssrf_reason = _validate_api_base_destination(api_base)
+        if ssrf_reason:
+            logger.warning("provider_discover_blocked_ssrf", api_base=api_base, reason=ssrf_reason)
+            self._send_json({"error": f"api_base not allowed: {ssrf_reason}"}, 400)
             return
 
         # Try plugin first for provider-specific parser
