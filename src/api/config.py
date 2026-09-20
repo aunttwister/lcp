@@ -37,7 +37,7 @@ SEED_CONFIG: dict[str, Any] = {
             "forbidden_tools": ["write_file", "patch", "cronjob"],
             "chain": [
                 {"provider": "opencode", "model": "deepseek-v4-pro",
-                 "base_url": "https://opencode.ai/zen/go/v1"},
+                 "base_url": "https://opencode.ai/inference/openai/v1"},
                 {"provider": "deepseek", "model": "deepseek-v4-pro",
                  "base_url": "https://api.deepseek.com/v1"},
             ],
@@ -49,7 +49,7 @@ SEED_CONFIG: dict[str, Any] = {
                                 "send_message", "vision_analyze"],
             "chain": [
                 {"provider": "opencode", "model": "deepseek-v4-flash",
-                 "base_url": "https://opencode.ai/zen/go/v1"},
+                 "base_url": "https://opencode.ai/inference/openai/v1"},
                 {"provider": "deepseek", "model": "deepseek-v4-flash",
                  "base_url": "https://api.deepseek.com/v1"},
             ],
@@ -77,7 +77,7 @@ SEED_CONFIG: dict[str, Any] = {
         "coder": {
             "chain": [
                 {"provider": "opencode", "model": "deepseek-v4-pro",
-                 "base_url": "https://opencode.ai/zen/go/v1"},
+                 "base_url": "https://opencode.ai/inference/openai/v1"},
                 {"provider": "deepseek", "model": "deepseek-v4-flash",
                  "base_url": "https://api.deepseek.com/v1"},
             ],
@@ -88,7 +88,7 @@ SEED_CONFIG: dict[str, Any] = {
     "providers": {
         "opencode": {
             "api_key_env": "OPENCODE_API_KEY",
-            "api_base": "https://opencode.ai/zen/go/v1",
+            "api_base": "https://opencode.ai/inference/openai/v1",
             "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
         },
         "deepseek": {
@@ -116,6 +116,12 @@ SEED_CONFIG: dict[str, Any] = {
          "cache_hit": 0.003625, "cache_miss": 0.435, "output": 0.87},
         {"provider": "opencode", "model": "deepseek-v4-flash",
          "cache_hit": 0.0028, "cache_miss": 0.14, "output": 0.28},
+        # Self-hosted DGX Spark (local-zgx) — $0 marginal cost. Without an entry
+        # here, a *successful* upstream response was discarded with
+        # ConfigError("No pricing found") -> HTTP 500 LCP-4001 whenever the
+        # provider had no pricing plugin (l1 / coder). See fix-lcp-vision-support.
+        {"provider": "local-zgx", "model": "qwen3.8-flash-next",
+         "cache_hit": 0.0, "cache_miss": 0.0, "output": 0.0},
     ],
     "circuit_breaker": {
         "failures_degraded": 3,
@@ -145,6 +151,30 @@ SEED_CONFIG: dict[str, Any] = {
             "supports_thinking": True,
             "description": "DeepSeek V4 Flash — fast lane for economical reasoning and long-context work",
         },
+        # opencode zen/go catalog IDs (text-only lanes — images must route past them)
+        "glm-5.3-flash": {
+            "context_window": 128000,
+            "max_output_tokens": 16384,
+            "supports_vision": False,
+            "supports_thinking": False,
+            "description": "GLM 5.3 Flash — opencode zen/go fast lane",
+        },
+        # Command Code catalog IDs. Both verified image-capable 2026-09-20 with a
+        # real content image (shapes + text "ZEBRA 7291" transcribed correctly).
+        "z-ai/glm-5.3-flash": {
+            "context_window": 128000,
+            "max_output_tokens": 16384,
+            "supports_vision": True,
+            "supports_thinking": False,
+            "description": "GLM 5.3 Flash (Command Code) — vision-capable fast lane",
+        },
+        "deepseek/deepseek-v4-flash": {
+            "context_window": 128000,
+            "max_output_tokens": 16384,
+            "supports_vision": True,
+            "supports_thinking": False,
+            "description": "DeepSeek V4 Flash (Command Code) — vision-capable",
+        },
         "ox-alpha-free": {
             "context_window": 262144,
             "max_output_tokens": 16384,
@@ -162,9 +192,9 @@ SEED_CONFIG: dict[str, Any] = {
         "qwen3.8-flash-next": {
             "context_window": 262144,
             "max_output_tokens": 16384,
-            "supports_vision": False,
+            "supports_vision": True,
             "supports_thinking": False,
-            "description": "Qwen3.8-Flash-Next — local vLLM (DGX Spark 128GB, SEQS=16)",
+            "description": "Qwen3.8-Flash-Next — local vLLM (DGX Spark 128GB, SEQS=16), vision-capable",
         },
     },
     "database": {
