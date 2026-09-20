@@ -13,6 +13,16 @@ services:
     volumes:
       - /your/data/app/lcp/data:/app/data
       - /your/data/app/lcp/modules:/opt/lcp-modules
+      # Work layer: board ledger, task tree, session transcripts. READ-ONLY —
+      # a dashboard must never change what the board published, move a task, or
+      # rewrite what the agents did; read-only is enforced at the mount level.
+      - /your/data/app/runboard/decisions.db:/app/work/decisions.db:ro
+      - /root/.hermes/profiles/homelab-expert-l2/work:/app/work-tree:ro
+      - /root/.hermes/profiles:/app/profiles:ro
+      # Cron op spool — the ONLY deliberately-writable mount in the work layer:
+      # the Cron page writes validated intents here and the host-side executor
+      # applies them via the Hermes CLI (see work-layers-cron-executor.timer).
+      - /your/data/app/lcp/cron-ops:/app/cron-ops:rw
     env_file:
       - .env
     environment:
@@ -20,6 +30,11 @@ services:
       - LISTEN_PORT=8734
       - TIKTOKEN_CACHE_DIR=/app/data/tiktoken_cache
       - LCP_SECRET_KEY=${LCP_SECRET_KEY}
+      - LCP_WORK_DECISIONS_DB=/app/work/decisions.db
+      - LCP_WORK_TASKS_DIR=/app/work-tree/tasks
+      - LCP_WORK_TODO=/app/work-tree/todo.md
+      - LCP_CRON_OPS_DIR=/app/cron-ops
+      - LCP_SELF_BASE=http://127.0.0.1:8734
       # Runtime-installed modules (semantic routing, memory, LiveBench) persist
       # in a dedicated bind-mount directory so they survive container
       # recreation. The default image is LEAN: each module's deps are installed
