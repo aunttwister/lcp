@@ -10,11 +10,18 @@ new state. No extra bookkeeping, and it cannot drift from reality because the
 location is the state.
 """
 
+import html
 import json
 import os
 import re
+import sys
 import time
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
+
+from .logging_config import get_logger
+
+logger = get_logger("lcp.work.tasks")
 
 # Where the task trees live. Overridable so LCP can point at any profile.
 DEFAULT_TASKS_DIR = "/root/.hermes/profiles/homelab-expert-l2/work/tasks"
@@ -32,16 +39,64 @@ _ASSESS_CAP = 200
 _ASSESS_SUMMARY_CAP = 2000
 
 
+def _module_site_dirs() -> List[str]:
+    """Candidate dirs for the RUNTIME-installed modules under the bind mount.
+
+    The image is built lean (``WITH_ROUTER=0``), so markdown_it is NOT baked
+    into it -- ``pip install --target <LCP_MODULES_DIR>/{site,router}`` puts it
+    in the bind-mounted modules dir instead (it survives container recreation;
+    the image does not carry it).
+    """
+    root = (os.environ.get("LCP_MODULES_DIR") or "").strip() or "/opt/lcp-modules"
+    return [os.path.join(root, "site"), os.path.join(root, "router")]
+
+
+@lru_cache(maxsize=1)
+def _markdown_it():
+    """The shared MarkdownIt instance, or ``None`` if markdown_it is missing.
+
+    markdown_it has no build-time home, and the ONLY thing that used to put the
+    modules dir on ``sys.path`` was the router classifier's lazy init
+    (``task_classifier`` appends its site dir as a side effect of an unrelated
+    job). Markdown rendering therefore depended on another component having run
+    first: a freshly recreated container answered
+    ``500 {"error": "No module named 'markdown_it'"}`` on ``/api/work/tasks``
+    until the classifier happened to warm up (observed on lcp-staging
+    2026-09-20). Resolve the path here so rendering stands on its own.
+    """
+    try:
+        from markdown_it import MarkdownIt
+    except ModuleNotFoundError:
+        for cand in _module_site_dirs():
+            if cand not in sys.path and os.path.isdir(cand):
+                sys.path.append(cand)
+        try:
+            from markdown_it import MarkdownIt
+        except ModuleNotFoundError:
+            logger.warning(
+                "markdown_it_unavailable",
+                searched=_module_site_dirs(),
+                detail="rendering plain text; the Tasks view must not 500 on it",
+            )
+            return None
+    return MarkdownIt("commonmark", {"html": False, "linkify": False})
+
+
 def _md_to_html(text: str) -> str:
     """CommonMark -> HTML with raw HTML escaped (html=False).
 
     Task files are agent-written, but they are still untrusted input as far
     as the browser is concerned; markdown-it with html=False renders any raw
     HTML inside the document as escaped text instead of pasting it through.
-    """
-    from markdown_it import MarkdownIt
 
-    md = MarkdownIt("commonmark", {"html": False, "linkify": False})
+    Degrades to escaped plain text rather than raising: an optional runtime
+    module must never take the whole page down (same rule as the classifier
+    chips, which fail to "no chips" instead of a 500).
+    """
+    md = _markdown_it()
+    if md is None:
+        escaped = html.escape(text or "")
+        return "<p>" + escaped.replace("\n", "<br>") + "</p>"
     return md.render(text)
 
 

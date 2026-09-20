@@ -368,3 +368,32 @@ class TestMarkdown:
         (m,) = wt.task_moments()
         assert m["payload"]["plan_html"] == "<h1>T</h1>\n<p>Body line one.</p>\n"
         assert m["payload"]["results_html"] == "<h1>R</h1>\n<p>Done.</p>\n"
+
+    def test_missing_markdown_it_degrades_instead_of_raising(self, tmp_path, monkeypatch):
+        """The lean image (WITH_ROUTER=0) does NOT bake markdown_it in: it lives
+        in the bind-mounted modules dir and only reaches sys.path when something
+        appends it. Rendering must degrade, not 500 -- a freshly recreated
+        container answered {"error": "No module named 'markdown_it'"} on
+        /api/work/tasks until the router classifier happened to warm up
+        (observed on lcp-staging 2026-09-20).
+
+        The other tests in this class could never catch this: the dev venv has
+        markdown_it installed, so the import always succeeded locally.
+        """
+        monkeypatch.setenv("LCP_MODULES_DIR", str(tmp_path / "absent-modules"))
+        monkeypatch.setattr(wt, "_module_site_dirs", lambda: [str(tmp_path / "absent-modules" / "site")])
+        monkeypatch.setattr(wt, "_markdown_it", lambda: None)  # simulate the failed resolution
+        out = wt._md_to_html("hello **world**\n<script>alert(1)</script>\n")
+        assert out.startswith("<p>")
+        assert "<script>" not in out          # still escaped -- never less safe
+        assert "&lt;script&gt;" in out
+        assert "**world**" in out             # plain text, unstyled
+
+    def test_markdown_resolution_searches_the_modules_mount(self, tmp_path, monkeypatch):
+        """The resolver must look under <LCP_MODULES_DIR>/{site,router}: that is
+        where the runtime install puts it, and prod+staging both mount it."""
+        mods = tmp_path / "mods"
+        monkeypatch.setenv("LCP_MODULES_DIR", str(mods))
+        assert wt._module_site_dirs() == [str(mods / "site"), str(mods / "router")]
+        monkeypatch.delenv("LCP_MODULES_DIR")
+        assert wt._module_site_dirs() == ["/opt/lcp-modules/site", "/opt/lcp-modules/router"]
