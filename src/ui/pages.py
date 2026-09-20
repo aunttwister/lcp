@@ -50,34 +50,31 @@ def render_logs_page(config, engine=None, params=None) -> str:
 
     One tab bar over all the log realms: conversations (grouped + summarized),
     raw requests, provider routing decisions, and the board decisions ledger.
-    ``?view=`` selects the active tab; every tab is server-rendered with
-    pagination so URLs stay shareable.
+    ``?view=`` selects the active tab.
+
+    Each tab is a *mount* for the shared table module (``static/js/logtable.js``):
+    the page ships the tab, the table shell and the column spec, and the module
+    fetches the rows from the matching JSON view. Every tab therefore paginates
+    and sorts identically (newest first by default) and keeps its state in the
+    URL, so a view stays shareable.
+
+    Only the decisions tab reads its data server-side — its funnel cards are a
+    property of the whole ledger, not of the current page.
     """
     from .render import render_page
+    from ..api import work as work_api
     params = params or {}
     tab = str(params.get("view") or "conversations")
     view = {"tab": tab}
-    try:
-        from ..api import work_conversations, work as work_api
-        if tab == "conversations":
-            v = work_conversations.conversations_view(params)
-            for c in v.get("conversations", []):
-                det = work_conversations.conversation_detail(c["id"], limit=50)
-                c["detail"] = det.get("events", [])
-                c["detail_truncated"] = det.get("truncated", False)
-            view.update(v)
-        elif tab == "requests":
-            view.update(work_conversations.requests_view(params))
-        elif tab == "providers":
-            view.update(work_conversations.provider_decisions_view(params))
-        elif tab == "decisions":
-            view.update({"decisions": work_api.decisions_view()})
-        else:
-            view.update({"tab_error": "unknown view %r" % tab})
-    except Exception as e:  # never blank the page on a data error
-        view["error"] = "%s: %s" % (type(e).__name__, e)
+    if tab == "decisions":
+        try:
+            view.update({"decisions": work_api.decisions_view(params=params)})
+        except Exception as e:  # never blank the page on a data error
+            view["error"] = "%s: %s" % (type(e).__name__, e)
+    elif tab not in ("conversations", "requests", "providers"):
+        view["tab_error"] = "unknown view %r" % tab
     return render_page("pages/logs.html", config, engine, active_page="logs",
-                       view=view)
+                       view=view, params=params)
 
 
 def render_alerts_page(config, engine=None) -> str:

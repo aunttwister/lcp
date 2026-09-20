@@ -29,13 +29,27 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+# The shared log-table module: this view pages and orders like every other log.
+from ..ui import tables
 
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
 
 DEFAULT_DECISIONS_DB = "/your/data/app/runboard/decisions.db"
+
+# ── Sort allow-list ─────────────────────────────────────────────────────────
+# (key, label, ORDER BY fragment). First entry is the default and it is the
+# newest-to-oldest ordering. The ledger keeps SUBJECT time (event_t) and
+# COMPUTATION time (asked_at) apart, so both are offerable as sorts.
+DECISION_SORTS: Tuple[tables.SortSpec, ...] = (
+    ("newest", "Newest event first", "COALESCE(event_t, asked_at) DESC, id DESC"),
+    ("oldest", "Oldest event first", "COALESCE(event_t, asked_at) ASC, id DESC"),
+    ("asked", "Newest asked first", "asked_at DESC, id DESC"),
+)
+_ALLOWED_ORDERS = frozenset(frag for _, _, frag in DECISION_SORTS)
 
 # Labels that mean "this reached the board".
 PUBLISHED_LABELS = ("publish",)
@@ -72,28 +86,41 @@ def decisions_available(db_path: Optional[str] = None) -> bool:
         return False
 
 
-def decision_moments(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Return every recorded decision as a moment, newest subject-time first.
+def decision_moments(db_path: Optional[str] = None,
+                     order_sql: Optional[str] = None,
+                     per: Any = "all",
+                     offset: int = 0) -> List[Dict[str, Any]]:
+    """Return recorded decisions as moments, newest subject-time first.
 
     Uses ``latest_verdict`` so a re-asked question yields ONE moment per
     (event, engine) rather than one per attempt. That is what makes the funnel
     comparable across engines -- the earlier ledger bugs came from counting
     attempts where the board counted verdicts.
+
+    ``order_sql`` / ``per`` / ``offset`` come from the shared table module
+    (:mod:`src.ui.tables`) so the ledger pages and sorts exactly like every
+    other log. Omitting them returns the whole ledger, newest first — the
+    funnel is computed over THAT, never over one page.
     """
     path = db_path or decisions_db_path()
     if not os.path.isfile(path):
         return []
 
-    sql = """
+    order = order_sql if order_sql in _ALLOWED_ORDERS else DECISION_SORTS[0][2]
+    sql = ("""
         SELECT id, event_id, run, event_t, event_kind, asked_at, engine, model,
                question_hash, label, criteria, confidence, latency_ms, raw
           FROM latest_verdict
-         ORDER BY COALESCE(event_t, asked_at) DESC, id DESC
-    """
+         ORDER BY %s
+    """ % order)
+    args: List[Any] = []
+    if per != "all":
+        sql += " LIMIT ? OFFSET ?"
+        args = [per, offset]
     out: List[Dict[str, Any]] = []
     try:
         with _connect(path) as conn:
-            for r in conn.execute(sql):
+            for r in conn.execute(sql, args):
                 out.append({
                     "id": "decision:%s" % r["id"],
                     "t": r["event_t"],
@@ -156,11 +183,19 @@ def decisions_funnel(moments: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def decisions_ledger(moments: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """The raw ledger view: every moment plus its provenance, unabridged."""
+def decisions_ledger(moments: List[Dict[str, Any]],
+                    total: Optional[int] = None) -> Dict[str, Any]:
+    """The raw ledger view: every moment plus its provenance.
+
+    ``count`` is the number of rows IN THIS PAYLOAD; ``total`` is the size of the
+    ledger they were drawn from. When a caller pages the ledger the two differ,
+    so anything that wants "how big is the ledger" must ask ``total`` — the
+    server-rendered heading used to print the page size as the ledger size.
+    """
     return {
         "rows": moments,
         "count": len(moments),
+        "total": total if total is not None else len(moments),
         "columns": [
             ("t", "event time"),
             ("computed_at", "asked at"),
@@ -174,11 +209,17 @@ def decisions_ledger(moments: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def decisions_view(db_path: Optional[str] = None) -> Dict[str, Any]:
+def decisions_view(db_path: Optional[str] = None,
+                   params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Assemble the full Decisions view payload.
 
     Always returns a renderable shape -- an absent ledger yields a populated
     ``empty`` reason rather than a blank page, because an empty state is content.
+
+    ``params`` pages the LEDGER through the shared table module (newest event
+    first by default). The funnel is always computed over the whole ledger, never
+    over the current page — a funnel that changed as you paged would be a lie.
+    Callers that pass nothing get the whole ledger, as before.
     """
     path = db_path or decisions_db_path()
     if not decisions_available(path):
@@ -191,15 +232,24 @@ def decisions_view(db_path: Optional[str] = None) -> Dict[str, Any]:
             },
             "funnel": None,
             "ledger": None,
+            "filter": None,
         }
 
-    moments = decision_moments(path)
+    all_moments = decision_moments(path)
+    st = tables.state(params or {}, DECISION_SORTS, len(all_moments))
+    if params:
+        moments = decision_moments(path, order_sql=st["order_sql"],
+                                   per=st["per"], offset=st["offset"])
+    else:
+        moments = all_moments
+    ledger = decisions_ledger(moments, total=len(all_moments))
     return {
         "available": True,
-        "empty": None if moments else {
+        "empty": None if all_moments else {
             "reason": "the ledger exists but holds no decision rows",
             "hint": "the board has not judged any events yet",
         },
-        "funnel": decisions_funnel(moments),
-        "ledger": decisions_ledger(moments),
+        "funnel": decisions_funnel(all_moments),
+        "ledger": ledger,
+        "filter": tables.filter_payload(st, len(all_moments)),
     }

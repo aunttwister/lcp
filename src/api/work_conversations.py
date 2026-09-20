@@ -32,12 +32,33 @@ import os
 import re
 import sqlite3
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+# The shared log-table module — owns ordering (newest first by default) and the
+# pagination window for every log view, so no view invents its own ORDER BY.
+from ..ui import tables
 
 # conversation_id values are opaque strings: either the client's session
 # header or a deterministic backfill id like "c<10 hex>".
 _BURST_GAP_SECONDS = 300
 _CONV_SQLITE = "data/costs.db"
+
+# ── Sort allow-lists ────────────────────────────────────────────────────────
+# (key, label, ORDER BY fragment). The first entry is the default, and it is
+# always newest-to-oldest. Fragments are static strings authored here — the
+# client only ever sends a key, never SQL.
+CONVERSATION_SORTS: Tuple[tables.SortSpec, ...] = (
+    ("newest", "Newest activity first", "last_seen DESC, conversation_id DESC"),
+    ("oldest", "Oldest activity first", "last_seen ASC, conversation_id DESC"),
+)
+REQUEST_SORTS: Tuple[tables.SortSpec, ...] = (
+    ("newest", "Newest first", "id DESC"),
+    ("oldest", "Oldest first", "id ASC"),
+)
+ROUTING_SORTS: Tuple[tables.SortSpec, ...] = (
+    ("newest", "Newest first", "id DESC"),
+    ("oldest", "Oldest first", "id ASC"),
+)
 
 
 def db_path() -> str:
@@ -400,13 +421,8 @@ _CONV_SUMMARY_CAP = 240
 
 
 def requests_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Paginated raw request log (Requests tab)."""
+    """Paginated raw request log (Requests tab). Newest first by default."""
     params = params or {}
-    per = _per(params)
-    try:
-        page = max(1, int(params.get("page") or 1))
-    except (TypeError, ValueError):
-        page = 1
     profile_filter = str(params.get("profile") or "").strip()
     where = ""
     args: List[Any] = []
@@ -416,72 +432,48 @@ def requests_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     con = _connect()
     try:
         total = con.execute("SELECT COUNT(*) FROM requests" + where, args).fetchone()[0]
-        pages = 1
-        if per != "all":
-            pages = max(1, -(-total // per))
-            page = min(page, pages)
+        st = tables.state(params, REQUEST_SORTS, total)
+        limit_sql, limit_args = tables.limit_clause(st)
         rows = con.execute(
             "SELECT id, timestamp, profile, model, provider, prompt_tokens, "
             "completion_tokens, cost, latency_ms, success, error_type, "
             "conversation_id FROM requests" + where +
-            " ORDER BY id DESC LIMIT ? OFFSET ?" if per != "all" else
-            "SELECT id, timestamp, profile, model, provider, prompt_tokens, "
-            "completion_tokens, cost, latency_ms, success, error_type, "
-            "conversation_id FROM requests" + where + " ORDER BY id DESC",
-            args + ([per, (page - 1) * per] if per != "all" else [])).fetchall()
+            " ORDER BY " + st["order_sql"] + limit_sql,
+            args + limit_args).fetchall()
         con.close()
-    finally:
-        pass
+    except sqlite3.Error:
+        con.close()
+        raise
     return {
         "rows": [dict(r) for r in rows],
         "total": total,
-        "filter": {"per": str(per), "page": page, "pages": pages,
-                   "profile": profile_filter, "profiles": _profiles()},
+        "filter": tables.filter_payload(st, total, profile=profile_filter,
+                                        profiles=_profiles()),
     }
 
 
 def provider_decisions_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Paginated provider-routing decisions log (Provider decisions tab)."""
     params = params or {}
-    per = _per(params)
-    try:
-        page = max(1, int(params.get("page") or 1))
-    except (TypeError, ValueError):
-        page = 1
     con = _connect()
     try:
         total = con.execute(
             "SELECT COUNT(*) FROM routing_decisions").fetchone()[0]
-        pages = 1
-        if per != "all":
-            pages = max(1, -(-total // per))
-            page = min(page, pages)
-        base = ("SELECT id, ts, profile, task, policy, action, provider, model, "
-                "score, note, conversation_id FROM routing_decisions "
-                "ORDER BY id DESC")
-        if per != "all":
-            rows = con.execute(base + " LIMIT ? OFFSET ?",
-                               [per, (page - 1) * per]).fetchall()
-        else:
-            rows = con.execute(base).fetchall()
+        st = tables.state(params, ROUTING_SORTS, total)
+        limit_sql, limit_args = tables.limit_clause(st)
+        rows = con.execute(
+            "SELECT id, ts, profile, task, policy, action, provider, model, "
+            "score, note, conversation_id FROM routing_decisions "
+            "ORDER BY " + st["order_sql"] + limit_sql, limit_args).fetchall()
         con.close()
-    finally:
-        pass
+    except sqlite3.Error:
+        con.close()
+        raise
     return {
         "rows": [dict(r) for r in rows],
         "total": total,
-        "filter": {"per": str(per), "page": page, "pages": pages},
+        "filter": tables.filter_payload(st, total),
     }
-
-
-def _per(params: Dict[str, Any]) -> Any:
-    per_raw = str(params.get("per") or "20")
-    if per_raw == "all":
-        return "all"
-    try:
-        return max(1, min(500, int(per_raw)))
-    except (TypeError, ValueError):
-        return 20
 
 
 _SYNC_STALE_SECONDS = 300
@@ -526,19 +518,20 @@ def _maybe_sync() -> None:
 
 def conversations_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Paginated conversation list, read from the PERSISTED conversations
-    table (name + summary generated once by sync_conversations)."""
+    table (name + summary generated once by sync_conversations).
+
+    Newest activity first by default. ``?qid=<conversation_id>`` narrows the
+    list to one conversation — that is what the Requests tab's conversation
+    link targets, so the link lands on the conversation it names.
+    """
     try:
         _maybe_sync()
     except Exception:  # noqa: BLE001 — view must not die on sync failure
         pass
 
     params = params or {}
-    per = _per(params)
-    try:
-        page = max(1, int(params.get("page") or 1))
-    except (TypeError, ValueError):
-        page = 1
     profile_filter = str(params.get("profile") or "").strip()
+    qid = str(params.get("qid") or "").strip()
 
     con = _connect()
     try:
@@ -547,21 +540,20 @@ def conversations_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         if profile_filter:
             where += " AND profile = ?"
             args.append(profile_filter)
+        if qid:
+            where += " AND conversation_id = ?"
+            args.append(qid)
 
         total = con.execute("SELECT COUNT(*) FROM conversations " + where,
                             args).fetchone()[0]
-        pages = 1
-        if per != "all":
-            pages = max(1, -(-total // per))
-            page = min(page, pages)
-        base = ("SELECT conversation_id, name, summary, profile, model, calls, "
-                "tokens, cost, errors, first_seen, last_seen "
-                "FROM conversations " + where + " ORDER BY last_seen DESC")
-        if per != "all":
-            rows = con.execute(base + " LIMIT ? OFFSET ?",
-                               args + [per, (page - 1) * per]).fetchall()
-        else:
-            rows = con.execute(base).fetchall()
+        st = tables.state(params, CONVERSATION_SORTS, total)
+        limit_sql, limit_args = tables.limit_clause(st)
+        rows = con.execute(
+            "SELECT conversation_id, name, summary, profile, model, calls, "
+            "tokens, cost, errors, first_seen, last_seen "
+            "FROM conversations " + where +
+            " ORDER BY " + st["order_sql"] + limit_sql,
+            args + limit_args).fetchall()
 
         conversations = []
         for r in rows:
@@ -592,11 +584,8 @@ def conversations_view(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         "available": True,
         "conversations": conversations,
         "total": total,
-        "filter": {
-            "per": str(per), "page": page, "pages": pages,
-            "profile": profile_filter,
-            "profiles": _profiles(),
-        },
+        "filter": tables.filter_payload(st, total, profile=profile_filter,
+                                        qid=qid, profiles=_profiles()),
     }
 
 

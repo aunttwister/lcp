@@ -3442,11 +3442,17 @@ class WorkEndpoints:
         self.wfile.write(html.encode("utf-8"))
 
     def _serve_work_decisions_api(self):
-        """GET /api/work/decisions — the Decisions view as JSON."""
+        """GET /api/work/decisions — the Decisions view as JSON.
+
+        ``?per=``/``?page=``/``?sort=`` page the ledger (shared table module);
+        without them the whole ledger is returned, as before.
+        """
         from ..api import work as work_api
+        from urllib.parse import parse_qs, urlsplit
 
         try:
-            self._send_json(work_api.decisions_view())
+            qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            self._send_json(work_api.decisions_view(params=qs))
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 

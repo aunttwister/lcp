@@ -2,6 +2,19 @@
 {% block title %}Logs — LCP{% endblock %}
 {% set active_page = 'logs' %}
 
+{#
+  The Logs page is four MOUNTS of the shared table module (static/js/logtable.js).
+  Each tab ships an empty table shell plus its column spec; the module fetches the
+  matching JSON view and renders rows, sort control, pager and count. Ordering is
+  the server's (src/ui/tables.py) and defaults to newest first on every tab.
+  Only the decisions tab reads data server-side — its funnel describes the whole
+  ledger, not one page of it.
+#}
+{% macro tab_link(key, label) -%}
+  <a class="tab-btn{% if view.tab == key %} active{% endif %}"
+     href="/logs?view={{ key }}{% if key == 'conversations' and params.profile %}&amp;profile={{ params.profile }}{% endif %}{% if params.per %}&amp;per={{ params.per }}{% endif %}{% if params.sort %}&amp;sort={{ params.sort }}{% endif %}">{{ label }}</a>
+{%- endmacro %}
+
 {% block content %}
 <h1>Logs</h1>
 <p class="subtitle">
@@ -9,14 +22,15 @@
   names + summaries), raw <strong>requests</strong>, provider <strong>routing
   decisions</strong>, and the <strong>board decisions</strong> ledger. Conversations are correlated
   by <span class="mono">conversation_id</span> — new calls carry the client's real per-conversation
-  header, legacy rows are burst-backfilled.
+  header, legacy rows are burst-backfilled. Every tab paginates and sorts server-side,
+  newest first.
 </p>
 
 <div class="logs-tabs">
-  <a class="tab-btn{% if view.tab == 'conversations' %} active{% endif %}" href="/logs?view=conversations{% if view.filter and view.filter.profile %}&amp;profile={{ view.filter.profile }}{% endif %}">Conversations</a>
-  <a class="tab-btn{% if view.tab == 'requests' %} active{% endif %}" href="/logs?view=requests">Requests</a>
-  <a class="tab-btn{% if view.tab == 'providers' %} active{% endif %}" href="/logs?view=providers">Provider decisions</a>
-  <a class="tab-btn{% if view.tab == 'decisions' %} active{% endif %}" href="/logs?view=decisions">Board decisions</a>
+  {{ tab_link('conversations', 'Conversations') }}
+  {{ tab_link('requests', 'Requests') }}
+  {{ tab_link('providers', 'Provider decisions') }}
+  {{ tab_link('decisions', 'Board decisions') }}
 </div>
 
 {% if view.error %}
@@ -26,145 +40,39 @@
 {% endif %}
 
 {% if view.tab == 'conversations' %}
-  {% if view.available is defined and not view.available %}
-    <div class="empty"><strong>Conversations unavailable</strong><br><span class="muted">{{ view.error }}</span></div>
-  {% else %}
-    <div class="task-toolbar">
-      <form class="task-toolbar-row" method="get" action="/logs">
-        <input type="hidden" name="view" value="conversations">
-        <select name="profile" class="task-search" style="max-width:240px">
-          <option value="">All profiles</option>
-          {% for p in view.filter.profiles %}
-            <option value="{{ p }}"{% if view.filter.profile == p %} selected{% endif %}>{{ p }}</option>
-          {% endfor %}
-        </select>
-        <input type="hidden" name="per" value="{{ view.filter.per }}">
-        <button type="submit" class="btn-sm btn-primary">Filter</button>
-      </form>
-    </div>
-    <div class="work-scroll">
+  <div class="task-toolbar" id="lg-controls"></div>
+  <div class="work-scroll">
     <table class="work-table">
-      <thead>
-        <tr><th class="task-chev-col"></th><th>Conversation</th><th>Profile</th><th>Model</th>
-            <th>Task</th><th class="num">Calls</th><th class="num">Tokens</th>
-            <th class="num">Cost</th><th class="num">Errors</th><th>Last activity</th></tr>
-      </thead>
-      {% for c in view.conversations %}
-        <tbody class="task-group">
-          <tr class="task-row" onclick="toggleTaskDetail('log-detail-{{ loop.index }}', this)">
-            <td class="task-chev">▸</td>
-            <td data-label="Conversation">
-              <div class="work-job-name">{{ c.name }}</div>
-              <span class="mono muted convo-id">{{ c.id }}</span>
-              {% if c.summary %}<div class="muted convo-summary">{{ c.summary }}</div>{% endif %}
-            </td>
-            <td data-label="Profile"><span class="work-actor">{{ c.profile }}</span></td>
-            <td data-label="Model" class="mono">{{ c.model }}</td>
-            <td data-label="Task">{% if c.task %}<span class="task-chip">{{ c.task }}</span>{% else %}—{% endif %}</td>
-            <td data-label="Calls" class="num">{{ c.calls }}</td>
-            <td data-label="Tokens" class="num">{{ "{:,}".format(c.tokens) }}</td>
-            <td data-label="Cost" class="num">${{ "%.4f"|format(c.cost) }}</td>
-            <td data-label="Errors" class="num">{% if c.errors %}<span class="work-warn">{{ c.errors }}</span>{% else %}<span class="muted">0</span>{% endif %}</td>
-            <td data-label="Last activity" class="mono muted">{{ (c.last_at or '')[:19].replace('T', ' ') }}</td>
-          </tr>
-          <tr class="task-detail" id="log-detail-{{ loop.index }}" hidden>
-            <td colspan="10">
-              <div class="task-detail-inner">
-                <p class="muted work-rule">Started {{ (c.started_at or '')[:19].replace('T', ' ') }} · {{ c.calls }} call(s) · ${{ "%.4f"|format(c.cost) }}</p>
-                <ul class="convo-timeline">
-                  {% for e in c.detail %}
-                    <li class="convo-event">
-                      <span class="convo-ts mono">{{ (e.ts or '')[:19].replace('T', ' ') }}</span>
-                      {% if e.kind == 'routing' %}
-                        <span class="work-chip work-chip-active">route</span>
-                        <span class="mono">{{ e.task or '?' }}</span> · {{ e.action }}
-                        {% if e.provider %}→ <span class="work-actor">{{ e.provider }}</span>{% endif %}
-                        {% if e.model %} <span class="mono muted">{{ e.model }}</span>{% endif %}
-                        {% if e.score != None %} <span class="muted">score {{ "%.3f"|format(e.score) }}</span>{% endif %}
-                        {% if e.note %}<span class="muted">· {{ e.note }}</span>{% endif %}
-                      {% else %}
-                        <span class="work-chip work-chip-{{ 'error' if not e.success else 'ok' }}">req{{ ' ERR' if not e.success else '' }}</span>
-                        <span class="work-actor">{{ e.provider }}</span> → <span class="mono">{{ e.model }}</span>
-                        <span class="muted">· {{ e.prompt_tokens }} + {{ e.completion_tokens }} tok · {{ e.latency_ms }} ms · ${{ "%.4f"|format(e.cost or 0) }}</span>
-                        {% if not e.success and e.error_type %}<span class="work-warn">{{ e.error_type }}</span>{% endif %}
-                      {% endif %}
-                    </li>
-                  {% endfor %}
-                </ul>
-                {% if c.detail_truncated %}<p class="muted task-note">… first 50 events shown.</p>{% endif %}
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      {% endfor %}
+      <thead id="lg-head"></thead>
+      <tbody id="lg-rows"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
     </table>
-    </div>
-    {% if view.filter.pages > 1 %}
-      <div class="task-pager">
-        {% if view.filter.page > 1 %}<a class="btn-sm" href="/logs?view=conversations&amp;profile={{ view.filter.profile }}&amp;per={{ view.filter.per }}&amp;page={{ view.filter.page - 1 }}">Prev</a>{% endif %}
-        {% for n in range(1, view.filter.pages + 1) %}
-          {% if n == 1 or n == view.filter.pages or (n >= view.filter.page - 2 and n <= view.filter.page + 2) %}
-            <a class="btn-sm{% if n == view.filter.page %} active{% endif %}" href="/logs?view=conversations&amp;profile={{ view.filter.profile }}&amp;per={{ view.filter.per }}&amp;page={{ n }}">{{ n }}</a>
-          {% elif n == 2 or n == view.filter.pages - 1 %}<span class="muted">…</span>{% endif %}
-        {% endfor %}
-        {% if view.filter.page < view.filter.pages %}<a class="btn-sm" href="/logs?view=conversations&amp;profile={{ view.filter.profile }}&amp;per={{ view.filter.per }}&amp;page={{ view.filter.page + 1 }}">Next</a>{% endif %}
-        <span class="muted task-pager-label">per page</span>
-        {% for p in ['20', '50', '100'] %}<a class="btn-sm{% if view.filter.per == p %} active{% endif %}" href="/logs?view=conversations&amp;profile={{ view.filter.profile }}&amp;per={{ p }}&amp;page=1">{{ p }}</a>{% endfor %}
-      </div>
-    {% endif %}
-    <p class="muted work-rule">Showing {{ view.conversations | length }} of {{ view.total }} grouped conversations.</p>
-  {% endif %}
+  </div>
+  <div class="task-pager" id="lg-pager"></div>
+  <p class="muted work-rule" id="lg-count"></p>
 {% endif %}
 
 {% if view.tab == 'requests' %}
+  <div class="task-toolbar" id="lg-controls"></div>
   <div class="work-scroll">
     <table class="work-table">
-      <thead><tr><th>When</th><th>Profile</th><th>Model</th><th>Provider</th><th class="num">Tokens</th>
-                 <th class="num">Cost</th><th class="num">Latency</th><th>Status</th><th>Conversation</th></tr></thead>
-      <tbody>
-        {% for r in view.rows %}
-          <tr>
-            <td data-label="When" class="mono muted">{{ (r.timestamp or '')[:19].replace('T', ' ') }}</td>
-            <td data-label="Profile"><span class="work-actor">{{ r.profile }}</span></td>
-            <td data-label="Model" class="mono">{{ r.model }}</td>
-            <td data-label="Provider">{{ r.provider }}</td>
-            <td data-label="Tokens" class="num">{{ r.prompt_tokens + r.completion_tokens }}</td>
-            <td data-label="Cost" class="num">${{ "%.4f"|format(r.cost or 0) }}</td>
-            <td data-label="Latency" class="num">{{ r.latency_ms }} ms</td>
-            <td data-label="Status">{% if r.success %}<span class="work-chip work-chip-ok">ok</span>{% else %}<span class="work-chip work-chip-error">{{ r.error_type or 'error' }}</span>{% endif %}</td>
-            <td data-label="Conversation" class="mono muted">{% if r.conversation_id %}<a href="/logs?view=conversations&qid={{ r.conversation_id }}">{{ r.conversation_id[:10] }}…</a>{% else %}—{% endif %}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
+      <thead id="lg-head"></thead>
+      <tbody id="lg-rows"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody>
     </table>
   </div>
-  <p class="muted work-rule">Showing {{ view.rows | length }} of {{ view.total }} requests.</p>
+  <div class="task-pager" id="lg-pager"></div>
+  <p class="muted work-rule" id="lg-count"></p>
 {% endif %}
 
 {% if view.tab == 'providers' %}
+  <div class="task-toolbar" id="lg-controls"></div>
   <div class="work-scroll">
     <table class="work-table">
-      <thead><tr><th>When</th><th>Profile</th><th>Task</th><th>Policy</th><th>Action</th>
-                 <th>Provider</th><th>Model</th><th class="num">Score</th><th>Note</th><th>Conversation</th></tr></thead>
-      <tbody>
-        {% for r in view.rows %}
-          <tr>
-            <td data-label="When" class="mono muted">{{ (r.ts or '')[:19].replace('T', ' ') }}</td>
-            <td data-label="Profile"><span class="work-actor">{{ r.profile }}</span></td>
-            <td data-label="Task"><span class="task-chip">{{ r.task }}</span></td>
-            <td data-label="Policy" class="mono">{{ r.policy }}</td>
-            <td data-label="Action" class="mono">{{ r.action }}</td>
-            <td data-label="Provider">{{ r.provider or '—' }}</td>
-            <td data-label="Model" class="mono">{{ r.model or '—' }}</td>
-            <td data-label="Score" class="num">{% if r.score != None %}{{ "%.3f"|format(r.score) }}{% else %}—{% endif %}</td>
-            <td data-label="Note" class="muted">{{ (r.note or '')[:80] }}</td>
-            <td data-label="Conversation" class="mono muted">{{ (r.conversation_id or '—')[:10] }}{% if r.conversation_id %}…{% endif %}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
+      <thead id="lg-head"></thead>
+      <tbody id="lg-rows"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
     </table>
   </div>
-  <p class="muted work-rule">Showing {{ view.rows | length }} of {{ view.total }} provider routing decisions.</p>
+  <div class="task-pager" id="lg-pager"></div>
+  <p class="muted work-rule" id="lg-count"></p>
 {% endif %}
 
 {% if view.tab == 'decisions' %}
@@ -173,7 +81,7 @@
     <div class="empty"><strong>{{ d.empty.reason }}</strong><br><span class="muted">{{ d.empty.hint }}</span></div>
   {% else %}
     {% if d.funnel %}
-    <h2 class="work-h2">Funnel</h2>
+    <h2 class="work-h2">Funnel <span class="muted work-h2-note">whole ledger, never one page</span></h2>
     <div class="work-cards">
       <div class="work-card"><div class="work-card-label">Considered</div><div class="work-card-value">{{ d.funnel.considered }}</div></div>
       {% for lbl, n in d.funnel.by_label.items() %}
@@ -181,44 +89,226 @@
       {% endfor %}
     </div>
     {% endif %}
-    <h2 class="work-h2">Ledger <span class="muted work-h2-note">{{ d.ledger.count }} rows · latest verdict per subject and actor</span></h2>
+    <h2 class="work-h2">Ledger <span class="muted work-h2-note">{{ d.ledger.total }} rows · latest verdict per subject and actor</span></h2>
     <div class="work-scroll">
       <table class="work-table">
-        <thead><tr><th>Event time</th><th>Asked at</th><th>Subject</th><th>Actor</th><th>Kind</th><th>Label</th><th class="num">Conf</th></tr></thead>
-        <tbody>
-          {% for m in d.ledger.rows %}
-            <tr>
-              <td data-label="Event" class="mono">{{ m.t | fmt_ts }}</td>
-              <td data-label="Asked" class="mono muted">{{ m.computed_at | fmt_ts }}</td>
-              <td data-label="Subject">{{ m.subject }}</td>
-              <td data-label="Actor"><span class="work-actor">{{ m.actor }}</span></td>
-              <td data-label="Kind" class="mono">{{ m.payload.event_kind or '—' }}</td>
-              <td data-label="Label"><span class="work-label work-label-{{ m.payload.label }}">{{ m.payload.label }}</span></td>
-              <td data-label="Conf" class="num">{% if m.payload.confidence != None %}{{ "%.3f"|format(m.payload.confidence) }}{% else %}—{% endif %}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
+        <thead id="lg-head"></thead>
+        <tbody id="lg-rows"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
       </table>
     </div>
+    <div class="task-pager" id="lg-pager"></div>
+    <p class="muted work-rule" id="lg-count"></p>
   {% endif %}
 {% endif %}
 
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/js/logtable.js?v={{ cache_buster }}"></script>
 <script>
-function toggleTaskDetail(id, row) {
-  var detail = document.getElementById(id);
-  if (!detail) return;
-  var chev = row.querySelector('.task-chev');
-  var hidden = detail.hasAttribute('hidden');
-  if (hidden) {
-    detail.removeAttribute('hidden');
-    if (chev) chev.textContent = '▾';
-  } else {
-    detail.setAttribute('hidden', '');
-    if (chev) chev.textContent = '▸';
+/* ── The four log mounts ────────────────────────────────────────────────────
+   Same module, four column specs. Ordering/pagination live on the server
+   (sort= keys are an allow-list there), so every tab behaves identically. */
+(function () {
+  var esc = LCPTable.esc, num = LCPTable.num, ts = LCPTable.ts;
+  var tab = {{ view.tab | tojson }};
+
+  function chip(kind, label) {
+    return '<span class="work-chip work-chip-' + kind + '">' + esc(label) + '</span>';
   }
-}
+  function cost(v) { return '$' + Number(v || 0).toFixed(4); }
+
+  if (tab === 'conversations') {
+    LCPTable.mount({
+      ids: {head: 'lg-head', body: 'lg-rows', pager: 'lg-pager', count: 'lg-count', controls: 'lg-controls'},
+      endpoint: '/api/work/conversations',
+      rowsKey: 'conversations',
+      noun: 'grouped conversations',
+      params: {{ {'view': 'conversations', 'qid': params.qid or ''} | tojson }},
+      filters: [{param: 'profile', label: 'All profiles', optionsKey: 'profiles',
+                 value: {{ (params.profile or '') | tojson }}}],
+      empty: 'No conversations match.',
+      columns: [
+        {key: 'name', label: 'Conversation', cell: function (c) {
+          return '<div class="work-job-name">' + esc(c.name) + '</div>' +
+            '<span class="mono muted convo-id">' + esc(c.id) + '</span>' +
+            (c.summary ? '<div class="muted convo-summary">' + esc(c.summary) + '</div>' : '');
+        }},
+        {key: 'profile', label: 'Profile', cell: function (c) {
+          return '<span class="work-actor">' + esc(c.profile) + '</span>';
+        }},
+        {key: 'model', label: 'Model', cell: function (c) {
+          return '<span class="mono">' + esc(c.model) + '</span>';
+        }},
+        {key: 'task', label: 'Task', cell: function (c) {
+          return c.task ? '<span class="task-chip">' + esc(c.task) + '</span>' : '—';
+        }},
+        {key: 'calls', label: 'Calls', num: true, cell: function (c) { return num(c.calls); }},
+        {key: 'tokens', label: 'Tokens', num: true, cell: function (c) { return num(c.tokens); }},
+        {key: 'cost', label: 'Cost', num: true, cell: function (c) { return cost(c.cost); }},
+        {key: 'errors', label: 'Errors', num: true, cell: function (c) {
+          return c.errors ? '<span class="work-warn">' + num(c.errors) + '</span>'
+                          : '<span class="muted">0</span>';
+        }},
+        {key: 'last_at', label: 'Last activity', cell: function (c) {
+          return '<span class="mono muted">' + esc(ts(c.last_at)) + '</span>';
+        }}
+      ],
+      expand: {param: 'cid', key: 'id', endpoint: '/api/work/conversations/detail',
+               render: function (d, row) {
+        // calls/cost/errors come from the persisted conversation row; the detail
+        // payload carries the event window (the last N calls) and `truncated`.
+        var out = ['<div class="task-detail-inner">',
+          '<p class="muted work-rule">Started ' + esc(ts(row.started_at)) + ' · ' +
+          num(d.calls != null ? d.calls : row.calls) + ' call(s) · ' +
+          cost(d.cost != null ? d.cost : row.cost) + '</p>',
+          '<ul class="convo-timeline">'];
+        (d.events || []).forEach(function (e) {
+          out.push('<li class="convo-event"><span class="convo-ts mono">' + esc(ts(e.ts)) + '</span>');
+          if (e.kind === 'routing') {
+            out.push(chip('active', 'route'));
+            out.push('<span class="mono">' + esc(e.task || '?') + '</span> · ' + esc(e.action));
+            if (e.provider) out.push('→ <span class="work-actor">' + esc(e.provider) + '</span>');
+            if (e.model) out.push(' <span class="mono muted">' + esc(e.model) + '</span>');
+            if (e.score != null) out.push(' <span class="muted">score ' + Number(e.score).toFixed(3) + '</span>');
+            if (e.note) out.push('<span class="muted">· ' + esc(e.note) + '</span>');
+          } else {
+            out.push(chip(e.success ? 'ok' : 'error', e.success ? 'req' : 'req ERR'));
+            out.push('<span class="work-actor">' + esc(e.provider) + '</span> → ' +
+              '<span class="mono">' + esc(e.model) + '</span>');
+            out.push('<span class="muted">· ' + num(e.prompt_tokens) + ' + ' +
+              num(e.completion_tokens) + ' tok · ' + num(e.latency_ms) + ' ms · ' +
+              cost(e.cost) + '</span>');
+            if (!e.success && e.error_type) out.push('<span class="work-warn">' + esc(e.error_type) + '</span>');
+          }
+          out.push('</li>');
+        });
+        out.push('</ul>');
+        if (d.truncated) out.push('<p class="muted task-note">… first ' +
+          num((d.events || []).length) + ' events shown.</p>');
+        out.push('</div>');
+        return out.join('');
+      }}
+    });
+  }
+
+  if (tab === 'requests') {
+    LCPTable.mount({
+      ids: {head: 'lg-head', body: 'lg-rows', pager: 'lg-pager', count: 'lg-count', controls: 'lg-controls'},
+      endpoint: '/api/work/requests',
+      rowsKey: 'rows',
+      noun: 'requests',
+      params: {{ {'view': 'requests'} | tojson }},
+      empty: 'No requests match.',
+      columns: [
+        {key: 'timestamp', label: 'When', cell: function (r) {
+          return '<span class="mono muted">' + esc(ts(r.timestamp)) + '</span>';
+        }},
+        {key: 'profile', label: 'Profile', cell: function (r) {
+          return '<span class="work-actor">' + esc(r.profile) + '</span>';
+        }},
+        {key: 'model', label: 'Model', cell: function (r) {
+          return '<span class="mono">' + esc(r.model) + '</span>';
+        }},
+        {key: 'provider', label: 'Provider', cell: function (r) { return esc(r.provider); }},
+        {key: 'tokens', label: 'Tokens', num: true, cell: function (r) {
+          return num((r.prompt_tokens || 0) + (r.completion_tokens || 0));
+        }},
+        {key: 'cost', label: 'Cost', num: true, cell: function (r) { return cost(r.cost); }},
+        {key: 'latency_ms', label: 'Latency', num: true, cell: function (r) {
+          return num(r.latency_ms) + ' ms';
+        }},
+        {key: 'success', label: 'Status', cell: function (r) {
+          return r.success ? chip('ok', 'ok') : chip('error', r.error_type || 'error');
+        }},
+        {key: 'conversation_id', label: 'Conversation', cell: function (r) {
+          if (!r.conversation_id) return '—';
+          return '<a class="mono muted" href="/logs?view=conversations&amp;qid=' +
+            encodeURIComponent(r.conversation_id) + '">' +
+            esc(String(r.conversation_id).slice(0, 10)) + '…</a>';
+        }}
+      ]
+    });
+  }
+
+  if (tab === 'providers') {
+    LCPTable.mount({
+      ids: {head: 'lg-head', body: 'lg-rows', pager: 'lg-pager', count: 'lg-count', controls: 'lg-controls'},
+      endpoint: '/api/work/provider-decisions',
+      rowsKey: 'rows',
+      noun: 'provider routing decisions',
+      params: {{ {'view': 'providers'} | tojson }},
+      empty: 'No provider decisions match.',
+      columns: [
+        {key: 'ts', label: 'When', cell: function (r) {
+          return '<span class="mono muted">' + esc(ts(r.ts)) + '</span>';
+        }},
+        {key: 'profile', label: 'Profile', cell: function (r) {
+          return '<span class="work-actor">' + esc(r.profile) + '</span>';
+        }},
+        {key: 'task', label: 'Task', cell: function (r) {
+          return '<span class="task-chip">' + esc(r.task) + '</span>';
+        }},
+        {key: 'policy', label: 'Policy', cell: function (r) {
+          return '<span class="mono">' + esc(r.policy) + '</span>';
+        }},
+        {key: 'action', label: 'Action', cell: function (r) {
+          return '<span class="mono">' + esc(r.action) + '</span>';
+        }},
+        {key: 'provider', label: 'Provider', cell: function (r) { return esc(r.provider || '—'); }},
+        {key: 'model', label: 'Model', cell: function (r) {
+          return '<span class="mono">' + esc(r.model || '—') + '</span>';
+        }},
+        {key: 'score', label: 'Score', num: true, cell: function (r) {
+          return r.score != null ? Number(r.score).toFixed(3) : '—';
+        }},
+        {key: 'note', label: 'Note', cell: function (r) {
+          return '<span class="muted">' + esc(String(r.note || '').slice(0, 80)) + '</span>';
+        }},
+        {key: 'conversation_id', label: 'Conversation', cell: function (r) {
+          if (!r.conversation_id) return '—';
+          return '<span class="mono muted">' + esc(String(r.conversation_id).slice(0, 10)) + '…</span>';
+        }}
+      ]
+    });
+  }
+
+  if (tab === 'decisions') {
+    var mount = document.getElementById('lg-rows');
+    if (mount) {
+      LCPTable.mount({
+        ids: {head: 'lg-head', body: 'lg-rows', pager: 'lg-pager', count: 'lg-count'},
+        endpoint: '/api/work/decisions',
+        rowsKey: 'ledger.rows',
+        noun: 'decision rows',
+        params: {{ {'view': 'decisions'} | tojson }},
+        empty: 'No decisions recorded.',
+        columns: [
+          {key: 't', label: 'Event time', cell: function (m) {
+            return '<span class="mono">' + esc(ts(m.t)) + '</span>';
+          }},
+          {key: 'computed_at', label: 'Asked at', cell: function (m) {
+            return '<span class="mono muted">' + esc(ts(m.computed_at)) + '</span>';
+          }},
+          {key: 'subject', label: 'Subject', cell: function (m) { return esc(m.subject); }},
+          {key: 'actor', label: 'Actor', cell: function (m) {
+            return '<span class="work-actor">' + esc(m.actor) + '</span>';
+          }},
+          {key: 'kind', label: 'Kind', cell: function (m) {
+            return '<span class="mono">' + esc((m.payload || {}).event_kind || '—') + '</span>';
+          }},
+          {key: 'label', label: 'Label', cell: function (m) {
+            var l = (m.payload || {}).label;
+            return '<span class="work-label work-label-' + esc(l) + '">' + esc(l) + '</span>';
+          }},
+          {key: 'confidence', label: 'Conf', num: true, cell: function (m) {
+            var c = (m.payload || {}).confidence;
+            return c != null ? Number(c).toFixed(3) : '—';
+          }}
+        ]
+      });
+    }
+  }
+})();
 </script>
 {% endblock %}

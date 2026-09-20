@@ -3,6 +3,34 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **Shared log-table module** — one implementation of "a table of log rows",
+  used by all four Logs tabs (conversations, requests, provider decisions, board
+  decisions):
+  - `src/ui/tables.py` — the server half. Owns the page window and the ORDER BY,
+    exposes an **allow-list of named sort keys** (`newest` / `oldest`, plus
+    `asked` for the ledger) instead of interpolating `?sort=` into SQL, and
+    clamps `?page=` to the real range. The default sort key on every tab is
+    `newest`, so logs are newest-first unless asked otherwise.
+  - `static/js/logtable.js` — the client half. Fetches the JSON view and renders
+    the rows, the sort + page-size + filter controls, the pager and the
+    "Showing X–Y of N" line from the server's `filter` payload, keeping state in
+    the URL. Conversations expand their timeline on demand (one request per
+    expansion) instead of inlining 50 events for every row on the page.
+
+### Fixed
+- **Logs: two of four tabs were silently capped at 20 rows.** The requests and
+  provider-decisions tabs paginated in the data layer but never rendered a pager,
+  so rows 21+ were unreachable — 54,244 requests showed 20. Both now page.
+- **Logs: the board-decisions tab dumped the entire ledger** into the page (the
+  funnel is still computed over the whole ledger, never over one page).
+- **Logs: the Requests tab's conversation link did nothing** — it linked to
+  `?qid=<id>`, which no view read. `conversations_view` now honours `qid`.
+- Page-size `all` is no longer offered as a button on the log tabs (the API
+  still honours it) — it was one click away from a 15 MB page.
+
 ## [0.5.0] — 2026-08-22
 
 This release is the first public `main` release — the culmination of the

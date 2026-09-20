@@ -205,3 +205,114 @@ class TestViews:
         ) == "the ask"
         assert wc._extract_first_user('[{"role":"assistant","content":"x"}]') is None
         assert wc._extract_first_user("not json") is None
+
+
+class TestLogTableModuleWiring:
+    """Every log view pages and sorts through src/ui/tables.py.
+
+    These pin the two things the shared module promises: newest-first by
+    default, and a page window that does not overlap or drop rows.
+    """
+
+    @pytest.fixture
+    def rows(self, db):
+        wc.ensure_schema()   # adds conversation_id to both log tables
+        for i in range(5):
+            _req(db, "2026-09-19T10:0%d:00+00:00" % i, profile="l2", model="a")
+        db.commit()
+        return db
+
+    def test_requests_default_is_newest_first(self, rows):
+        v = wc.requests_view({"per": "2"})
+        assert v["total"] == 5
+        assert [r["timestamp"] for r in v["rows"]] == [
+            "2026-09-19T10:04:00+00:00", "2026-09-19T10:03:00+00:00"]
+        assert v["filter"]["sort"] == "newest"
+        assert v["filter"]["sorts"][0]["key"] == "newest"
+
+    def test_requests_pages_do_not_overlap(self, rows):
+        p1 = wc.requests_view({"per": "2", "page": "1"})
+        p2 = wc.requests_view({"per": "2", "page": "2"})
+        p3 = wc.requests_view({"per": "2", "page": "3"})
+        ids = [r["id"] for r in p1["rows"] + p2["rows"] + p3["rows"]]
+        assert len(ids) == 5 and len(set(ids)) == 5   # no duplicates, no drops
+        assert p3["filter"]["page"] == 3
+        assert (p3["filter"]["first"], p3["filter"]["last"]) == (5, 5)
+
+    def test_requests_page_clamps_past_the_end(self, rows):
+        v = wc.requests_view({"per": "2", "page": "99"})
+        assert v["filter"]["page"] == v["filter"]["pages"] == 3
+
+    def test_requests_sort_oldest(self, rows):
+        v = wc.requests_view({"per": "2", "sort": "oldest"})
+        assert [r["timestamp"] for r in v["rows"]] == [
+            "2026-09-19T10:00:00+00:00", "2026-09-19T10:01:00+00:00"]
+
+    def test_requests_unknown_sort_falls_back_to_newest(self, rows):
+        v = wc.requests_view({"per": "1", "sort": "'; DROP TABLE requests--"})
+        assert v["filter"]["sort"] == "newest"
+        assert v["rows"][0]["timestamp"] == "2026-09-19T10:04:00+00:00"
+
+    def test_requests_total_survives_paging(self, rows):
+        assert wc.requests_view({"per": "2", "page": "3"})["total"] == 5
+
+    def test_requests_profile_filter_with_pager(self, rows):
+        _req(rows, "2026-09-19T11:00:00+00:00", profile="l1", model="b")
+        rows.commit()
+        v = wc.requests_view({"per": "2", "profile": "l2"})
+        assert v["total"] == 5
+        assert {r["profile"] for r in v["rows"]} == {"l2"}
+
+    def test_provider_decisions_newest_first_and_paged(self, db):
+        wc.ensure_schema()
+        for i in range(5):
+            _route(db, "2026-09-19T10:0%d:00+00:00" % i, action="a%d" % i)
+        db.commit()
+        v = wc.provider_decisions_view({"per": "2", "page": "2"})
+        assert v["total"] == 5
+        assert [r["action"] for r in v["rows"]] == ["a2", "a1"]
+        assert v["filter"]["sort_label"] == "Newest first"
+
+    def test_provider_decisions_sort_oldest(self, db):
+        wc.ensure_schema()
+        for i in range(3):
+            _route(db, "2026-09-19T10:0%d:00+00:00" % i, action="a%d" % i)
+        db.commit()
+        v = wc.provider_decisions_view({"per": "2", "sort": "oldest"})
+        assert [r["action"] for r in v["rows"]] == ["a0", "a1"]
+
+    def test_conversations_default_newest_activity_first(self, db):
+        _req(db, "2026-09-19T09:00:00+00:00", profile="l2", model="a")
+        _req(db, "2026-09-19T12:00:00+00:00", profile="l1", model="b")
+        db.commit()
+        wc.backfill_conversations()
+        v = wc.conversations_view({"per": "1"})
+        assert v["total"] == 2
+        assert v["conversations"][0]["profile"] == "l1"
+        assert v["filter"]["sorts"][0]["key"] == "newest"
+
+    def test_conversations_sort_oldest_flips_it(self, db):
+        _req(db, "2026-09-19T09:00:00+00:00", profile="l2", model="a")
+        _req(db, "2026-09-19T12:00:00+00:00", profile="l1", model="b")
+        db.commit()
+        wc.backfill_conversations()
+        v = wc.conversations_view({"per": "1", "sort": "oldest"})
+        assert v["conversations"][0]["profile"] == "l2"
+
+    def test_conversations_qid_narrows_to_one(self, db):
+        _req(db, "2026-09-19T09:00:00+00:00", profile="l2", model="a")
+        _req(db, "2026-09-19T12:00:00+00:00", profile="l1", model="b")
+        db.commit()
+        wc.backfill_conversations()
+        cid = wc.conversations_view({"per": "1"})["conversations"][0]["id"]
+        v = wc.conversations_view({"qid": cid})
+        assert v["total"] == 1
+        assert v["conversations"][0]["id"] == cid
+        assert v["filter"]["qid"] == cid
+
+    def test_conversations_qid_unknown_is_empty_not_error(self, db):
+        _req(db, "2026-09-19T09:00:00+00:00", profile="l2", model="a")
+        db.commit()
+        wc.backfill_conversations()
+        v = wc.conversations_view({"qid": "nope"})
+        assert v["total"] == 0 and v["conversations"] == []
