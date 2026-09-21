@@ -208,17 +208,61 @@ class TestTasksViewParams:
         assert v["filter"]["pages"] == 1
         assert len(v["tasks"]) == 9
 
+    def test_newest_transition_first_ignores_timestamp_granularity(self, tmp_path, monkeypatch):
+        """`newest transition first` must hold whatever the filesystem's timestamp
+        granularity is.
+
+        The fixture writes alpha, bravo, charlie in that order. Give them distinct
+        mtimes — what a nanosecond-timestamp filesystem produces from sequential mkdir —
+        and the newest must lead. On ext3 (1 s granularity) these three share an mtime,
+        the stable sort falls back to the alphabetical scan order, and alpha leads
+        instead; that is how a positional assertion elsewhere in this file passed here
+        and failed on GitHub's runners.
+        """
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        self._moments(tmp_path)
+        import os
+        root = tmp_path / "tasks"
+        base = 1_800_000_000.0
+        for i, slug in enumerate(("alpha", "bravo", "charlie")):
+            for state in ("in_progress", "new", "completed"):
+                os.utime(root / state / slug, (base + i, base + i))
+        v = wt.tasks_view({"states": "in_progress"})
+        assert [r["subject"] for r in v["tasks"]] == [
+            "charlie", "bravo", "alpha"]
+
+    def test_tied_mtimes_still_order_deterministically(self, tmp_path, monkeypatch):
+        """When mtimes tie the order is still fixed — alphabetical, never raw
+        directory-list order (which is what makes the lite table reproducible)."""
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
+        self._moments(tmp_path)
+        import os
+        root = tmp_path / "tasks"
+        for slug in ("alpha", "bravo", "charlie"):
+            for state in ("in_progress", "new", "completed"):
+                os.utime(root / state / slug, (1_800_000_000.0, 1_800_000_000.0))
+        v = wt.tasks_view({"states": "in_progress"})
+        assert [r["subject"] for r in v["tasks"]] == [
+            "alpha", "bravo", "charlie"]
+
 
 class TestLiteAndDetail:
     def test_lite_rows_carry_no_plan_payload(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
         TestTasksViewParams._moments(TestTasksViewParams(), tmp_path)
         v = wt.tasks_view({"states": "in_progress", "lite": "1"})
-        row = v["tasks"][0]
+        # Select the row by key, not by position. The table is ordered
+        # newest-transition-first, so index 0 is whichever task was written last: on a
+        # filesystem with nanosecond timestamps that is `charlie`, while where the
+        # mtimes tie inside one second the stable sort falls back to the alphabetical
+        # scan order and it is `alpha`. Asserting the position made this pass on ext3
+        # (1 s granularity) and fail on GitHub's runners (CI runs #33/#34/#35). The
+        # ordering contract itself is covered by
+        # TestTasksViewParams.test_newest_transition_first_ignores_timestamp_granularity.
+        row = next(r for r in v["tasks"] if r["key"] == "in_progress/alpha")
         assert "plan_html" not in row["payload"]
         assert "results_html" not in row["payload"]
         assert "state_summary" not in row["payload"]
-        assert row["key"] == "in_progress/alpha"
 
     def test_detail_returns_heavy_payload(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(tmp_path / "tasks"))
