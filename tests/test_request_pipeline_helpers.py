@@ -385,6 +385,87 @@ class TestReadCacheHitTokens:
         mock_config.get_provider_cache_config.return_value = {"hit_field": "cache_read_input_tokens"}
         assert read_cache_hit_tokens("llamacpp", resp, mock_config) == 7
 
+    # ── the nested OpenAI-compatible field (OpenCode + CommandCode) ──────
+    #
+    # Both providers report cache hits nested under
+    # prompt_tokens_details.cached_tokens — verified live 2026-09-26 by sending
+    # a repeated ~2k-token prefix twice: OpenCode returned 2048 and CommandCode
+    # 1920, each matching the vendor's own cache-read counter. Reading only the
+    # flat field scored all of it as a miss and priced ~94% of prompt volume at
+    # the full input rate, overstating cost by roughly 10x.
+
+    def test_nested_openai_field_is_read(self, mock_config):
+        resp = {"usage": {"prompt_tokens": 2215,
+                          "prompt_tokens_details": {"cached_tokens": 2048}}}
+        mock_config.get_provider_cache_config.return_value = {}
+        assert read_cache_hit_tokens("opencode", resp, mock_config) == 2048
+
+    def test_nested_field_via_dotted_hit_field(self, mock_config):
+        resp = {"usage": {"prompt_tokens_details": {"cached_tokens": 2048}}}
+        mock_config.get_provider_cache_config.return_value = {
+            "hit_field": "prompt_tokens_details.cached_tokens"}
+        assert read_cache_hit_tokens("opencode", resp, mock_config) == 2048
+
+    def test_cold_request_with_empty_details_is_zero(self, mock_config):
+        """A cold OpenCode request answers `prompt_tokens_details: {}`."""
+        resp = {"usage": {"prompt_tokens": 88, "prompt_tokens_details": {}}}
+        mock_config.get_provider_cache_config.return_value = {}
+        assert read_cache_hit_tokens("opencode", resp, mock_config) == 0
+
+    def test_present_zero_is_authoritative(self, mock_config):
+        """A provider that reports 0 must not fall through to another field."""
+        resp = {"usage": {"prompt_cache_hit_tokens": 999,
+                          "prompt_tokens_details": {"cached_tokens": 0}}}
+        mock_config.get_provider_cache_config.return_value = {
+            "hit_field": "prompt_tokens_details.cached_tokens"}
+        assert read_cache_hit_tokens("commandcode", resp, mock_config) == 0
+
+    def test_anthropic_field_still_read(self, mock_config):
+        resp = {"usage": {"cache_read_input_tokens": 7}}
+        mock_config.get_provider_cache_config.return_value = {}
+        assert read_cache_hit_tokens("anthropic", resp, mock_config) == 7
+
+    def test_malformed_value_falls_through_to_the_next_candidate(self, mock_config):
+        resp = {"usage": {"prompt_cache_hit_tokens": "not-a-number",
+                          "prompt_tokens_details": {"cached_tokens": 5}}}
+        mock_config.get_provider_cache_config.return_value = {}
+        assert read_cache_hit_tokens("opencode", resp, mock_config) == 5
+
+    def test_negative_value_is_clamped_to_zero(self, mock_config):
+        resp = {"usage": {"prompt_cache_hit_tokens": -3}}
+        mock_config.get_provider_cache_config.return_value = {}
+        assert read_cache_hit_tokens("deepseek", resp, mock_config) == 0
+
+    def test_non_dict_usage_is_zero(self, mock_config):
+        assert read_cache_hit_tokens("deepseek", {"usage": "nonsense"}, mock_config) == 0
+
+    def test_config_without_a_cache_handler_still_finds_the_nested_field(self):
+        """A minimal/duck-typed config must not disable the fallback chain."""
+        resp = {"usage": {"prompt_tokens_details": {"cached_tokens": 12}}}
+        assert read_cache_hit_tokens("opencode", resp, object()) == 12
+
+    def test_cost_drops_when_cache_hits_are_counted(self, mock_config):
+        """The accounting consequence of the fix, in dollars."""
+        usage = {"prompt_tokens": 2215, "completion_tokens": 10,
+                 "prompt_tokens_details": {"cached_tokens": 2048}}
+        mock_config.get_provider_cache_config.return_value = {}
+        mock_config.get_pricing.return_value = {
+            "cache_hit": 0.0028, "cache_miss": 0.14, "output": 0.28}
+        with patch("src.api.request_pipeline.get_registry") as mock_reg:
+            mock_reg.return_value.calculate_cost.return_value = None
+            counted = calculate_cost("opencode", "deepseek-v4-flash", {},
+                                     {"usage": usage}, mock_config)
+            ignored = calculate_cost("opencode", "deepseek-v4-flash", {},
+                                     {"usage": {**usage, "prompt_tokens_details": {}}},
+                                     mock_config)
+        assert counted["cache_hit_tokens"] == 2048
+        assert counted["cache_miss_tokens"] == 167
+        assert ignored["cache_hit_tokens"] == 0
+        assert ignored["cache_miss_tokens"] == 2215
+        assert counted["cost"] < ignored["cost"]
+        assert counted["cost"] == round(
+            2048 * 0.0028 / 1e6 + 167 * 0.14 / 1e6 + 10 * 0.28 / 1e6, 8)
+
 
 # ── calculate_cost ───────────────────────────────────────────────────────
 

@@ -407,23 +407,69 @@ def sanitize_messages(messages: list[dict]) -> list[dict]:
 
 # ── Cost Calculation ─────────────────────────────────────────────────────────
 
+#: Where a cache-hit count can appear in a provider's ``usage`` block, in
+#: preference order. Paths may be dotted.
+#:
+#: ``prompt_tokens_details.cached_tokens`` is the OpenAI-compatible nested
+#: location, and **both OpenCode and CommandCode use it** (verified live
+#: 2026-09-26: a repeated ~2k-token prefix returned ``cached_tokens: 2048`` and
+#: ``1920`` respectively, matching each vendor's own cache-read counter).
+#: Reading only the flat field silently scored every cached token as a miss,
+#: which priced ~94% of prompt volume at the full input rate — a ~10x cost
+#: overstatement on both providers.
+_CACHE_HIT_FIELDS: tuple[str, ...] = (
+    "prompt_cache_hit_tokens",              # DeepSeek native / OpenAI legacy
+    "prompt_tokens_details.cached_tokens",  # OpenAI-compatible nested
+    "cache_read_input_tokens",              # Anthropic
+)
+
+
+def _read_path(container: dict, path: str):
+    """Read a possibly-dotted path out of nested dicts; None when absent."""
+    node = container
+    for part in path.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+        if node is None:
+            return None
+    return node
+
+
 def read_cache_hit_tokens(provider_name: str, response_body: dict | None,
                           config) -> int:
-    """Read cache-hit tokens from provider response, using configured field name.
+    """Read cache-hit tokens from a provider response.
 
-    Falls back to the standard 'prompt_cache_hit_tokens' field when the config
-    doesn't declare a provider-specific field (or when called from tests with
-    a minimal mock config).
+    Sets are tried in order: the provider's configured ``hit_field`` (which may
+    be a dotted path), then the known spellings in ``_CACHE_HIT_FIELDS``. A
+    field that is *present* wins even when it is 0 — a reported zero is
+    authoritative, and only an absent field falls through to the next candidate.
+
+    Returns 0 when the provider reports no cache information at all, which is
+    the honest reading: the caller then treats every prompt token as a miss.
     """
     if response_body is None:
         return 0
     usage = response_body.get("usage", {})
-    field = "prompt_cache_hit_tokens"  # default for DeepSeek/OpenAI
+    if not isinstance(usage, dict):
+        return 0
+
+    candidates: list[str] = []
     if hasattr(config, "get_provider_cache_config"):
         cc = config.get_provider_cache_config(provider_name)
         if isinstance(cc, dict) and cc.get("hit_field"):
-            field = cc["hit_field"]
-    return usage.get(field, 0)
+            candidates.append(str(cc["hit_field"]))
+    candidates.extend(_CACHE_HIT_FIELDS)
+
+    for field in candidates:
+        value = _read_path(usage, field)
+        if value is None:
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return 0
 
 
 def calculate_cost(provider: str, model: str, body: dict, response_body: dict | None,

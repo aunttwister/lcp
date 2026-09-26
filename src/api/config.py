@@ -91,6 +91,15 @@ SEED_CONFIG: dict[str, Any] = {
             "api_key_env": "OPENCODE_API_KEY",
             "api_base": "https://opencode.ai/inference/openai/v1",
             "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
+            # OpenCode reports cache hits in the OpenAI-compatible nested block
+            # (usage.prompt_tokens_details.cached_tokens). Without this the
+            # hit count read as 0 and every prompt token was priced at the
+            # cache-miss rate (~10x overstatement).
+            "cache": {
+                "strategy": "prefix",
+                "savings": "cost",
+                "hit_field": "prompt_tokens_details.cached_tokens",
+            },
         },
         "deepseek": {
             "api_key_env": "DEEPSEEK_API_KEY",
@@ -106,6 +115,13 @@ SEED_CONFIG: dict[str, Any] = {
             "api_base": "https://api.commandcode.ai/provider/v1",
             "models": ["deepseek-v4-pro", "deepseek-v4-flash", "claude-sonnet-5",
                        "gpt-5.6-luna", "kimi-k3", "minimax-m3", "qwen3.8-max"],
+            # Same nested field as OpenCode: a repeated ~2k-token prefix reports
+            # cached_tokens, so the hit/miss split is available after all.
+            "cache": {
+                "strategy": "prefix",
+                "savings": "cost",
+                "hit_field": "prompt_tokens_details.cached_tokens",
+            },
         },
     },
     "pricing": [
