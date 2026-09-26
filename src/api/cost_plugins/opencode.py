@@ -408,61 +408,69 @@ class OpenCodeCostPlugin(CostPlugin):
     # ── Subscription (from OpenCode web API) ───────────────────────────────
 
     def fetch_subscription(self) -> Optional[dict]:
-        """Fetch subscription usage snapshot from the OpenCode web API.
+        """Plan-window usage for the OpenCode vendor card.
 
-        Requires the OpenCode ``auth`` cookie and workspace ID — read from the
-        encrypted credential store (UI-managed).  Returns::
+        The rolling/weekly/monthly limit windows are only exposed to a console
+        **session**: a service key is refused (403) on ``/api/billing/account``
+        and ``/api/v1/budgets/members`` reports ``limit_micro_cents: null`` for
+        this account.  The workspace billing page this method used to scrape now
+        returns a 1565-byte client-rendered shell byte-identical to ``/console``,
+        so the old path could only ever fail — and it blamed a cookie the plugin
+        no longer sends.
 
-            {"rolling_pct": 17.0, "weekly_pct": 75.0,
-             "rolling_reset_sec": 5944, "weekly_reset_sec": 278201}
-
-        Returns ``None`` when the cookie is missing, invalid, or the API
-        is unreachable.
+        Returns the same actionable, non-transient reason as
+        :meth:`fetch_balance` when the session is missing, and an explicit
+        ``no_subscription`` state (never a fabricated percentage) when the
+        console reports no limit to divide by.
         """
+        if os.environ.get("LCP_MOCK_PLUGIN_DATA"):
+            return {
+                "monthly_pct": 12.0, "monthly_reset_sec": 1209600,
+                "rolling_pct": 17.0, "rolling_reset_sec": 5944,
+                "weekly_pct": 75.0, "weekly_reset_sec": 278201,
+            }
+        from .console_oauth import current_access_token
+        from .opencode_api import (
+            ConsoleApiError,
+            fetch_budget_members,
+            plan_windows,
+        )
+
+        token = current_access_token()
+        if not token:
+            logger.info("opencode_console_session_missing")
+            return {
+                "_error": "auth_failed",
+                "detail": (
+                    "OpenCode credits need a console session (one-time "
+                    "browser approval): run "
+                    "`python -m api.cost_plugins.console_oauth start`"
+                ),
+            }
         try:
-            if os.environ.get("LCP_MOCK_PLUGIN_DATA"):
-                return {
-                    "monthly_pct": 12.0, "monthly_reset_sec": 1209600,
-                    "rolling_pct": 17.0, "rolling_reset_sec": 5944,
-                    "weekly_pct": 75.0, "weekly_reset_sec": 278201,
-                }
-            from .opencode_api import (
-                OpenCodeSubscriptionUnavailable,
-                fetch_subscription_dict,
-            )
-            cookie = ""
-            workspace_id = ""
-            # Cookie + workspace ID from the encrypted credential store (UI-managed)
-            try:
-                from ..credential_store import get_credential_store
-                store = get_credential_store()
-                if store is not None:
-                    cookie = store.get_cookie("opencode") or ""
-                    workspace_id = store.get_workspace_id("opencode") or ""
-            except Exception:
-                cookie = ""
-                workspace_id = ""
-            if not cookie:
-                logger.debug("opencode_cookie_not_configured")
-                return {"_error": "auth_failed", "detail": "OpenCode cookie not set — add it in the Usage tab"}
-            try:
-                data = fetch_subscription_dict(cookie, workspace_id=workspace_id or None)
-            except OpenCodeSubscriptionUnavailable as exc:
-                # Classified absence — surface the specific, actionable reason
-                # (no active subscription vs expired session) to the UI/log.
-                logger.warning(
-                    "opencode_subscription_unavailable",
-                    reason=exc.reason,
-                )
-                error_kind = "auth_failed" if exc.reason == "auth" else exc.reason
-                return {"_error": error_kind, "detail": exc.detail}
-            if data is None:
-                logger.warning("subscription_fetch_returned_none")
-                return {"_error": "auth_failed", "detail": "Invalid or expired OpenCode cookie, or API unreachable"}
-            return data
-        except Exception as exc:
-            logger.warning("subscription_fetch_failed", error=str(exc))
+            members = fetch_budget_members(token)
+        except ConsoleApiError as exc:
+            logger.warning("opencode_budget_api_error", status=exc.status,
+                           detail=exc.detail or exc.tag)
+            return {
+                "_error": "auth_failed",
+                "detail": f"console API HTTP {exc.status} on /api/v1/budgets/members",
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("opencode_subscription_failed", error=str(exc))
             return {"_error": "api_error", "detail": str(exc)}
+
+        windows = plan_windows(members)
+        if not windows:
+            logger.info("opencode_plan_limits_absent")
+            return {
+                "_error": "no_subscription",
+                "detail": (
+                    "OpenCode console reports no plan limit for this account, "
+                    "so there is no percentage to show"
+                ),
+            }
+        return windows
 
     def credit_status(self, subscription: Optional[dict] = None,
                       balance: Optional[dict] = None) -> str:

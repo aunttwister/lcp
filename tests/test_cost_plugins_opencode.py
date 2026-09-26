@@ -352,108 +352,85 @@ class TestOpenCodeFetchSummary:
 # fetch_subscription
 # ═══════════════════════════════════════════════════════════════════════
 
+
 class TestOpenCodeFetchSubscription:
-    def test_returns_error_when_no_cookie(self, plugin):
-        """When no cookie is stored, returns error dict."""
-        store = MagicMock()
-        store.get_cookie.return_value = ""
-        with patch("src.api.credential_store.get_credential_store", return_value=store):
+    """Plan windows are a console-session read — the page scrape is dead.
+
+    Re-pointed 2026-09-26: the old contract (an ``auth`` cookie → the scraped
+    workspace billing page) cannot work any more.  That page now returns a
+    1565-byte client-rendered shell byte-identical to ``/console``, and the
+    plugin no longer sends a cookie at all.
+    """
+
+    def _with_session(self, token="sess-token"):
+        return patch("src.api.cost_plugins.console_oauth.current_access_token",
+                     return_value=token)
+
+    def test_returns_error_without_a_console_session(self, plugin):
+        """No session → the actionable one-time-approval reason, not a cookie."""
+        with patch("src.api.cost_plugins.console_oauth.current_access_token",
+                   return_value=None):
             result = plugin.fetch_subscription()
         assert result is not None
         assert result["_error"] == "auth_failed"
+        assert "console session" in result["detail"]
+        assert "cookie" not in result["detail"].lower()
 
-    def test_returns_error_when_api_returns_none(self, plugin):
-        """When the API call returns None (invalid cookie, etc.), returns error dict."""
-        store = MagicMock()
-        store.get_cookie.return_value = "auth=test-cookie"
-        with patch("src.api.credential_store.get_credential_store", return_value=store):
-            with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
-                       return_value=None):
+    def test_absent_plan_limit_is_not_a_fabricated_percentage(self, plugin):
+        """The live console reports limit_micro_cents: null for this org.
+
+        A percentage without a denominator must never be invented, so the
+        payload carries an explicit state instead of a bar.
+        """
+        members = [{"user_id": "acc_1", "limit_micro_cents": None,
+                    "spent_micro_cents": "0", "exceeded": False,
+                    "resets_at": "2026-10-01T00:00:00.000Z"}]
+        with self._with_session():
+            with patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
+                       return_value=members):
                 result = plugin.fetch_subscription()
-        assert result is not None
-        assert result["_error"] == "auth_failed"
+        assert result["_error"] == "no_subscription"
+        assert "rolling_pct" not in result
+        assert "monthly_pct" not in result
 
-    def test_returns_error_when_api_raises(self, plugin):
-        """When the API call raises, returns error dict."""
-        store = MagicMock()
-        store.get_cookie.return_value = "auth=test-cookie"
-        with patch("src.api.credential_store.get_credential_store", return_value=store):
-            with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
+    def test_limit_is_mapped_to_a_monthly_window(self, plugin):
+        """A real limit yields spent/limit, with the month-boundary reset."""
+        from datetime import datetime, timedelta, timezone
+        resets = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+        members = [{"limit_micro_cents": 1_000_000_000,      # $10
+                    "spent_micro_cents": 250_000_000,        # $2.50
+                    "resets_at": resets}]
+        with self._with_session():
+            with patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
+                       return_value=members):
+                result = plugin.fetch_subscription()
+        assert result["monthly_pct"] == 25.0
+        assert result["monthly_reset_sec"] > 0
+
+    def test_console_http_error_names_the_route(self, plugin):
+        from src.api.cost_plugins.opencode_api import ConsoleApiError
+        with self._with_session():
+            with patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
+                       side_effect=ConsoleApiError(403, "u", "Forbidden", "")):
+                result = plugin.fetch_subscription()
+        assert result["_error"] == "auth_failed"
+        assert "403" in result["detail"]
+        assert "budgets/members" in result["detail"]
+
+    def test_unexpected_failure_is_an_api_error(self, plugin):
+        with self._with_session():
+            with patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
                        side_effect=RuntimeError("network down")):
                 result = plugin.fetch_subscription()
-        assert result is not None
         assert result["_error"] == "api_error"
 
-    def test_returns_subscription_data(self, plugin):
-        """Happy path: returns subscription snapshot."""
-        mock_data = {
-            "rolling_pct": 17.0, "weekly_pct": 75.0,
-            "rolling_reset_sec": 5944, "weekly_reset_sec": 278201,
-        }
-        store = MagicMock()
-        store.get_cookie.return_value = "auth=test-cookie"
-        with patch("src.api.credential_store.get_credential_store", return_value=store):
-            with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
-                       return_value=mock_data):
-                result = plugin.fetch_subscription()
-        assert result == mock_data
+    def test_mock_env_short_circuits_without_a_session(self, plugin, monkeypatch):
+        monkeypatch.setenv("LCP_MOCK_PLUGIN_DATA", "1")
+        with patch("src.api.cost_plugins.console_oauth.current_access_token",
+                   return_value=None):
+            result = plugin.fetch_subscription()
+        assert result["rolling_pct"] == 17.0
 
-    def test_uses_credential_store_cookie(self, plugin, tmp_path):
-        """A UI-managed cookie (credential store) is used for the subscription call."""
-        from src.api.credential_store import CredentialStore
-        import src.api.credential_store as cs_module
-        from src.api.models import get_engine, Base
-        import os as _os
-
-        engine = get_engine(":memory:")
-        Base.metadata.create_all(engine)
-        cs_module._credential_store = CredentialStore(engine, data_dir=str(tmp_path))
-        with patch.dict(_os.environ, {"LCP_SECRET_KEY": "test-master"}, clear=False):
-            cs_module._credential_store.set_cookie("opencode", "auth=store-cookie")
-
-            mock_data = {"rolling_pct": 10.0}
-            with patch("src.api.cost_plugins.opencode_api.fetch_subscription_dict",
-                       return_value=mock_data) as m:
-                result = plugin.fetch_subscription()
-        assert result == mock_data
-        # Verify the store cookie was passed through
-        assert m.call_args[0][0] == "auth=store-cookie"
-
-    def test_no_subscription_surfaces_reason(self, plugin):
-        """Classified no-subscription → error payload says renew, not cookie."""
-        from src.api.cost_plugins.opencode_api import OpenCodeSubscriptionUnavailable
-        store = MagicMock()
-        store.get_cookie.return_value = "auth=test-cookie"
-        with patch("src.api.credential_store.get_credential_store", return_value=store):
-            with patch(
-                "src.api.cost_plugins.opencode_api.fetch_subscription_dict",
-                side_effect=OpenCodeSubscriptionUnavailable(
-                    "no_subscription",
-                    "No active OpenCode subscription (expired or not renewed). Renew at opencode.ai.",
-                ),
-            ):
-                result = plugin.fetch_subscription()
-        assert result is not None
-        assert result["_error"] == "no_subscription"
-        assert "renew" in result["detail"].lower()
-
-    def test_auth_wall_surfaces_auth_failed(self, plugin):
-        """Classified auth → still auth_failed but with specific detail."""
-        from src.api.cost_plugins.opencode_api import OpenCodeSubscriptionUnavailable
-        store = MagicMock()
-        store.get_cookie.return_value = "auth=test-cookie"
-        with patch("src.api.credential_store.get_credential_store", return_value=store):
-            with patch(
-                "src.api.cost_plugins.opencode_api.fetch_subscription_dict",
-                side_effect=OpenCodeSubscriptionUnavailable(
-                    "auth",
-                    "OpenCode session is invalid or expired — refresh the auth cookie in the Usage tab.",
-                ),
-            ):
-                result = plugin.fetch_subscription()
-        assert result is not None
-        assert result["_error"] == "auth_failed"
-        assert "cookie" in result["detail"].lower()
 
     # ── credit_status ─────────────────────────────────────────────────────
 

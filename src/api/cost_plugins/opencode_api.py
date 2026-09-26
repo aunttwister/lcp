@@ -691,3 +691,63 @@ def fetch_account_credits(token: str) -> Optional[dict]:
     rejected with 403 even when its permissions are ``all``.
     """
     return _console_get("/billing/account", token)
+
+
+def _seconds_until(iso_stamp) -> Optional[int]:
+    """Seconds from now until an ISO-8601 timestamp, or None if unparsable."""
+    if not iso_stamp:
+        return None
+    try:
+        when = datetime.fromisoformat(str(iso_stamp).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0, int((when - datetime.now(timezone.utc)).total_seconds()))
+
+
+def fetch_budget_members(token: str) -> list[dict]:
+    """Plan/budget rows — ``GET /api/v1/budgets/members``.
+
+    Observed shape (2026-09-26, service key with permissions ``all``)::
+
+        [{"user_id": "acc_…", "email": "…", "limit_micro_cents": null,
+          "spent_micro_cents": "0", "exceeded": false,
+          "resets_at": "2026-10-01T00:00:00.000Z", "source": null}]
+
+    Note the versioned ``/v1`` prefix: this route is not on the ts-rest ``/api``
+    surface the other console reads use.  Returns ``[]`` on an unfamiliar shape
+    so the caller degrades instead of raising into the refresh loop.
+    """
+    data = _console_get("/v1/budgets/members", token)
+    if isinstance(data, dict):
+        items = data.get("items")
+        return items if isinstance(items, list) else []
+    return data if isinstance(data, list) else []
+
+
+def plan_windows(members: list[dict]) -> dict:
+    """Map console budget rows onto the Usage card's window payload.
+
+    Returns ``{}`` when no row carries a limit.  The console reports
+    ``limit_micro_cents: null`` for a service-account-only org, and a percentage
+    without a denominator must never be invented — an absent limit therefore
+    yields no windows, which the caller turns into an explicit state rather
+    than a fabricated bar.
+
+    ``resets_at`` on a limited row is a calendar month boundary, so the window
+    is reported as the monthly one.
+    """
+    for row in members or []:
+        if not isinstance(row, dict):
+            continue
+        limit = micro_cents_to_usd(row.get("limit_micro_cents"))
+        if not limit or limit <= 0:
+            continue
+        spent = micro_cents_to_usd(row.get("spent_micro_cents")) or 0.0
+        window = {"monthly_pct": round(min(100.0, spent / limit * 100.0), 1)}
+        reset = _seconds_until(row.get("resets_at"))
+        if reset is not None:
+            window["monthly_reset_sec"] = reset
+        return window
+    return {}
