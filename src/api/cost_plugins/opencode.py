@@ -44,6 +44,48 @@ _FREE_MODELS = frozenset({
 })
 
 
+def _map_account_credits(payload: Any) -> Optional[dict]:
+    """Map ``GET /api/billing/account`` onto the balance payload shape.
+
+    The console quotes money in micro-cents (fixed point, 1e-8 USD) — the same
+    unit the retired billing page used.  Returns ``None`` when no credits field
+    is present, so an upstream shape change reports "unrecognised" rather than a
+    fabricated number.
+    """
+    from .opencode_api import micro_cents_to_usd
+
+    if not isinstance(payload, dict):
+        return None
+    source = payload.get("account") if isinstance(payload.get("account"), dict) else payload
+
+    def _first_usd(*keys: str) -> Optional[float]:
+        for key in keys:
+            if key in source:
+                value = micro_cents_to_usd(source.get(key))
+                if value is not None:
+                    return value
+        return None
+
+    available = _first_usd("availableMicroCents", "available_micro_cents",
+                          "availableCreditMicroCents")
+    balance = _first_usd("balanceMicroCents", "balance_micro_cents")
+    if available is None and balance is None:
+        return None
+    credits = available if available is not None else balance
+
+    plan = source.get("plan") or source.get("planName")
+    if plan is None and isinstance(source.get("subscription"), dict):
+        plan = source["subscription"].get("plan") or source["subscription"].get("name")
+
+    return {
+        "available_credits": credits,
+        "balance": credits,
+        "currency": source.get("currency") or "USD",
+        "plan": plan,
+        "workspace_id": source.get("workspaceId") or source.get("workspace_id"),
+    }
+
+
 class OpenCodeCostPlugin(CostPlugin):
     """Cost tracking for OpenCode.
 
@@ -251,17 +293,26 @@ class OpenCodeCostPlugin(CostPlugin):
     # ── Balance / available credits (from OpenCode billing page) ─────────
 
     def fetch_balance(self) -> Optional[dict]:
-        """Fetch available credits from the OpenCode billing page.
+        """Fetch available credits from the OpenCode console.
 
-        Requires the OpenCode ``auth`` cookie and workspace ID — read from the
-        encrypted credential store (UI-managed), same as ``fetch_subscription``.
+        Credits live behind ``GET /api/billing/account``, which accepts only a
+        console **session** token — a service API key is rejected with 403 even
+        with permissions ``all`` (verified 2026-09-26).  The session comes from
+        the one-time authorization-code flow in :mod:`.console_oauth`.
+
+        The previous implementation scraped the billing page's SSR payload with
+        the ``auth`` cookie.  That page no longer exists — it returns the same
+        1565-byte client shell as every other console route — so the scrape
+        could only ever fail; it is gone rather than left to report a misleading
+        dead-cookie error.
+
         Returns::
 
             {"available_credits": 12.34, "balance": 12.34,
-             "currency": "USD", "plan": "pro", "workspace_id": "wrk_..."}
+             "currency": "USD", "plan": "go", "workspace_id": "wrk_..."}
 
-        Returns ``None`` (as before) when no cookie/workspace is configured, or
-        an error dict (``{"_error": ...}``) when the fetch fails.
+        ``None`` when the provider holds no credential at all (stays quiet), or
+        an error dict (``{"_error": ..., "detail": ...}``) when the fetch fails.
         """
         try:
             if os.environ.get("LCP_MOCK_PLUGIN_DATA"):
@@ -270,26 +321,39 @@ class OpenCodeCostPlugin(CostPlugin):
                     "currency": "USD", "plan": "pro",
                     "workspace_id": "wrk_mock", "fetched_at": None,
                 }
-            from .opencode_api import fetch_billing_dict
-            cookie = ""
-            workspace_id = ""
+            from .opencode_api import ConsoleApiError, fetch_account_credits
+            from .console_oauth import current_access_token
+
+            token = current_access_token()
+            if not token:
+                if not self._token():
+                    logger.debug("opencode_not_configured")
+                    return None  # plugin "doesn't support balance" → stays quiet
+                logger.info("opencode_console_session_missing")
+                return {
+                    "_error": "auth_failed",
+                    "detail": (
+                        "OpenCode credits need a console session (one-time "
+                        "browser approval): run "
+                        "`python -m api.cost_plugins.console_oauth start`"
+                    ),
+                }
             try:
-                from ..credential_store import get_credential_store
-                store = get_credential_store()
-                if store is not None:
-                    cookie = store.get_cookie("opencode") or ""
-                    workspace_id = store.get_workspace_id("opencode") or ""
-            except Exception:
-                cookie = ""
-                workspace_id = ""
-            if not cookie:
-                logger.debug("opencode_cookie_not_configured")
-                return None  # plugin "doesn't support balance" → stays quiet
-            data = fetch_billing_dict(cookie, workspace_id=workspace_id or None)
-            if data is None:
-                logger.warning("billing_fetch_returned_none")
-                return {"_error": "api_error", "detail": "No credit data on OpenCode billing page (cookie may be invalid/expired)"}
-            return data
+                payload = fetch_account_credits(token)
+            except ConsoleApiError as exc:
+                logger.warning("opencode_credits_api_error", status=exc.status,
+                               detail=exc.detail or exc.tag)
+                return {
+                    "_error": "auth_failed",
+                    "detail": f"console API HTTP {exc.status} on /api/billing/account",
+                }
+            mapped = _map_account_credits(payload)
+            if mapped is None:
+                logger.warning("opencode_credits_unmapped",
+                               keys=sorted(payload)[:12] if isinstance(payload, dict) else None)
+                return {"_error": "api_error",
+                        "detail": "unrecognised /api/billing/account payload shape"}
+            return mapped
         except Exception as exc:
             logger.warning("billing_fetch_failed", error=str(exc))
             return {"_error": "api_error", "detail": str(exc)}

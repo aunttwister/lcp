@@ -221,59 +221,78 @@ class TestOpenCodeFetchUsage:
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestOpenCodeFetchBalance:
-    def test_no_cookie_returns_none(self, plugin):
-        """No configured cookie → plugin stays quiet (returns None)."""
-        store = MagicMock()
-        store.get_cookie.return_value = ""
-        with patch("src.api.credential_store.get_credential_store", return_value=store):
+    """Credits come from the console session token, not a scraped page.
+
+    ``GET /api/billing/account`` rejects a service API key with 403 even at
+    ``all`` permissions, and the page the old implementation scraped no longer
+    exists — it returns the same 1565-byte client shell as every console route.
+    The happy path therefore needs a session minted by the console OAuth flow.
+    """
+
+    def test_no_credential_returns_none(self, plugin):
+        """Nothing configured at all → plugin stays quiet (returns None)."""
+        with patch.object(plugin, "_token", return_value=""), \
+             patch("src.api.cost_plugins.console_oauth.current_access_token",
+                   return_value=""):
             assert plugin.fetch_balance() is None
 
-    def test_returns_error_when_api_returns_none(self, plugin):
-        """Cookie present but no credit data → error dict (not quiet)."""
-        store = MagicMock()
-        store.get_cookie.return_value = "auth=test-cookie"
-        store.get_workspace_id.return_value = "wrk_1"
-        with patch("src.api.credential_store.get_credential_store", return_value=store):
-            with patch("src.api.cost_plugins.opencode_api.fetch_billing_dict",
-                       return_value=None):
-                result = plugin.fetch_balance()
-        assert result is not None
+    def test_service_key_without_session_reports_the_missing_step(self, plugin):
+        """A key but no session is a precise, actionable state — not a dead cookie."""
+        with patch.object(plugin, "_token", return_value="oc_sk_all"), \
+             patch("src.api.cost_plugins.console_oauth.current_access_token",
+                   return_value=""):
+            result = plugin.fetch_balance()
+        assert result["_error"] == "auth_failed"
+        assert "console_oauth start" in result["detail"]
+
+    def test_returns_credits_from_the_console_account_route(self, plugin):
+        """Happy path: micro-cents from /api/billing/account → USD credits."""
+        with patch.object(plugin, "_token", return_value="oc_sk_all"), \
+             patch("src.api.cost_plugins.console_oauth.current_access_token",
+                   return_value="sess"), \
+             patch("src.api.cost_plugins.opencode_api.fetch_account_credits",
+                   return_value={"availableMicroCents": "1234000000",
+                                 "currency": "USD", "plan": "go"}) as mock_fetch:
+            result = plugin.fetch_balance()
+        assert result["available_credits"] == 12.34
+        assert result["balance"] == 12.34
+        assert result["plan"] == "go"
+        assert mock_fetch.call_args[0][0] == "sess"
+
+    def test_unrecognised_payload_is_flagged_not_fabricated(self, plugin):
+        """A shape change upstream must never yield an invented balance."""
+        with patch.object(plugin, "_token", return_value="oc_sk_all"), \
+             patch("src.api.cost_plugins.console_oauth.current_access_token",
+                   return_value="sess"), \
+             patch("src.api.cost_plugins.opencode_api.fetch_account_credits",
+                   return_value={"surprise": True}):
+            result = plugin.fetch_balance()
         assert result["_error"] == "api_error"
+        assert "unrecognised" in result["detail"]
 
-    def test_returns_balance_data(self, plugin):
-        """Happy path: returns available credits from the billing page."""
-        mock_data = {"available_credits": 12.34, "balance": 12.34,
-                     "currency": "USD", "plan": "pro"}
-        store = MagicMock()
-        store.get_cookie.return_value = "auth=test-cookie"
-        store.get_workspace_id.return_value = "wrk_1"
-        with patch("src.api.credential_store.get_credential_store", return_value=store):
-            with patch("src.api.cost_plugins.opencode_api.fetch_billing_dict",
-                       return_value=mock_data):
-                result = plugin.fetch_balance()
-        assert result == mock_data
-
-    def test_uses_credential_store_cookie_and_workspace(self, plugin, tmp_path):
-        """The UI-managed cookie + workspace ID are passed to the billing fetch."""
-        from src.api.credential_store import CredentialStore
-        import src.api.credential_store as cs_module
-        from src.api.models import get_engine, Base
+    def test_session_token_round_trips_through_the_credential_store(self, plugin, tmp_path):
+        """The console session is read back out of the encrypted store."""
+        import json as _json
         import os as _os
+        import time as _time
+
+        import src.api.credential_store as cs_module
+        from src.api.credential_store import CredentialStore
+        from src.api.models import Base, get_engine
 
         engine = get_engine(":memory:")
         Base.metadata.create_all(engine)
         cs_module._credential_store = CredentialStore(engine, data_dir=str(tmp_path))
         with patch.dict(_os.environ, {"LCP_SECRET_KEY": "test-master"}, clear=False):
-            cs_module._credential_store.set_cookie("opencode", "auth=store-cookie")
-            cs_module._credential_store.set_workspace_id("opencode", "wrk_store")
-
-            mock_data = {"available_credits": 5.0, "balance": 5.0}
-            with patch("src.api.cost_plugins.opencode_api.fetch_billing_dict",
-                       return_value=mock_data) as m:
+            cs_module._credential_store.set("opencode_console", _json.dumps({
+                "client_id": "oac_1", "access_token": "sess-from-store",
+                "refresh_token": "r", "expires_at": _time.time() + 3600,
+            }))
+            with patch("src.api.cost_plugins.opencode_api.fetch_account_credits",
+                       return_value={"availableMicroCents": 500000000}) as mock_fetch:
                 result = plugin.fetch_balance()
-        assert result == mock_data
-        assert m.call_args[0][0] == "auth=store-cookie"
-        assert m.call_args[1].get("workspace_id") == "wrk_store"
+        assert result["available_credits"] == 5.0
+        assert mock_fetch.call_args[0][0] == "sess-from-store"
 
 
 # ═══════════════════════════════════════════════════════════════════════

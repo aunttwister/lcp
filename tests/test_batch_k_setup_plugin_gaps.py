@@ -144,16 +144,17 @@ class TestLlamaCppNoPath:
 
 class TestOpenCodeBalanceExc:
     def test_balance_exception_becomes_error_dict(self, monkeypatch):
-        # opencode.py 229-231
+        # An unexpected failure while reading credits must degrade to an error
+        # dict, never propagate into the cache refresher.
         from src.api.cost_plugins.opencode import OpenCodeCostPlugin
         monkeypatch.delenv("LCP_MOCK_PLUGIN_DATA", raising=False)
-        store = MagicMock()
-        store.get_cookie.return_value = "cookie"
-        with patch("src.api.credential_store.get_credential_store",
-                   return_value=store), \
-             patch("src.api.cost_plugins.opencode_api.fetch_billing_dict",
+        plugin = OpenCodeCostPlugin()
+        monkeypatch.setattr(plugin, "_token", lambda **kw: "oc_sk_all", raising=False)
+        with patch("src.api.cost_plugins.console_oauth.current_access_token",
+                   return_value="sess"), \
+             patch("src.api.cost_plugins.opencode_api.fetch_account_credits",
                    side_effect=RuntimeError("socket died")):
-            out = OpenCodeCostPlugin().fetch_balance()
+            out = plugin.fetch_balance()
         assert out["_error"] == "api_error"
         assert "socket died" in out["detail"]
 
