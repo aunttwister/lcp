@@ -72,12 +72,76 @@ class OpenCodeCostPlugin(CostPlugin):
     @property
     def preset(self) -> Optional[dict]:
         return {
-            "api_base": "https://opencode.ai/zen/go/v1",
+            # The inference base moved /zen/go/v1 -> /inference/openai/v1; the
+            # old value 429s ("Go usage limit, monthly") and 400s without an
+            # x-opencode-session header.
+            "api_base": "https://opencode.ai/inference/openai/v1",
             "models": self.get_supported_models(),
         }
 
     def get_supported_models(self) -> list[str]:
         return list(_OPENCODE_PRICING.keys()) + sorted(_FREE_MODELS)
+
+    # ── Credentials ────────────────────────────────────────────────────────
+
+    def _token(self, *, session: bool = False) -> str:
+        """Return a console bearer token from the encrypted credential store.
+
+        ``session=False`` → the OpenCode service API key (inference + usage
+        routes when its permission is ``all``).
+        ``session=True``  → a console session token minted by the OAuth
+        authorization-code flow, which is what the credits route needs.
+        Never raises: an unreadable store degrades to "no token".
+        """
+        name = "opencode_console" if session else "opencode"
+        try:
+            from ..credential_store import get_credential_store
+            store = get_credential_store()
+            if store is None:
+                return ""
+            return store.get(name) or ""
+        except Exception:  # noqa: BLE001 — credential reads must never raise
+            return ""
+
+    # ── Model discovery ────────────────────────────────────────────────────
+
+    def discover_models(self, api_base: str) -> Optional[list[dict]]:
+        """Return this provider's model catalog.
+
+        OpenCode serves **no** ``/models`` route on its inference base, so the
+        generic discovery path (``{api_base}/models``) always 404s — that is
+        why "Discover Models" fails for this provider.  The authoritative
+        catalog is the console config's per-provider ``whitelist``.
+
+        ``api_base`` is accepted for interface parity with the other plugins
+        and intentionally unused: the catalog lives on the console host, not
+        on the inference base.
+
+        Returns ``None`` (→ caller falls back to generic discovery) when no key
+        is configured or the catalog is empty.
+        """
+        token = self._token()
+        if not token:
+            logger.debug("opencode_discover_no_key")
+            return None
+        try:
+            from .opencode_api import ConsoleApiError, console_model_ids
+            ids = console_model_ids(token)
+        except ConsoleApiError as exc:
+            logger.warning(
+                "opencode_discover_api_error",
+                status=exc.status,
+                detail=exc.detail or exc.tag,
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001 — discovery must not break CRUD
+            logger.warning("opencode_discover_failed", error=str(exc))
+            return None
+        if not ids:
+            logger.warning("opencode_discover_empty_catalog")
+            return None
+        logger.info("opencode_models_discovered", count=len(ids))
+        return [{"id": model_id} for model_id in ids]
 
     # ── Pricing ────────────────────────────────────────────────────────────
 

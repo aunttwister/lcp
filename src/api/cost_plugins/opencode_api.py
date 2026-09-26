@@ -15,12 +15,13 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.request import Request, urlopen
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 from ..logging_config import get_logger
 
@@ -528,3 +529,165 @@ def fetch_subscription_dict(cookie: Optional[str], workspace_id: Optional[str] =
         "monthly_reset_at": _reset_at(snap.monthly_reset_sec),
         "workspace_id": snap.workspace_id,
     }
+
+
+# ── Console JSON API (service key / console session token) ──────────────────
+#
+# Everything the console SPA renders comes from JSON routes under
+# ``console.opencode.ai/api/*``.  The server-rendered ``/workspace/<wrk>/…``
+# pages that the SSR parsers above target no longer exist — they now return
+# the 1565-byte client shell — so nothing below scrapes HTML.
+#
+# Auth is ``Authorization: Bearer <token>`` where the token is either
+#   * a service API key (``sk-…`` / ``oc_sk_…``) with permissions ``all``,
+#     which reaches the usage routes, or
+#   * a console session token from the OAuth authorization-code flow
+#     (``console_oauth.py``), which additionally reaches the credits route.
+#
+# A 403 is "authenticated but not permitted" and is classified separately from
+# a 401 so a permissions gap is never reported as a dead credential.
+
+CONSOLE_API_BASE = "https://console.opencode.ai"
+_CONSOLE_API = CONSOLE_API_BASE + "/api"
+USAGE_RANGES = ("24h", "7d", "30d")
+MICRO_CENTS = 1e-8  # console money unit → USD (fixed-point, matches _BALANCE_FIXED_POINT)
+
+
+class ConsoleApiError(RuntimeError):
+    """Console API returned a non-200 status."""
+
+    def __init__(self, status: int, url: str, tag: str = "", detail: str = "") -> None:
+        self.status = status
+        self.url = url
+        self.tag = tag
+        self.detail = detail
+        super().__init__(
+            f"console API HTTP {status}"
+            + (f" {tag}" if tag else "")
+            + (f" — {detail}" if detail else "")
+        )
+
+
+def _console_headers(token: Optional[str]) -> dict[str, str]:
+    """Headers for console JSON routes (Bearer when a token is supplied)."""
+    headers = {
+        "User-Agent": _USER_AGENT,
+        "Accept": "application/json",
+        "Origin": _OPENCODE_BASE,
+        "Referer": _OPENCODE_BASE + "/",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _console_get(path: str, token: Optional[str], timeout: int = 15):
+    """GET a console JSON route; raise ``ConsoleApiError`` on any non-200."""
+    url = _CONSOLE_API + path
+    req = Request(url, headers=_console_headers(token), method="GET")
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            status = resp.status
+            raw = resp.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        raw = (exc.read() or b"").decode("utf-8", errors="replace")
+        tag = detail = ""
+        try:
+            parsed = json.loads(raw or "{}")
+            if isinstance(parsed, dict):
+                tag = str(parsed.get("_tag") or parsed.get("error") or "")
+                detail = str(
+                    parsed.get("message") or parsed.get("error_description") or ""
+                )
+        except (ValueError, TypeError):
+            pass
+        raise ConsoleApiError(exc.code, url, tag, detail) from None
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        raise ConsoleApiError(status, url, "", "non-JSON payload") from None
+
+
+def _check_range(range_: str) -> str:
+    """Validate a usage range; the console accepts exactly 24h/7d/30d."""
+    value = (range_ or "7d").strip()
+    if value not in USAGE_RANGES:
+        raise ValueError(f"range must be one of {USAGE_RANGES}, got {value!r}")
+    return value
+
+
+def micro_cents_to_usd(value) -> Optional[float]:
+    """Convert a console money field (fixed-point string or int) to USD."""
+    try:
+        return round(float(value) * MICRO_CENTS, 8)
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_console_config(token: str) -> Optional[dict]:
+    """Return the console client config (carries the model catalog)."""
+    return _console_get("/config", token)
+
+
+def console_model_ids(token: str, provider: str = "opencode") -> list[str]:
+    """Model IDs the console advertises for *provider*.
+
+    OpenCode serves **no** ``/models`` route on its inference base, so generic
+    discovery (``{api_base}/models``) 404s.  The authoritative catalog is the
+    console config's per-provider ``whitelist``.  Returns ``[]`` on an
+    unfamiliar shape so discovery degrades instead of raising into CRUD.
+    """
+    config = fetch_console_config(token)
+    if not isinstance(config, dict):
+        return []
+    providers = (config.get("config") or {}).get("provider") or config.get("provider") or {}
+    if not isinstance(providers, dict):
+        return []
+    entry = providers.get(provider) or {}
+    if not isinstance(entry, dict):
+        return []
+    models = entry.get("whitelist") or entry.get("models") or []
+    if not isinstance(models, (list, tuple)):
+        return []
+    ids = [str(m).strip() for m in models if str(m).strip()]
+    return sorted(set(ids))
+
+
+def fetch_usage_summary(token: str, range_: str = "7d") -> Optional[dict]:
+    """Vendor-side usage totals for *range_* (requests/tokens/cost)."""
+    return _console_get(f"/usage/summary?range={_check_range(range_)}", token)
+
+
+def fetch_usage_cost_by_day(token: str, range_: str = "7d") -> list[dict]:
+    """Vendor-side per-day usage rows for *range_*."""
+    data = _console_get(f"/usage/cost-by-day?range={_check_range(range_)}", token)
+    return data if isinstance(data, list) else []
+
+
+def fetch_usage_models(token: str, range_: str = "7d") -> list[dict]:
+    """Vendor-side per-model usage rows for *range_*."""
+    data = _console_get(f"/usage/models?range={_check_range(range_)}", token)
+    if isinstance(data, dict):
+        items = data.get("items")
+        return items if isinstance(items, list) else []
+    return data if isinstance(data, list) else []
+
+
+def fetch_usage_users(token: str, range_: str = "7d") -> list[dict]:
+    """Vendor-side per-principal usage rows for *range_*."""
+    data = _console_get(f"/usage/users?range={_check_range(range_)}", token)
+    if isinstance(data, dict):
+        items = data.get("items")
+        return items if isinstance(items, list) else []
+    return data if isinstance(data, list) else []
+
+
+def fetch_account_credits(token: str) -> Optional[dict]:
+    """Console credits — ``GET /api/billing/account``.
+
+    Reachable only with a console *session* token; a service API key is
+    rejected with 403 even when its permissions are ``all``.
+    """
+    return _console_get("/billing/account", token)
