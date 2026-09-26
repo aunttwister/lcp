@@ -494,3 +494,85 @@ class TestOpenCodeFetchSubscription:
     def test_credit_status_unknown(self, plugin):
         assert plugin.credit_status(None, None) == "unknown"
         assert plugin.credit_status({}, {}) == "unknown"
+
+
+class TestOpenCodeMonthToDate:
+    """The monthly dimension: there is no plan quota to fill.
+
+    ``/api/usage/{limits,quota,windows,current}`` all 404 and
+    ``creditLimitMicroCents`` is null, so "how much is left this month" has no
+    vendor answer.  "How much has been used this month" does — summed from the
+    daily rows, because the range enum has no month-aligned window.
+    """
+
+    def _month(self):
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).strftime("%Y-%m")
+
+    def test_sums_only_the_current_month(self, plugin):
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        this_month = now.strftime("%Y-%m")
+        prev_month = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+        rows = [
+            {"date": f"{this_month}-01", "totalCostMicroCents": "100000000",
+             "totalRequests": "10", "totalTokens": "1000"},
+            {"date": f"{this_month}-02", "totalCostMicroCents": "50000000",
+             "totalRequests": "5", "totalTokens": "500"},
+            {"date": f"{prev_month}-30", "totalCostMicroCents": "900000000",
+             "totalRequests": "90", "totalTokens": "9000"},
+        ]
+        with patch("src.api.cost_plugins.opencode_api.fetch_usage_cost_by_day",
+                   return_value=rows):
+            out = plugin._month_to_date("tok", "wrk_test")
+        assert out["month_to_date_usd"] == 1.5      # 150,000,000 micro-cents
+        assert out["month_requests"] == 15
+        assert out["month_tokens"] == 1500
+        assert out["month_days"] == 2
+        assert out["month_label"].endswith(str(now.year))
+
+    def test_all_and_30d_are_unioned_without_double_counting(self, plugin):
+        """Neither window reaches day 1 of a 31-day month on its own."""
+        month = self._month()
+        day1 = {"date": f"{month}-01", "totalCostMicroCents": "10000000",
+                "totalRequests": "1", "totalTokens": "10"}
+        day2 = {"date": f"{month}-02", "totalCostMicroCents": "20000000",
+                "totalRequests": "2", "totalTokens": "20"}
+        seen = []
+
+        def fake(token, range_, org_id=None):
+            seen.append(range_)
+            return [day1, day2] if range_ == "all" else [day2]
+
+        with patch("src.api.cost_plugins.opencode_api.fetch_usage_cost_by_day",
+                   side_effect=fake):
+            out = plugin._month_to_date("tok")
+        assert seen == ["all", "30d"]
+        assert out["month_to_date_usd"] == 0.3     # day2 counted once
+        assert out["month_requests"] == 3
+
+    def test_a_console_error_yields_no_month_fields(self, plugin):
+        """A failed month read must not fabricate zeros or break the 7d card."""
+        from src.api.cost_plugins.opencode_api import ConsoleApiError
+        with patch("src.api.cost_plugins.opencode_api.fetch_usage_cost_by_day",
+                   side_effect=ConsoleApiError(400, "u", "BadRequest", "")):
+            assert plugin._month_to_date("tok") == {}
+
+    def test_usage_numbers_carry_the_month_block(self, plugin):
+        month = self._month()
+        summary = {"totalRequests": "9", "totalCostMicroCents": "30000000",
+                   "totalCacheReadTokens": "700"}
+        daily = [{"date": f"{month}-05", "totalCostMicroCents": "10000000",
+                  "totalRequests": "4", "totalTokens": "40"}]
+        with patch("src.api.cost_plugins.console_oauth.resolve_org_id",
+                   return_value="wrk_t"), \
+             patch("src.api.cost_plugins.opencode_api.fetch_usage_summary",
+                   return_value=summary), \
+             patch("src.api.cost_plugins.opencode_api.fetch_usage_cost_by_day",
+                   return_value=daily):
+            out = plugin._console_usage_numbers("tok")
+        assert out["total_requests"] == 9
+        assert out["total_cost_usd"] == 0.30
+        assert out["month_to_date_usd"] == 0.10
+        assert out["month_requests"] == 4
+        assert out["limit_available"] is False

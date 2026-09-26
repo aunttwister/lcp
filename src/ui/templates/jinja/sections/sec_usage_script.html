@@ -648,11 +648,15 @@ function buildPage(providers) {
                         return String(n);
                     };
                     panelsHtml += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:0.75rem;margin-bottom:1rem">' +
+                        (sub.month_to_date_usd != null
+                            ? '<div class="stat-card"><div class="label">Monthly Spend (' + esc(sub.month_label || 'month') + ')</div><div class="value">$' + (sub.month_to_date_usd || 0).toFixed(2) + '</div><div class="sub">console-reported</div></div>' +
+                              '<div class="stat-card"><div class="label">Monthly Requests</div><div class="value">' + (sub.month_requests || 0).toLocaleString() + '</div><div class="sub">this month</div></div>'
+                            : '') +
                         '<div class="stat-card"><div class="label">Vendor Cost (' + esc(sub.range || '7d') + ')</div><div class="value">$' + (sub.total_cost_usd || 0).toFixed(2) + '</div><div class="sub">console-reported</div></div>' +
                         '<div class="stat-card"><div class="label">Vendor Requests</div><div class="value">' + (sub.total_requests || 0).toLocaleString() + '</div><div class="sub">' + esc(sub.range || '7d') + '</div></div>' +
-                        '<div class="stat-card"><div class="label">Cache Reads</div><div class="value">' + fmtTok(sub.total_cache_read_tokens) + '</div><div class="sub">tokens</div></div>' +
+                        '<div class="stat-card"><div class="label">Cache Reads</div><div class="value">' + fmtTok(sub.total_cache_read_tokens) + '</div><div class="sub">' + esc(sub.range || '7d') + '</div></div>' +
                         '</div>' +
-                        '<div style="font-size:0.625rem;color:hsl(var(--muted-foreground));margin-bottom:1rem">OpenCode exposes no plan limit to this account, so no percentage bars are drawn.</div>';
+                        '<div style="font-size:0.625rem;color:hsl(var(--muted-foreground));margin-bottom:1rem">OpenCode is prepaid pay-as-you-go with no monthly allowance, so there is no percentage to fill: usage is capped only by the credit balance above.</div>';
                 }
 
                 var barsHtml = '';

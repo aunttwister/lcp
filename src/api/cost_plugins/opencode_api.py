@@ -549,7 +549,9 @@ def fetch_subscription_dict(cookie: Optional[str], workspace_id: Optional[str] =
 
 CONSOLE_API_BASE = "https://console.opencode.ai"
 _CONSOLE_API = CONSOLE_API_BASE + "/api"
-USAGE_RANGES = ("24h", "7d", "30d")
+# Measured against the live console 2026-09-26: 1d/14d/60d/1m/mtd/month/365d
+# all answer HTTP 400 — these four are the whole accepted set.
+USAGE_RANGES = ("24h", "7d", "30d", "all")
 MICRO_CENTS = 1e-8  # console money unit → USD (fixed-point, matches _BALANCE_FIXED_POINT)
 
 # Org-scoped console routes (billing, usage) reject a session token on its own:
@@ -624,7 +626,7 @@ def _console_get(path: str, token: Optional[str], timeout: int = 15,
 
 
 def _check_range(range_: str) -> str:
-    """Validate a usage range; the console accepts exactly 24h/7d/30d."""
+    """Validate a usage range against the console's accepted set."""
     value = (range_ or "7d").strip()
     if value not in USAGE_RANGES:
         raise ValueError(f"range must be one of {USAGE_RANGES}, got {value!r}")
@@ -675,24 +677,30 @@ def fetch_usage_summary(token: str, range_: str = "7d",
                         org_id=org_id)
 
 
-def fetch_usage_cost_by_day(token: str, range_: str = "7d") -> list[dict]:
-    """Vendor-side per-day usage rows for *range_*."""
-    data = _console_get(f"/usage/cost-by-day?range={_check_range(range_)}", token)
+def fetch_usage_cost_by_day(token: str, range_: str = "7d",
+                            org_id: Optional[str] = None) -> list[dict]:
+    """Vendor-side per-day usage rows for *range_* (date/cost/tokens/requests)."""
+    data = _console_get(f"/usage/cost-by-day?range={_check_range(range_)}", token,
+                        org_id=org_id)
     return data if isinstance(data, list) else []
 
 
-def fetch_usage_models(token: str, range_: str = "7d") -> list[dict]:
+def fetch_usage_models(token: str, range_: str = "7d",
+                       org_id: Optional[str] = None) -> list[dict]:
     """Vendor-side per-model usage rows for *range_*."""
-    data = _console_get(f"/usage/models?range={_check_range(range_)}", token)
+    data = _console_get(f"/usage/models?range={_check_range(range_)}", token,
+                        org_id=org_id)
     if isinstance(data, dict):
         items = data.get("items")
         return items if isinstance(items, list) else []
     return data if isinstance(data, list) else []
 
 
-def fetch_usage_users(token: str, range_: str = "7d") -> list[dict]:
+def fetch_usage_users(token: str, range_: str = "7d",
+                      org_id: Optional[str] = None) -> list[dict]:
     """Vendor-side per-principal usage rows for *range_*."""
-    data = _console_get(f"/usage/users?range={_check_range(range_)}", token)
+    data = _console_get(f"/usage/users?range={_check_range(range_)}", token,
+                        org_id=org_id)
     if isinstance(data, dict):
         items = data.get("items")
         return items if isinstance(items, list) else []

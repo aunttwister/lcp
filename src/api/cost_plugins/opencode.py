@@ -484,9 +484,9 @@ class OpenCodeCostPlugin(CostPlugin):
             micro_cents_to_usd,
         )
 
+        org_id = resolve_org_id(token)
         try:
-            summary = fetch_usage_summary(token, "7d",
-                                          org_id=resolve_org_id(token)) or {}
+            summary = fetch_usage_summary(token, "7d", org_id=org_id) or {}
         except ConsoleApiError as exc:
             logger.warning("opencode_usage_api_error", status=exc.status,
                            detail=exc.detail or exc.tag)
@@ -504,7 +504,7 @@ class OpenCodeCostPlugin(CostPlugin):
             except (TypeError, ValueError):
                 return 0
 
-        return {
+        payload = {
             "source": "console-usage",
             "range": "7d",
             "total_requests": _count("totalRequests"),
@@ -514,10 +514,63 @@ class OpenCodeCostPlugin(CostPlugin):
             "total_cost_usd": micro_cents_to_usd(summary.get("totalCostMicroCents")),
             "limit_available": False,
             "note": (
-                "OpenCode exposes no plan limit to a console session "
-                "(creditLimitMicroCents is null), so no percentage bars exist "
-                "- these are the vendor's own numbers."
+                "OpenCode exposes no plan limit (creditLimitMicroCents is null "
+                "on a prepaid, pay-as-you-go org), so there is no monthly "
+                "allowance and no percentage bars - spend stops only when the "
+                "credit balance runs out."
             ),
+        }
+        payload.update(self._month_to_date(token, org_id))
+        return payload
+
+    def _month_to_date(self, token: str, org_id: str = "") -> dict:
+        """Sum the current UTC calendar month from ``/api/usage/cost-by-day``.
+
+        This is the only monthly dimension OpenCode offers: with no plan quota
+        there is no "left this month" to report, but "used this month" is real.
+
+        The console's range enum is {24h,7d,30d,all} with no month-aligned
+        window (1m/mtd/month all 400), so the month is summed from daily rows.
+        ``all`` and ``30d`` are unioned by date because on the last day of a
+        31-day month neither window reaches back to the 1st on its own.
+        """
+        from .opencode_api import (
+            ConsoleApiError,
+            fetch_usage_cost_by_day,
+            micro_cents_to_usd,
+        )
+
+        now = datetime.now(timezone.utc)
+        month = now.strftime("%Y-%m")
+        rows: dict[str, dict] = {}
+        for range_ in ("all", "30d"):
+            try:
+                for row in fetch_usage_cost_by_day(token, range_, org_id=org_id) or []:
+                    date = str((row or {}).get("date") or "")
+                    if date.startswith(month):
+                        rows[date] = row
+            except ConsoleApiError as exc:
+                logger.info("opencode_cost_by_day_unavailable", range=range_,
+                            status=exc.status)
+            except Exception as exc:  # noqa: BLE001
+                logger.info("opencode_cost_by_day_error", range=range_,
+                            error=str(exc))
+        if not rows:
+            return {}
+
+        def _num(row: dict, key: str) -> int:
+            try:
+                return int(row.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        return {
+            "month_label": now.strftime("%b %Y"),
+            "month_days": len(rows),
+            "month_to_date_usd": micro_cents_to_usd(
+                sum(_num(r, "totalCostMicroCents") for r in rows.values())),
+            "month_requests": sum(_num(r, "totalRequests") for r in rows.values()),
+            "month_tokens": sum(_num(r, "totalTokens") for r in rows.values()),
         }
 
     def credit_status(self, subscription: Optional[dict] = None,

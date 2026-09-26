@@ -223,3 +223,11 @@ def test_console_get_classifies_403_as_permission_not_auth(monkeypatch):
         oa.fetch_account_credits("tok")
     assert exc.value.status == 403
     assert exc.value.tag == "Forbidden"
+
+
+def test_usage_range_enum_matches_the_console():
+    """Measured 2026-09-26: 1d/14d/60d/1m/mtd/month/365d all answer 400."""
+    assert set(oa.USAGE_RANGES) == {"24h", "7d", "30d", "all"}
+    assert oa._check_range("all") == "all"
+    with pytest.raises(ValueError):
+        oa._check_range("1m")
