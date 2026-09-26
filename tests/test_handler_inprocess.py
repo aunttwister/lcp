@@ -500,6 +500,59 @@ class TestStreamingChat:
         assert args[4]["prompt_tokens"] == 10
         assert args[4]["completion_tokens"] == 5
 
+    def test_streaming_counts_nested_cache_hits(self, temp_db):
+        """A stream reporting the OpenAI-compatible nested cache block must not
+        be priced as an all-miss request.
+
+        Regression (measured live 2026-09-26): this branch read only the flat
+        `prompt_cache_hit_tokens`/`prompt_cache_miss_tokens` keys, so OpenCode
+        and CommandCode — which report `usage.prompt_tokens_details.cached_tokens`
+        and neither flat key — recorded 0 hits and had every prompt token billed
+        at the miss rate, ~10x the vendor's own figure.
+        """
+        h = self._streaming_handler(temp_db)
+        chunks = [
+            b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+            b'data: {"choices":[],"usage":{"prompt_tokens":2215,"completion_tokens":10,'
+            b'"prompt_tokens_details":{"cached_tokens":2048}}}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        with patch("src.server.handler.try_chain",
+                   return_value=(iter(chunks), 200, "test", "test-model")):
+            with patch("src.server.handler.get_prompt_cache") as mock_cache:
+                mock_cache.return_value.get.return_value = None
+                with patch("src.server.handler.record_cost") as mock_record:
+                    with patch("src.server.handler.get_alert_manager"):
+                        h.do_POST()
+
+        cost_info = mock_record.call_args[0][4]
+        assert cost_info["prompt_tokens"] == 2215
+        assert cost_info["cache_hit_tokens"] == 2048
+        assert cost_info["cache_miss_tokens"] == 167
+        # hit 2048*0.01/1M + miss 167*0.5/1M + out 10*1.0/1M
+        assert cost_info["cost"] == round(
+            2048 * 0.01 / 1e6 + 167 * 0.5 / 1e6 + 10 * 1.0 / 1e6, 8)
+
+    def test_streaming_with_flat_cache_field_still_works(self, temp_db):
+        """DeepSeek's flat field must keep working through the same branch."""
+        h = self._streaming_handler(temp_db)
+        chunks = [
+            b'data: {"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":10,'
+            b'"prompt_cache_hit_tokens":900,"prompt_cache_miss_tokens":100}}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+        with patch("src.server.handler.try_chain",
+                   return_value=(iter(chunks), 200, "test", "test-model")):
+            with patch("src.server.handler.get_prompt_cache") as mock_cache:
+                mock_cache.return_value.get.return_value = None
+                with patch("src.server.handler.record_cost") as mock_record:
+                    with patch("src.server.handler.get_alert_manager"):
+                        h.do_POST()
+
+        cost_info = mock_record.call_args[0][4]
+        assert cost_info["cache_hit_tokens"] == 900
+        assert cost_info["cache_miss_tokens"] == 100
+
     def test_streaming_without_usage_falls_back_to_estimation(self, temp_db):
         # Chunks with no usage block -> falls back to pre-flight estimation
         chunks = [

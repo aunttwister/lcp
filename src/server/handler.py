@@ -37,7 +37,7 @@ from ..api.exceptions import (
     ProviderError,
     ToolBlockedError,
 )
-from .sse_helpers import extract_last_sse_chunk, estimate_cost_from_tokens
+from .sse_helpers import extract_last_sse_chunk
 from .endpoints import (
     HealthEndpoints,
     ProviderEndpoints,
@@ -499,17 +499,19 @@ class LCPHandler(
                     pass
                 last_chunk = extract_last_sse_chunk(full_sse)
                 if last_chunk and last_chunk.get("usage"):
-                    cost_info = {
-                        "prompt_tokens": last_chunk["usage"].get("prompt_tokens", 0),
-                        "completion_tokens": last_chunk["usage"].get("completion_tokens", 0),
-                        "cache_hit_tokens": last_chunk["usage"].get("prompt_cache_hit_tokens", 0),
-                        "cache_miss_tokens": last_chunk["usage"].get("prompt_cache_miss_tokens", 0),
-                        "cost": 0,
-                        "latency_ms": latency_ms,
-                    }
-                    cost_info["cost"] = estimate_cost_from_tokens(
-                        provider, model, cost_info, self.config
-                    )
+                    # Price a streamed response through exactly the same path as
+                    # a non-streamed one. This branch used to build the usage
+                    # dict inline with DeepSeek's flat cache field names
+                    # (`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`),
+                    # which a provider reporting the OpenAI-compatible nested
+                    # block (`usage.prompt_tokens_details.cached_tokens`) never
+                    # fills in — OpenCode and CommandCode both report it there.
+                    # Every prompt token was therefore recorded as a cache miss
+                    # and priced at the miss rate, overstating cost ~10x on all
+                    # streamed traffic (which is most of it).
+                    cost_info = calculate_cost(provider, model, body, last_chunk,
+                                               self.config)
+                    cost_info["latency_ms"] = latency_ms
                 else:
                     # SSE stream without usage — fall back to pre-flight estimation
                     cost_info = {
@@ -541,7 +543,7 @@ class LCPHandler(
                     latency_ms=latency_ms,
                     total_wall_ms=total_wall_ms,
                     tools_blocked=len(blocked_tools),
-                    cache="MISS",
+                    cache="HIT" if cost_info.get("cache_hit_tokens") else "MISS",
                     stream=True,
                 )
                 return
