@@ -688,6 +688,7 @@ class TestOpenCodeGoPlanWindows:
              patch("src.api.cost_plugins.console_oauth.resolve_org_id",
                    return_value="wrk_t"):
             out = plugin.fetch_subscription()
+        assert out["source"] == "go-usage+console"  # both sources named
         assert out["monthly_pct"] == 100.0          # bars: from the Go endpoint
         assert out["month_to_date_usd"] == 0.10     # numbers: from the console
         assert out["total_cost_usd"] == 0.30

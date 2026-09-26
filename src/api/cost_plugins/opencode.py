@@ -470,9 +470,11 @@ class OpenCodeCostPlugin(CostPlugin):
                 except Exception as exc:  # noqa: BLE001
                     logger.info("opencode_usage_enrich_failed", error=str(exc))
                     numbers = {}
-                for poison in ("_error", "detail", "limit_available"):
+                for poison in ("_error", "detail", "limit_available", "source"):
                     numbers.pop(poison, None)
                 windows.update(numbers)
+                # Provenance: name both sources when the console contributed.
+                windows["source"] = "go-usage+console" if numbers else "go-usage"
                 # The bars exist, so this is a measured plan, not a missing one.
                 windows["limit_available"] = True
                 return windows
