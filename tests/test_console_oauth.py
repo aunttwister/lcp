@@ -49,6 +49,9 @@ def test_authorize_url_carries_every_required_parameter():
         "code_challenge_method=S256",
         f"code_challenge={_expected_challenge('verifier-abc')}",
         "redirect_uri=http%3A%2F%2F127.0.0.1%3A8791%2Fcallback",
+        # The consent page refuses to render without this (RFC 8707), and the
+        # discovery document never advertises it.
+        "resource=https%3A%2F%2Fopencode.ai%2Finference",
     ):
         assert fragment in url
     assert f"state={state}" in url
@@ -161,7 +164,8 @@ def test_current_access_token_refreshes_a_near_expiry_token(monkeypatch):
     saved = {}
     monkeypatch.setattr(co, "save_tokens", lambda s: saved.update(s))
     monkeypatch.setattr(co, "refresh",
-                        lambda cid, rt: {"access_token": "a-new", "expires_in": 3600})
+                        lambda cid, rt, flow="pkce": {"access_token": "a-new",
+                                                      "expires_in": 3600})
     assert co.current_access_token() == "a-new"
     assert saved["access_token"] == "a-new"
     assert saved["refresh_token"] == "r"
@@ -288,3 +292,135 @@ def test_fetch_balance_flags_an_unknown_payload_shape(monkeypatch):
     result = plugin.fetch_balance()
     assert result["_error"] == "api_error"
     assert "unrecognised" in result["detail"]
+
+
+# ── Device code flow (the primary path) ────────────────────────────────────
+
+DEVICE_CODE_RESPONSE = {
+    "device_code": "dev-abc123",
+    "user_code": "RGJS-HVSZ",
+    "verification_uri": "/console/device",
+    "verification_uri_complete":
+        "/console/device?user_code=RGJS-HVSZ&client_id=opencode-cli",
+    "expires_in": 600,
+    "interval": 5,
+}
+
+
+def test_start_device_flow_absolutises_the_relative_verification_path(monkeypatch):
+    """The provider returns a *relative* verification path; callers need a URL."""
+    seen = {}
+
+    def fake_post(url, payload):
+        seen["url"], seen["payload"] = url, payload
+        return dict(DEVICE_CODE_RESPONSE)
+
+    monkeypatch.setattr(co, "_post_json", fake_post)
+    flow = co.start_device_flow()
+    assert seen["url"] == co.CONSOLE_WEB + "/auth/device/code"
+    assert seen["payload"] == {"client_id": "opencode-cli"}
+    assert flow["verification_url"] == (
+        "https://opencode.ai/console/device"
+        "?user_code=RGJS-HVSZ&client_id=opencode-cli"
+    )
+    assert flow["user_code"] == "RGJS-HVSZ"
+
+
+def test_start_device_flow_rejects_a_response_without_a_device_code(monkeypatch):
+    monkeypatch.setattr(co, "_post_json", lambda url, payload: {"error": "boom"})
+    with pytest.raises(co.OAuthFlowError):
+        co.start_device_flow()
+
+
+def test_poll_device_token_keeps_waiting_while_pending(monkeypatch):
+    """``authorization_pending`` is not a failure, in either shape it arrives.
+
+    The console returns it as HTTP 400 with an ``error`` body; tolerate a 200
+    body carrying the same field so a server change cannot break the login.
+    """
+    monkeypatch.setattr(co.time, "sleep", lambda _seconds: None)
+    calls = {"n": 0}
+
+    def fake_post(url, payload):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise co.OAuthFlowError(400, "authorization_pending", "", url)
+        if calls["n"] == 2:
+            return {"error": "authorization_pending"}
+        return {"access_token": "at", "refresh_token": "rt", "expires_in": 3600}
+
+    monkeypatch.setattr(co, "_post_json", fake_post)
+    tokens = co.poll_device_token("dev-abc123", interval=1, timeout=30)
+    assert tokens["access_token"] == "at"
+    assert calls["n"] == 3
+
+
+def test_poll_device_token_slows_down_when_told_to(monkeypatch):
+    """``slow_down`` adds 5s to the interval, as opencode's own client does."""
+    waits = []
+    monkeypatch.setattr(co.time, "sleep", lambda seconds: waits.append(seconds))
+    calls = {"n": 0}
+
+    def fake_post(url, payload):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise co.OAuthFlowError(400, "slow_down", "", url)
+        return {"access_token": "at"}
+
+    monkeypatch.setattr(co, "_post_json", fake_post)
+    co.poll_device_token("dev-abc123", interval=5, timeout=30)
+    assert waits == [5.0, 10.0]
+
+
+def test_poll_device_token_raises_on_a_terminal_error(monkeypatch):
+    monkeypatch.setattr(co.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(co, "_post_json",
+                        lambda url, payload: {"error": "access_denied"})
+    with pytest.raises(co.OAuthFlowError) as exc:
+        co.poll_device_token("dev-abc123", interval=1, timeout=10)
+    assert exc.value.error == "access_denied"
+
+
+def test_poll_device_token_times_out_on_an_unapproved_code(monkeypatch):
+    """The deadline is enforced, so a never-approved code cannot hang a worker."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(co.time, "sleep",
+                        lambda seconds: clock.update(t=clock["t"] + seconds))
+    monkeypatch.setattr(co.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(co, "_post_json",
+                        lambda url, payload: {"error": "authorization_pending"})
+    with pytest.raises(co.OAuthFlowError) as exc:
+        co.poll_device_token("dev-abc123", interval=1, timeout=5)
+    assert exc.value.error == "expired_token"
+
+
+def test_refresh_uses_the_device_endpoint_for_device_sessions(monkeypatch):
+    """Device tokens refresh at /auth/device/token, not at the OAuth AS."""
+    seen = {}
+
+    def fake_post(url, payload):
+        seen["url"], seen["payload"] = url, payload
+        return {"access_token": "at2", "expires_in": 60}
+
+    monkeypatch.setattr(co, "_post_json", fake_post)
+    co.refresh("", "rt", flow="device")
+    assert seen["url"] == co.DEVICE_TOKEN_URL
+    assert seen["payload"]["grant_type"] == "refresh_token"
+    assert seen["payload"]["client_id"] == "opencode-cli"
+
+
+def test_current_access_token_refreshes_with_the_stored_flow(monkeypatch):
+    """A device session must not be refreshed against the PKCE token route."""
+    state = {"client_id": "opencode-cli", "flow": "device",
+             "access_token": "old", "refresh_token": "rt", "expires_at": 1.0}
+    saved = {}
+    monkeypatch.setattr(co, "load_tokens", lambda: dict(state))
+    monkeypatch.setattr(co, "save_tokens", lambda blob: saved.update(blob))
+
+    def fake_refresh(client_id, refresh_token, flow="pkce"):
+        saved["flow_seen"] = flow
+        return {"access_token": "new", "expires_in": 3600}
+
+    monkeypatch.setattr(co, "refresh", fake_refresh)
+    assert co.current_access_token() == "new"
+    assert saved["flow_seen"] == "device"

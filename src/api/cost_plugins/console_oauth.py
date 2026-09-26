@@ -1,34 +1,42 @@
-"""OpenCode console OAuth (authorization code + PKCE) — the credits door.
+"""OpenCode console session tokens - the door to credits.
 
 Why this module exists
 ----------------------
-The console's credits route (``GET /api/billing/account``) accepts only a
-console *session*, not a service API key — a key with permissions ``all`` is
-still rejected with 403.  The only supported way to mint a session
-programmatically is an OAuth grant, and their discovery document advertises
-exactly two:
+The console's credits routes accept only a console **session token**.  A
+service API key is refused even with permissions ``all`` - verified live
+2026-09-26: ``/api/billing/status`` -> 403 ``{"_tag":"Forbidden"}`` while
+``/api/usage/summary`` -> 200 with the same key.  So credits need a real
+session, and this module mints one.
 
-    grant_types_supported: ["authorization_code", "refresh_token"]
+Two flows exist.  Only one of them works.
 
-The device grant is **not** supported — registration rejects it outright
-("Supported grant_types: authorization_code, refresh_token").  So the flow is:
+**Device code - primary, verified working 2026-09-26.**  The console runs its
+own first-party device endpoint, separate from the OAuth AS advertised in
+``/.well-known/oauth-authorization-server``::
 
-    1. register a public client (their registration endpoint requires a
-       loopback redirect for ``http://`` URIs: "http redirect URIs are only
-       allowed on loopback hosts")
-    2. open the authorize URL and approve in a browser
-    3. the redirect lands on 127.0.0.1:<port> on the *operator's* machine, so
-       the page itself cannot load — the authorization code is in the address
-       bar, and that URL is what gets pasted back
-    4. exchange it for an access + refresh token
-    5. store both; refresh silently forever after
+    POST /console/auth/device/code   {"client_id": "opencode-cli"}
+      -> {device_code, user_code, verification_uri_complete, expires_in, interval}
+    POST /console/auth/device/token  {"grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                                      "device_code": ..., "client_id": "opencode-cli"}
+      -> {access_token, refresh_token, expires_in}  |  {"error": "authorization_pending"}
 
-Step 3 is the only human action, and it is one-time: the refresh token is
-durable, so credits stop needing anyone's attention once this has run once.
+``verification_uri_complete`` is returned as a **relative** path
+(``/console/device?user_code=...``) and must be prefixed with the host.  The
+tokens are Bearer credentials for the console API - the flow opencode's own
+CLI uses (``packages/core/src/plugin/provider/opencode.ts``).
+
+**Authorization code + PKCE - fallback, blocked upstream.**  The AS accepts a
+dynamically registered client, but its consent page requires four query
+parameters - ``client_id``, ``redirect_uri``, ``code_challenge`` and
+``resource`` - and omitting any of them yields "This authorization link is
+incomplete. Start the sign-in again from the application."  ``resource`` is
+required yet advertised nowhere in the discovery document.  Prefer the device
+flow; this path survives only in case the device endpoint is retired.
 
 CLI (inside an LCP container)::
 
-    python -m api.cost_plugins.console_oauth start
+    python -m api.cost_plugins.console_oauth device    # primary: prints a URL, then waits
+    python -m api.cost_plugins.console_oauth start     # PKCE fallback
     python -m api.cost_plugins.console_oauth complete '<pasted callback url>'
     python -m api.cost_plugins.console_oauth status
 """
@@ -58,6 +66,21 @@ AUTHORIZE_URL = CONSOLE_WEB + "/oauth/authorize"
 LOOPBACK_REDIRECT = "http://127.0.0.1:8791/callback"
 SCOPE = "usage:read org:manage"
 CREDENTIAL_KEY = "opencode_console"
+
+# First-party device endpoint (not the OAuth AS).  client_id "opencode-cli" is
+# the CLI's own registered identifier; the endpoint accepts it without any
+# dynamic registration step.
+DEVICE_CODE_URL = CONSOLE_WEB + "/auth/device/code"
+DEVICE_TOKEN_URL = CONSOLE_WEB + "/auth/device/token"
+DEVICE_CLIENT_ID = "opencode-cli"
+DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+DEVICE_POLL_INTERVAL = 5.0
+DEVICE_TIMEOUT_SEC = 660.0
+
+# The consent page requires a ``resource`` (RFC 8707) that the discovery
+# document never advertises.  The console's own bundle uses this value as the
+# sample for the field's URL schema.
+RESOURCE_DEFAULT = "https://opencode.ai/inference"
 
 #: Refresh this many seconds before expiry so a request never races the clock.
 REFRESH_SKEW_SEC = 120
@@ -172,8 +195,14 @@ def register_client(client_name: str = "lcp-credit-reader",
 def build_authorize_url(client_id: str, verifier: str,
                         redirect: str = LOOPBACK_REDIRECT,
                         state: Optional[str] = None,
-                        scope: str = SCOPE) -> tuple[str, str]:
-    """Return ``(url, state)`` — the URL the operator opens once."""
+                        scope: str = SCOPE,
+                        resource: str = RESOURCE_DEFAULT) -> tuple[str, str]:
+    """Return ``(url, state)`` - the URL the operator opens once.
+
+    ``resource`` is mandatory on the consent page even though the discovery
+    document never advertises it; without it the page renders "This
+    authorization link is incomplete." and never reaches the API.
+    """
     challenge = _b64url(hashlib.sha256(verifier.encode()).digest())
     state = state or _b64url(secrets.token_bytes(16))
     query = urllib.parse.urlencode({
@@ -184,6 +213,7 @@ def build_authorize_url(client_id: str, verifier: str,
         "code_challenge_method": "S256",
         "state": state,
         "scope": scope,
+        "resource": resource,
     })
     return f"{AUTHORIZE_URL}?{query}", state
 
@@ -228,13 +258,124 @@ def exchange_code(code: str, verifier: str, client_id: str,
     })
 
 
-def refresh(client_id: str, refresh_token: str) -> dict:
-    """Exchange a refresh token for a fresh access token."""
+def refresh(client_id: str, refresh_token: str, flow: str = "pkce") -> dict:
+    """Exchange a refresh token for a fresh access token.
+
+    The first-party device endpoint and the OAuth AS are different servers with
+    different refresh routes, so the flow that minted the token decides where
+    it gets refreshed.
+    """
+    if flow == "device":
+        return _post_json(DEVICE_TOKEN_URL, {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": client_id or DEVICE_CLIENT_ID,
+        })
     return _post_form(TOKEN_URL, {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
         "client_id": client_id,
     })
+
+
+# ── Device code flow (primary) ─────────────────────────────────────────────
+
+def start_device_flow(client_id: str = DEVICE_CLIENT_ID) -> dict:
+    """Begin a device authorization.
+
+    Returns the provider payload plus ``verification_url`` - the *absolute*
+    URL to open.  The provider returns ``verification_uri_complete`` as a
+    relative path, so it is joined onto the console host here rather than
+    leaving every caller to remember.
+    """
+    data = _post_json(DEVICE_CODE_URL, {"client_id": client_id})
+    if not isinstance(data, dict) or not data.get("device_code"):
+        raise OAuthFlowError(0, "invalid_response",
+                             "device/code returned no device_code", DEVICE_CODE_URL)
+    path = data.get("verification_uri_complete") or data.get("verification_uri") or ""
+    data["verification_url"] = urllib.parse.urljoin(CONSOLE_WEB + "/", str(path))
+    return data
+
+
+def poll_device_token(device_code: str,
+                      interval: float = DEVICE_POLL_INTERVAL,
+                      timeout: float = DEVICE_TIMEOUT_SEC,
+                      client_id: str = DEVICE_CLIENT_ID) -> dict:
+    """Poll until the operator approves, the code expires, or a real error lands.
+
+    Mirrors opencode's own client: ``authorization_pending`` keeps the current
+    interval, ``slow_down`` adds 5s, anything else is terminal.  Pending states
+    may arrive either as HTTP 400 with an ``error`` body or as a 200 carrying
+    ``error``, so both are handled.
+    """
+    deadline = time.time() + max(1.0, float(timeout or DEVICE_TIMEOUT_SEC))
+    wait = max(1.0, float(interval or DEVICE_POLL_INTERVAL))
+    while time.time() < deadline:
+        time.sleep(wait)
+        payload = {
+            "grant_type": DEVICE_GRANT,
+            "device_code": device_code,
+            "client_id": client_id,
+        }
+        try:
+            data = _post_json(DEVICE_TOKEN_URL, payload)
+        except OAuthFlowError as exc:
+            if exc.error == "authorization_pending":
+                continue
+            if exc.error == "slow_down":
+                wait += 5.0
+                continue
+            raise
+        if isinstance(data, dict) and data.get("access_token"):
+            return data
+        error = data.get("error") if isinstance(data, dict) else ""
+        if error == "authorization_pending":
+            continue
+        if error == "slow_down":
+            wait += 5.0
+            continue
+        raise OAuthFlowError(0, error or "device_flow_failed",
+                             "device authorization did not complete",
+                             DEVICE_TOKEN_URL)
+    raise OAuthFlowError(0, "expired_token",
+                         "device code expired before it was approved",
+                         DEVICE_TOKEN_URL)
+
+
+def fetch_account(token: str) -> dict:
+    """``GET /api/user`` + ``GET /api/orgs`` - proves the session token works.
+
+    The console API wants the token as a Bearer credential; this is the same
+    pair of calls opencode's CLI makes immediately after a device login, so it
+    doubles as the post-approval verification step.
+    """
+    headers_token = token or ""
+    user = _request_with_token(CONSOLE_WEB + "/api/user", headers_token)
+    orgs = _request_with_token(CONSOLE_WEB + "/api/orgs", headers_token)
+    if isinstance(orgs, dict):
+        orgs = orgs.get("data") or []
+    return {"user": user, "orgs": orgs if isinstance(orgs, list) else []}
+
+
+def _request_with_token(url: str, token: str) -> dict:
+    """GET *url* with a Bearer token (the console API's expected auth shape)."""
+    request = Request(url, headers={
+        "Accept": "application/json",
+        "User-Agent": USER_AGENT,
+        "Authorization": f"Bearer {token}",
+    }, method="GET")
+    try:
+        with urlopen(request, timeout=30) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        raw = (exc.read() or b"").decode("utf-8", errors="replace")
+        raise OAuthFlowError(exc.code, "api_error", raw[:200], url) from None
+    except URLError as exc:
+        raise OAuthFlowError(0, "network_error", str(exc.reason), url) from None
+    try:
+        return json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        raise OAuthFlowError(0, "bad_response", "non-JSON payload", url) from None
 
 
 # ── Storage ────────────────────────────────────────────────────────────────
@@ -321,7 +462,8 @@ def current_access_token(force_refresh: bool = False) -> str:
     if not refresh_token or not client_id:
         return access
     try:
-        tokens = refresh(client_id, refresh_token)
+        tokens = refresh(client_id, refresh_token,
+                         flow=state.get("flow") or "pkce")
     except OAuthFlowError as exc:
         logger.warning("opencode_console_refresh_failed", status=exc.status,
                        error=exc.error)
@@ -367,6 +509,10 @@ def _cli(argv: list[str]) -> int:
     done.add_argument("callback", help="the URL from the browser address bar")
     done.add_argument("--client-id"),
     done.add_argument("--verifier"),
+    device = sub.add_parser(
+        "device", help="device-code login (primary): prints a URL and waits")
+    device.add_argument("--timeout", type=float, default=DEVICE_TIMEOUT_SEC,
+                        help="seconds to wait for approval")
     sub.add_parser("status", help="show whether a session is stored and valid")
     args = parser.parse_args(argv)
 
@@ -401,6 +547,36 @@ def _cli(argv: list[str]) -> int:
         state = merge_tokens({"client_id": client_id}, tokens)
         save_tokens(state)
         os.unlink(pending_path) if os.path.exists(pending_path) else None
+        print(f"stored: access_token len={len(state['access_token'])} "
+              f"refresh={'yes' if state['refresh_token'] else 'no'} "
+              f"expires_in={int(max(0, state['expires_at'] - time.time()))}s")
+        return 0
+
+    if args.cmd == "device":
+        flow = start_device_flow()
+        print("Open this URL and approve (the code is pre-filled):\n")
+        print(f"  {flow['verification_url']}\n")
+        print(f"  user code: {flow['user_code']}  ·  expires in "
+              f"{int(flow.get('expires_in') or 0)}s")
+        print("\nwaiting for approval ...", flush=True)
+        tokens = poll_device_token(
+            flow["device_code"],
+            interval=flow.get("interval") or DEVICE_POLL_INTERVAL,
+            timeout=args.timeout,
+        )
+        state = merge_tokens({"client_id": DEVICE_CLIENT_ID, "flow": "device"},
+                             tokens)
+        save_tokens(state)
+        try:
+            account = fetch_account(state["access_token"])
+            user = account.get("user") or {}
+            orgs = account.get("orgs") or []
+            who = user.get("email") or user.get("id") or "?"
+            org = f" · {orgs[0].get('name')}" if orgs else ""
+            print(f"approved as {who}{org} ({len(orgs)} org(s))")
+        except OAuthFlowError as exc:
+            print(f"approved, but verification failed: "
+                  f"{exc.status} {exc.error} {exc.description}")
         print(f"stored: access_token len={len(state['access_token'])} "
               f"refresh={'yes' if state['refresh_token'] else 'no'} "
               f"expires_in={int(max(0, state['expires_at'] - time.time()))}s")
