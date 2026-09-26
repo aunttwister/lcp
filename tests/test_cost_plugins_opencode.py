@@ -5,6 +5,7 @@ Uses a temporary SQLite database with the gateway ``requests`` table
 correctly via SQLAlchemy engine.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -576,3 +577,119 @@ class TestOpenCodeMonthToDate:
         assert out["month_to_date_usd"] == 0.10
         assert out["month_requests"] == 4
         assert out["limit_available"] is False
+
+
+GO_USAGE_PAYLOAD = {
+    "rolling": {"status": "ok", "percent": 0, "resetsAt": "2026-09-26T22:17:08.376Z"},
+    "weekly": {"status": "ok", "percent": 0, "resetsAt": "2026-09-28T00:00:00.000Z"},
+    "monthly": {"status": "rate-limited", "percent": 100, "resetsAt": "2026-10-03T14:19:39.000Z"},
+}
+
+
+class TestOpenCodeGoPlanWindows:
+    """``GET /inference/go/v1/usage`` is the plan this plugin tracks.
+
+    Measured 2026-09-26: the Go endpoint reports rolling/weekly/monthly with
+    ``status`` + ``percent`` + ``resetsAt`` and needs only the provider key —
+    no console session and no ``x-org-id``.  The console API has no quota route
+    at all, so before this the card could not show a single real window.
+    """
+
+    def test_maps_every_window_with_reset_and_status(self):
+        from src.api.cost_plugins.opencode_api import plan_windows_from_go
+
+        out = plan_windows_from_go(GO_USAGE_PAYLOAD)
+        assert out["rolling_pct"] == 0.0
+        assert out["weekly_pct"] == 0.0
+        assert out["monthly_pct"] == 100.0
+        assert out["rolling_status"] == "ok"
+        assert out["monthly_status"] == "rate-limited"
+        assert isinstance(out["monthly_reset_sec"], int)
+        assert out["monthly_reset_sec"] > 0
+        assert out["rolling_reset_sec"] < out["monthly_reset_sec"]
+
+    def test_tolerates_a_partial_payload(self):
+        from src.api.cost_plugins.opencode_api import plan_windows_from_go
+
+        out = plan_windows_from_go({"monthly": {"status": "ok", "percent": "42.5"}})
+        assert out["monthly_pct"] == 42.5
+        assert "rolling_pct" not in out
+        assert out == {"monthly_pct": 42.5, "monthly_status": "ok"}
+
+    def test_junk_in_is_nothing_out(self):
+        from src.api.cost_plugins.opencode_api import plan_windows_from_go
+
+        assert plan_windows_from_go({}) == {}
+        assert plan_windows_from_go(None) == {}
+        assert plan_windows_from_go({"monthly": "nonsense"}) == {}
+        assert plan_windows_from_go({"monthly": {"percent": "abc"}}) == {}
+
+    def test_go_usage_needs_only_the_provider_key(self, plugin):
+        """No console session: the Go endpoint is the provider-key surface."""
+        with patch.object(plugin, "_token", lambda **kw: "oc_sk_all"), \
+             patch("src.api.cost_plugins.opencode_api.fetch_go_usage",
+                   return_value=GO_USAGE_PAYLOAD), \
+             patch("src.api.cost_plugins.console_oauth.current_access_token",
+                   return_value=None):
+            out = plugin.fetch_subscription()
+        assert out["source"] == "go-usage"
+        assert out["monthly_pct"] == 100.0
+        assert out["limit_available"] is True
+        assert "_error" not in out
+
+    def test_go_windows_win_over_the_console_path(self, plugin):
+        with patch.object(plugin, "_token", lambda **kw: "oc_sk_all"), \
+             patch("src.api.cost_plugins.opencode_api.fetch_go_usage",
+                   return_value=GO_USAGE_PAYLOAD), \
+             patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
+                   side_effect=AssertionError("console path must not be reached")), \
+             patch("src.api.cost_plugins.console_oauth.current_access_token",
+                   return_value="sess"):
+            out = plugin.fetch_subscription()
+        assert out["monthly_pct"] == 100.0
+
+    def test_go_failure_falls_back_to_the_console_usage_numbers(self, plugin):
+        """A key without Go access must not blank the card."""
+        from src.api.cost_plugins.opencode_api import ConsoleApiError
+        summary = {"totalRequests": "7", "totalCostMicroCents": "1000000"}
+        with patch.object(plugin, "_token", lambda **kw: "oc_sk_nogo"), \
+             patch("src.api.cost_plugins.opencode_api.fetch_go_usage",
+                   side_effect=ConsoleApiError(403, "u", "AuthError", "Forbidden")), \
+             patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
+                   side_effect=ConsoleApiError(401, "u", "Unauthorized", "")), \
+             patch("src.api.cost_plugins.opencode_api.fetch_usage_summary",
+                   return_value=summary), \
+             patch("src.api.cost_plugins.console_oauth.current_access_token",
+                   return_value="sess"), \
+             patch("src.api.cost_plugins.console_oauth.resolve_org_id",
+                   return_value="wrk_t"), \
+             patch("src.api.cost_plugins.opencode_api.fetch_usage_cost_by_day",
+                   return_value=[]):
+            out = plugin.fetch_subscription()
+        assert out["total_requests"] == 7
+        assert out["total_cost_usd"] == 0.01
+        assert out["limit_available"] is False
+
+    def test_go_windows_are_enriched_with_console_numbers(self, plugin):
+        """Both sources land in one payload: bars from Go, dollars from console."""
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        summary = {"totalRequests": "9", "totalCostMicroCents": "30000000"}
+        daily = [{"date": f"{month}-05", "totalCostMicroCents": "10000000",
+                  "totalRequests": "4", "totalTokens": "40"}]
+        with patch.object(plugin, "_token", lambda **kw: "oc_sk_all"), \
+             patch("src.api.cost_plugins.opencode_api.fetch_go_usage",
+                   return_value=GO_USAGE_PAYLOAD), \
+             patch("src.api.cost_plugins.opencode_api.fetch_usage_summary",
+                   return_value=summary), \
+             patch("src.api.cost_plugins.opencode_api.fetch_usage_cost_by_day",
+                   return_value=daily), \
+             patch("src.api.cost_plugins.console_oauth.current_access_token",
+                   return_value="sess"), \
+             patch("src.api.cost_plugins.console_oauth.resolve_org_id",
+                   return_value="wrk_t"):
+            out = plugin.fetch_subscription()
+        assert out["monthly_pct"] == 100.0          # bars: from the Go endpoint
+        assert out["month_to_date_usd"] == 0.10     # numbers: from the console
+        assert out["total_cost_usd"] == 0.30
+        assert out["limit_available"] is True       # bars exist, so not "missing"
+        assert "_error" not in out

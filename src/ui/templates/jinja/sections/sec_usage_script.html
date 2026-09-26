@@ -656,7 +656,20 @@ function buildPage(providers) {
                         '<div class="stat-card"><div class="label">Vendor Requests</div><div class="value">' + (sub.total_requests || 0).toLocaleString() + '</div><div class="sub">' + esc(sub.range || '7d') + '</div></div>' +
                         '<div class="stat-card"><div class="label">Cache Reads</div><div class="value">' + fmtTok(sub.total_cache_read_tokens) + '</div><div class="sub">' + esc(sub.range || '7d') + '</div></div>' +
                         '</div>' +
-                        '<div style="font-size:0.625rem;color:hsl(var(--muted-foreground));margin-bottom:1rem">OpenCode is prepaid pay-as-you-go with no monthly allowance, so there is no percentage to fill: usage is capped only by the credit balance above.</div>';
+                        (sub.limit_available === false
+                            ? '<div style="font-size:0.625rem;color:hsl(var(--muted-foreground));margin-bottom:1rem">OpenCode is prepaid pay-as-you-go with no monthly allowance, so there is no percentage to fill: usage is capped only by the credit balance above.</div>'
+                            : '');
+                }
+
+                // ── Plan status ──
+                // The Go plan reports an exhausted quota as status:"rate-limited"
+                // at percent 100.  A full bar alone does not say the plan is
+                // actively refusing calls, so say it.
+                var ocLimited = ['rolling', 'weekly', 'monthly'].filter(function (w) {
+                    return sub[w + '_status'] && sub[w + '_status'] !== 'ok';
+                });
+                if (ocLimited.length) {
+                    panelsHtml += '<div class="stat-card" style="border-left:3px solid #f97316;margin-bottom:1rem"><div class="label" style="color:#f97316">Rate limited</div><div class="value" style="font-size:0.85rem;font-weight:400">OpenCode Go is refusing calls on: ' + esc(ocLimited.join(', ')) + '</div></div>';
                 }
 
                 var barsHtml = '';

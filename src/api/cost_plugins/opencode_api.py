@@ -549,6 +549,10 @@ def fetch_subscription_dict(cookie: Optional[str], workspace_id: Optional[str] =
 
 CONSOLE_API_BASE = "https://console.opencode.ai"
 _CONSOLE_API = CONSOLE_API_BASE + "/api"
+# The Go plan's own usage windows live on the inference host, NOT the console
+# API, and take the same Bearer provider key as inference — no session.  The
+# console's proxy table maps /zen/go/v1/usage to /go/v1/usage; both answer.
+GO_USAGE_API = "https://opencode.ai/inference/go/v1/usage"
 # Measured against the live console 2026-09-26: 1d/14d/60d/1m/mtd/month/365d
 # all answer HTTP 400 — these four are the whole accepted set.
 USAGE_RANGES = ("24h", "7d", "30d", "all")
@@ -707,6 +711,53 @@ def fetch_usage_users(token: str, range_: str = "7d",
     return data if isinstance(data, list) else []
 
 
+def fetch_go_usage(token: str, timeout: int = 15) -> Optional[dict]:
+    """The Go plan's own usage windows: rolling-5h / weekly / monthly.
+
+    This is the plan LCP's OpenCode plugin primarily tracks, and it needs no
+    console session and no ``x-org-id`` — just the provider key::
+
+        GET https://opencode.ai/inference/go/v1/usage
+        Authorization: Bearer <oc_sk_…>
+        {"usage": {"rolling": {"status","percent","resetsAt"}, "weekly": …, "monthly": …}}
+
+    Returns the ``usage`` object, or ``None`` when the payload carries none.
+    Raises :class:`ConsoleApiError` on a non-200 (e.g. a key without Go access).
+    """
+    if not token:
+        return None
+    request = Request(GO_USAGE_API, headers={
+        "Authorization": f"Bearer {token}",
+        "User-Agent": _USER_AGENT,
+        "Accept": "application/json",
+    }, method="GET")
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        body = (exc.read() or b"").decode("utf-8", errors="replace")
+        tag = detail = ""
+        try:
+            parsed = json.loads(body or "{}")
+            error = parsed.get("error") if isinstance(parsed, dict) else None
+            if isinstance(error, dict):
+                tag = str(error.get("type") or "")
+                detail = str(error.get("message") or "")
+            elif isinstance(parsed, dict):
+                tag = str(parsed.get("type") or "")
+        except (ValueError, TypeError):
+            pass
+        raise ConsoleApiError(exc.code, GO_USAGE_API, tag, detail) from None
+    if not raw.strip():
+        return None
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        raise ConsoleApiError(200, GO_USAGE_API, "", "non-JSON payload") from None
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    return usage if isinstance(usage, dict) else None
+
+
 def fetch_orgs(token: str) -> list[dict]:
     """Organizations the session can see — ``GET /api/orgs``.
 
@@ -777,6 +828,37 @@ def fetch_budget_members(token: str) -> list[dict]:
         items = data.get("items")
         return items if isinstance(items, list) else []
     return data if isinstance(data, list) else []
+
+
+def plan_windows_from_go(usage: dict) -> dict:
+    """Map ``GET /inference/go/v1/usage`` onto the Usage card's window payload.
+
+    Live shape (measured 2026-09-26)::
+
+        {"rolling": {"status": "ok",           "percent": 0,   "resetsAt": "..."},
+         "weekly":  {"status": "ok",           "percent": 0,   "resetsAt": "..."},
+         "monthly": {"status": "rate-limited", "percent": 100, "resetsAt": "..."}}
+
+    ``status`` is preserved per window as ``<name>_status``: it is how the plan
+    reports an exhausted quota (``rate-limited`` at ``percent`` 100), which the
+    card shows because a red bar alone does not say the plan is refusing calls.
+    """
+    windows: dict = {}
+    for key in ("rolling", "weekly", "monthly"):
+        row = (usage or {}).get(key)
+        if not isinstance(row, dict):
+            continue
+        try:
+            windows[f"{key}_pct"] = round(float(row.get("percent")), 1)
+        except (TypeError, ValueError):
+            continue
+        reset = _seconds_until(row.get("resetsAt"))
+        if reset is not None:
+            windows[f"{key}_reset_sec"] = reset
+        status = row.get("status")
+        if status:
+            windows[f"{key}_status"] = str(status)
+    return windows
 
 
 def plan_windows(members: list[dict]) -> dict:

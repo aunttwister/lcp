@@ -415,18 +415,21 @@ class OpenCodeCostPlugin(CostPlugin):
     def fetch_subscription(self) -> Optional[dict]:
         """Plan-window usage for the OpenCode vendor card.
 
-        The rolling/weekly/monthly limit windows are only exposed to a console
-        **session**: a service key is refused (403) on ``/api/billing/account``
-        and ``/api/v1/budgets/members`` reports ``limit_micro_cents: null`` for
-        this account.  The workspace billing page this method used to scrape now
-        returns a 1565-byte client-rendered shell byte-identical to ``/console``,
-        so the old path could only ever fail — and it blamed a cookie the plugin
-        no longer sends.
+        Primary source is the **Go plan's own endpoint**, which lives on the
+        inference host and takes the same Bearer provider key as inference —
+        no console session, no ``x-org-id``::
 
-        Returns the same actionable, non-transient reason as
-        :meth:`fetch_balance` when the session is missing, and an explicit
-        ``no_subscription`` state (never a fabricated percentage) when the
-        console reports no limit to divide by.
+            GET https://opencode.ai/inference/go/v1/usage
+            {"usage": {"rolling": {"status","percent","resetsAt"},
+                       "weekly":  {...}, "monthly": {...}}}
+
+        That is the plan this plugin primarily tracks, and it is the only place
+        the rolling-5h/weekly/monthly windows exist: the console exposes no
+        quota route at all (``/api/usage/{limits,quota,windows,current}} → 404)
+        and ``creditLimitMicroCents`` is null on this prepaid org.
+
+        Falls back to the console budget rows, then to the console's real usage
+        totals, so a key without Go access still shows something honest.
         """
         if os.environ.get("LCP_MOCK_PLUGIN_DATA"):
             return {
@@ -434,16 +437,67 @@ class OpenCodeCostPlugin(CostPlugin):
                 "rolling_pct": 17.0, "rolling_reset_sec": 5944,
                 "weekly_pct": 75.0, "weekly_reset_sec": 278201,
             }
-        from .console_oauth import current_access_token
         from .opencode_api import (
             ConsoleApiError,
             fetch_budget_members,
+            fetch_go_usage,
             plan_windows,
+            plan_windows_from_go,
         )
 
+        # ── 1. Go plan windows (provider key; survives console-token expiry) ──
+        key = self._token()
+        if key:
+            try:
+                windows = plan_windows_from_go(fetch_go_usage(key) or {})
+            except ConsoleApiError as exc:
+                logger.info("opencode_go_usage_unavailable", status=exc.status)
+                windows = {}
+            except Exception as exc:  # noqa: BLE001
+                logger.info("opencode_go_usage_error", error=str(exc))
+                windows = {}
+            if windows:
+                windows["source"] = "go-usage"
+                # Enrich with the console's real totals when a session exists:
+                # the month-to-date figures live only on the console API, while
+                # the plan windows live only on the Go endpoint.  Without a
+                # session the bars still render — the numbers are just absent.
+                try:
+                    from .console_oauth import current_access_token
+
+                    session = current_access_token()
+                    numbers = self._console_usage_numbers(session) if session else {}
+                except Exception as exc:  # noqa: BLE001
+                    logger.info("opencode_usage_enrich_failed", error=str(exc))
+                    numbers = {}
+                for poison in ("_error", "detail", "limit_available"):
+                    numbers.pop(poison, None)
+                windows.update(numbers)
+                # The bars exist, so this is a measured plan, not a missing one.
+                windows["limit_available"] = True
+                return windows
+        else:
+            logger.info("opencode_go_usage_no_key")
+
+        from .console_oauth import current_access_token
+
         token = current_access_token()
-        if not token:
+        # ── 2. Console budget rows (``/api/v1/*`` is service-key only) ───────
+        if token:
+            windows = {}
+            try:
+                windows = plan_windows(fetch_budget_members(token))
+            except ConsoleApiError as exc:
+                logger.info("opencode_budget_route_unavailable", status=exc.status)
+            except Exception as exc:  # noqa: BLE001
+                logger.info("opencode_budget_route_error", error=str(exc))
+            if windows:
+                return windows
+        else:
             logger.info("opencode_console_session_missing")
+
+        # ── 3. No session at all → actionable reason ─────────────────────────
+        if not token:
             return {
                 "_error": "auth_failed",
                 "detail": (
@@ -452,17 +506,6 @@ class OpenCodeCostPlugin(CostPlugin):
                     "`python -m api.cost_plugins.console_oauth start`"
                 ),
             }
-        # ``/api/v1/*`` is a service-key surface: a console session token gets
-        # 401 there, so a failure is expected rather than a credential problem.
-        windows: dict = {}
-        try:
-            windows = plan_windows(fetch_budget_members(token))
-        except ConsoleApiError as exc:
-            logger.info("opencode_budget_route_unavailable", status=exc.status)
-        except Exception as exc:  # noqa: BLE001
-            logger.info("opencode_budget_route_error", error=str(exc))
-        if windows:
-            return windows
 
         # No plan ceiling exists on this account (``creditLimitMicroCents`` is
         # null), so report the vendor's real usage numbers instead of inventing

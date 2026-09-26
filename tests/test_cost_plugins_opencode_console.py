@@ -231,3 +231,78 @@ def test_usage_range_enum_matches_the_console():
     assert oa._check_range("all") == "all"
     with pytest.raises(ValueError):
         oa._check_range("1m")
+
+
+# ── Go plan usage endpoint (inference host, provider key) ──────────────────
+
+def test_go_usage_url_is_the_inference_host():
+    """Not the console API — the Go plan exposes its windows on inference."""
+    assert oa.GO_USAGE_API == "https://opencode.ai/inference/go/v1/usage"
+
+
+def test_fetch_go_usage_needs_a_token():
+    assert oa.fetch_go_usage("") is None
+
+
+def test_fetch_go_usage_reads_the_usage_object(monkeypatch):
+    import io
+    import json
+
+    body = json.dumps({"usage": {
+        "rolling": {"status": "ok", "percent": 0, "resetsAt": "2026-09-26T22:17:08.376Z"},
+        "monthly": {"status": "rate-limited", "percent": 100,
+                    "resetsAt": "2026-10-03T14:19:39.000Z"},
+    }}).encode()
+    seen = {}
+
+    def fake_urlopen(request, timeout=15):
+        seen["url"] = request.full_url
+        seen["auth"] = request.headers.get("Authorization")
+        return io.BytesIO(body)
+
+    monkeypatch.setattr(oa, "urlopen", fake_urlopen)
+    out = oa.fetch_go_usage("oc_sk_test")
+    assert out["monthly"]["percent"] == 100
+    assert seen["url"] == oa.GO_USAGE_API
+    assert seen["auth"] == "Bearer oc_sk_test"
+
+
+def test_fetch_go_usage_sends_no_org_header(monkeypatch):
+    """The Go route is not org-scoped; x-org-id must not be required."""
+    import io
+    import json
+
+    seen = {}
+
+    def fake_urlopen(request, timeout=15):
+        seen.update(request.headers)
+        return io.BytesIO(json.dumps({"usage": {}}).encode())
+
+    monkeypatch.setattr(oa, "urlopen", fake_urlopen)
+    oa.fetch_go_usage("oc_sk_test")
+    assert not any(k.lower() == oa.ORG_HEADER for k in seen)
+
+
+def test_fetch_go_usage_classifies_the_error_body(monkeypatch):
+    """A key without Go access answers with a nested error object."""
+    import io
+    from urllib.error import HTTPError
+
+    def fake_urlopen(request, timeout=15):
+        raise HTTPError(request.full_url, 403, "Forbidden", {}, io.BytesIO(
+            b'{"type":"error","error":{"type":"AuthError","message":"Forbidden"}}'))
+
+    monkeypatch.setattr(oa, "urlopen", fake_urlopen)
+    with pytest.raises(oa.ConsoleApiError) as exc:
+        oa.fetch_go_usage("oc_sk_test")
+    assert exc.value.status == 403
+    assert exc.value.tag == "AuthError"
+    assert "Forbidden" in exc.value.detail
+
+
+def test_fetch_go_usage_tolerates_a_payload_without_usage(monkeypatch):
+    import io
+
+    monkeypatch.setattr(oa, "urlopen",
+                        lambda request, timeout=15: io.BytesIO(b'{"other": 1}'))
+    assert oa.fetch_go_usage("oc_sk_test") is None
