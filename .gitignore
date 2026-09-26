@@ -1,6 +1,12 @@
 # Environment secrets
 .env
 
+# Bind-mount host paths (readable layout of the estate). Loaded explicitly with
+# `docker compose --env-file host-paths.env ...` — the compose files reference
+# each value as ${VAR:?...}, so omitting the flag fails loudly. Kept out of the
+# tracked compose files because this repo is public (ADMIN_ACTIONS #19).
+host-paths.env
+
 # Legacy local gateway config. Config is DB-backed (seeded in code via
 # src/api/config.py SEED_CONFIG). The YAML file itself was deleted 2026-09-18
 # after the stale references were purged; the rule stays so it cannot come

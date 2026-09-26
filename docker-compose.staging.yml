@@ -17,7 +17,7 @@
 #
 # NEVER run `down`/`stop` against the prod project from this file. Bring this
 # instance up with (from the simple-lcp checkout):
-#   cd /your/data/docker-apps/simple-lcp
+#   cd <the simple-lcp checkout>
 #   docker compose -f docker-compose.staging.yml -p lcp-staging up -d --build
 services:
   lcp-staging:
@@ -32,41 +32,51 @@ services:
     ports:
       - "8735:8734"
     volumes:
-      - /your/data/app/lcp-staging/data:/app/data
-      - /your/data/app/lcp/modules:/opt/lcp-modules
+      # Host paths live in .env (gitignored) — this repo is public, so the estate's
+      # layout must not be named in a tracked file (ADMIN_ACTIONS #19). Required
+      # rather than defaulted, so a missing value fails loudly at `compose config`
+      # instead of silently mounting an empty directory.
+      - ${LCP_HOST_DATA_DIR:?set LCP_HOST_DATA_DIR in .env}:/app/data
+      - ${LCP_HOST_MODULES_DIR:?set LCP_HOST_MODULES_DIR in .env}:/opt/lcp-modules
       # Work layer reads the board's ledger. Mounted READ-ONLY on purpose: the
       # "a Work view cannot change what was published" property is enforced at
       # the container boundary, not merely by the code choosing to open SQLite
       # read-only.
-      - /your/data/app/runboard/decisions.db:/app/work/decisions.db:ro
+      - ${LCP_HOST_DECISIONS_DB:?set LCP_HOST_DECISIONS_DB in .env}:/app/work/decisions.db:ro
       # The task tree. READ-ONLY for the same reason as the ledger: a view of
       # pending work must not be able to move a task, and mounting read-only
       # makes that structural. The state of a task IS its directory, so a
       # writable mount would let a dashboard silently complete your work.
-      - /root/.hermes/profiles/homelab-expert-l2/work:/app/work-tree:ro
+      - ${LCP_HOST_WORK_TREE:?set LCP_HOST_WORK_TREE in .env}:/app/work-tree:ro
       # Session transcripts, for the Categories view. READ-ONLY for the same
       # reason as everything else here: a view of what the agents did must not
       # be able to change what was recorded. Host paths are NOT visible inside a
       # container -- the path has to be mounted or the read fails as if the file
       # were absent, which is a failure mode that looks like "no data".
-      - /root/.hermes/profiles:/app/profiles:ro
+      - ${LCP_HOST_PROFILES_DIR:?set LCP_HOST_PROFILES_DIR in .env}:/app/profiles:ro
       # The L2 profile's skills/ is a symlink to this shared directory, so the
       # target has to be mounted at its own absolute path or the link dangles
       # inside the container and the Skills tab reports "no skills directory".
-      - /root/hermes-work/shared-skills:/root/hermes-work/shared-skills:ro
+      # (the mount target must stay literal: the L2 profile's skills/ symlink
+      # points at that absolute path, so host and container paths have to match)
+      - ${LCP_HOST_SHARED_SKILLS:?set LCP_HOST_SHARED_SKILLS in .env}:/root/hermes-work/shared-skills:ro
       # Cron op spool. The ONLY deliberately-writable mount in the work layer:
       # the Cron page cannot see /root/.hermes/profiles, so edit/create/delete
       # intents are spooled here and a host-side executor
       # (work-layers-cron-executor.timer) applies them via the real hermes CLI.
       # The panel writes intents; it never touches jobs.json itself.
-      - /your/data/app/lcp/cron-ops:/app/cron-ops:rw
+      - ${LCP_HOST_CRON_OPS_DIR:?set LCP_HOST_CRON_OPS_DIR in .env}:/app/cron-ops:rw
     env_file:
       - .env
     environment:
       - COST_DB=/app/data/costs.db
       - LISTEN_PORT=8734
       - TIKTOKEN_CACHE_DIR=/app/data/tiktoken_cache
-      - LCP_SECRET_KEY=${LCP_SECRET_KEY}
+      # LCP_SECRET_KEY is deliberately NOT repeated here. `env_file: .env` above
+      # already injects it, and `environment:` overrides `env_file` — so an
+      # interpolation of it (${LCP_SECRET_KEY}) turns into an EMPTY value the
+      # moment compose is run with --env-file, which would make every stored
+      # credential undecryptable. env_file is the single source for secrets.
       - LCP_MODULES_DIR=/opt/lcp-modules
       - LCP_WORK_DECISIONS_DB=/app/work/decisions.db
       - LCP_WORK_TASKS_DIR=/app/work-tree/tasks
