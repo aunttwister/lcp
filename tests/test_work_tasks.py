@@ -397,3 +397,84 @@ class TestMarkdown:
         assert wt._module_site_dirs() == [str(mods / "site"), str(mods / "router")]
         monkeypatch.delenv("LCP_MODULES_DIR")
         assert wt._module_site_dirs() == ["/opt/lcp-modules/site", "/opt/lcp-modules/router"]
+
+
+JINJA = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src", "ui",
+                                     "templates", "jinja"))
+
+
+class TestTasksTableFitsTheColumn:
+    """The task table must FIT the content column, not push it sideways.
+
+    Measured on prod 2026-09-26 at a 1280px viewport: `.work-table` was 1242px
+    wide inside a 961px content column, so the last column was clipped and only
+    reachable by scrolling the table itself ("horizontally overflowing and not
+    viewable").
+
+    Root cause: the base `.work-table th, td { white-space: nowrap }` rule. A
+    cell that cannot wrap has a min-content width equal to its whole string, and
+    the PLAN.md status cell holds up to 90 characters.
+
+    The fix is deliberately scoped to `.work-table-tasks` because `.work-table`
+    is shared by ten templates — these tests pin the scope so a later "tidy-up"
+    cannot turn it into a base-rule change that reflows every other page.
+    """
+
+    @staticmethod
+    def _cfg():
+        from unittest.mock import MagicMock
+        cfg = MagicMock()
+        cfg._data = {}
+        return cfg
+
+    @staticmethod
+    def _css():
+        return open(os.path.join(JINJA, "static", "dashboard.css"), encoding="utf-8").read()
+
+    def test_the_rendered_task_table_carries_the_fit_class(self, tmp_path, monkeypatch):
+        root, _ = _tree(tmp_path, state="in_progress", slug="demo-task", plan="# T\n")
+        monkeypatch.setenv("LCP_WORK_TASKS_DIR", str(root))
+        from src.ui.pages import render_work_tasks_page
+        html = render_work_tasks_page(self._cfg(), None, {})
+        assert 'class="work-table work-table-tasks"' in html
+
+    def test_both_tables_on_the_page_carry_it(self):
+        """The assessments table overflowed the same way as the tasks table."""
+        src = open(os.path.join(JINJA, "sections", "sec_ptasks.html"), encoding="utf-8").read()
+        assert src.count('class="work-table work-table-tasks"') == 2
+        assert 'class="work-table">' not in src
+
+    def test_every_profile_gets_it_from_the_shared_partial(self):
+        """profile > <any profile> > tasks renders the same partial, so one class
+        covers l2 and every other profile — that is *why* the fix lives here."""
+        page = open(os.path.join(JINJA, "pages", "profile_detail.html"), encoding="utf-8").read()
+        assert "sections/sec_ptasks.html" in page
+
+    def test_the_scoped_rules_allow_wrapping(self):
+        css = self._css()
+        assert ".work-table-tasks {" in css
+        block = css[css.index(".work-table-tasks {"):][:1800]
+        assert "white-space: normal" in block
+        assert "overflow-wrap: anywhere" in block, (
+            "break-word is not enough: only `anywhere` lowers the cell's "
+            "min-content width, which is what lets the table fit")
+
+    def test_the_shared_base_rule_is_still_untouched(self):
+        """The scope pin. If someone moves the wrapping onto .work-table, ten
+        other pages reflow — this test is the thing that objects."""
+        assert (
+            ".work-table th,\n"
+            ".work-table td {\n"
+            "  text-align: left;\n"
+            "  padding: 0.4rem 0.6rem;\n"
+            "  border-bottom: 1px solid var(--border, #30363d);\n"
+            "  white-space: nowrap;\n"
+            "}"
+        ) in self._css()
+
+    def test_the_mobile_breakpoint_still_owns_the_phone_case(self):
+        """The desktop block is min-width:721px so it cannot fight the existing
+        card-ization at max-width:720px (which the mobile tests cover)."""
+        css = self._css()
+        assert "@media (min-width: 721px) {" in css
+        assert "@media (max-width: 720px) {" in css

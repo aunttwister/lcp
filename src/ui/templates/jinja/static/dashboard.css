@@ -1522,6 +1522,55 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 .task-flag { color: #d29922; font-size: 0.8rem; margin-left: 0.3rem; }
 .work-h2-note { font-size: 0.75rem; font-weight: normal; letter-spacing: normal; }
 
+/* Desktop/tablet: the Tasks tables must FIT the content column instead of
+   pushing .work-scroll into sideways scrolling.
+   Measured on prod 2026-09-26 at a 1280px viewport: the task table was 1242px
+   wide inside a 961px content column, so the PLAN.md status column was clipped
+   (the row table only ever got narrower by scrolling itself).
+   Root cause is the base rule above — `white-space: nowrap` on every th/td. A
+   cell that cannot wrap has a min-content width equal to its entire string, and
+   the status cell carries up to 90 characters.
+   `overflow-wrap: anywhere` is the load-bearing half of the fix: unlike
+   `break-word` it ALSO lowers the cell's min-content contribution, which is what
+   lets the table shrink to its container. `break-word` alone would not.
+   Deliberately scoped to .work-table-tasks: .work-table is shared by ten
+   templates (logs, config, cron, fleet, decisions, conversations), and reflowing
+   all of them is not this change. */
+@media (min-width: 721px) {
+  .work-table-tasks { width: 100%; }
+  .work-table-tasks th,
+  .work-table-tasks td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    vertical-align: top;
+  }
+  /* Atomic bits stay atomic: the chevron, the chips, the numeric column. */
+  .work-table-tasks .task-chev-col,
+  .work-table-tasks .task-chev,
+  .work-table-tasks .task-chip,
+  .work-table-tasks .work-actor,
+  .work-table-tasks .num { white-space: nowrap; }
+  .work-table-tasks .task-chev-col { width: 1.75rem; }
+  /* The task name is a handle — let it run on its hyphens rather than being
+     squeezed to a sliver or chopped mid-word. */
+  .work-table-tasks td[data-label="Task"] { min-width: 8.5rem; }
+  /* A timestamp is atomic: once the status column started wrapping, the
+     auto-layout gave the date column 85px and it broke mid-date
+     ("2026-09-" / "26 23:24"), which reads as corruption. Measured cost of
+     holding these two columns open: the remaining columns sum well under the
+     container, so the table still fits. */
+  .work-table-tasks td[data-label="Last transition"],
+  .work-table-tasks td[data-label="When"] { white-space: nowrap; min-width: 8.5rem; }
+  /* The expanded detail row carries markdown. Same rules the mobile block
+     applies, so a long <pre> line cannot widen the table from inside either. */
+  .work-table-tasks .task-md p,
+  .work-table-tasks .task-md li,
+  .work-table-tasks .task-md blockquote { overflow-wrap: anywhere; }
+  .work-table-tasks .task-md pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .work-table-tasks .task-md code { overflow-wrap: anywhere; }
+  .work-table-tasks .task-md table { display: block; max-width: 100%; overflow-x: auto; }
+}
+
 /* Mobile: the whole page becomes a single column of stacked cards.
    The tables lose their header row and every data cell becomes a label +
    value line (label from data-label). The accordion still works because the
