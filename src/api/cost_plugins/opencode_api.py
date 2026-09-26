@@ -552,6 +552,12 @@ _CONSOLE_API = CONSOLE_API_BASE + "/api"
 USAGE_RANGES = ("24h", "7d", "30d")
 MICRO_CENTS = 1e-8  # console money unit → USD (fixed-point, matches _BALANCE_FIXED_POINT)
 
+# Org-scoped console routes (billing, usage) reject a session token on its own:
+# they answer 400 {"_tag":"OrgRequired","message":"x-org-id is required"} until
+# the caller names the org explicitly.  The org id is not a secret — it is the
+# same ``wrk_...`` id that appears in console URLs — but it must be sent.
+ORG_HEADER = "x-org-id"
+
 
 class ConsoleApiError(RuntimeError):
     """Console API returned a non-200 status."""
@@ -568,8 +574,12 @@ class ConsoleApiError(RuntimeError):
         )
 
 
-def _console_headers(token: Optional[str]) -> dict[str, str]:
-    """Headers for console JSON routes (Bearer when a token is supplied)."""
+def _console_headers(token: Optional[str],
+                     org_id: Optional[str] = None) -> dict[str, str]:
+    """Headers for console JSON routes (Bearer when a token is supplied).
+
+    *org_id* adds ``x-org-id``, which every org-scoped route requires.
+    """
     headers = {
         "User-Agent": _USER_AGENT,
         "Accept": "application/json",
@@ -578,13 +588,16 @@ def _console_headers(token: Optional[str]) -> dict[str, str]:
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    if org_id:
+        headers[ORG_HEADER] = str(org_id)
     return headers
 
 
-def _console_get(path: str, token: Optional[str], timeout: int = 15):
+def _console_get(path: str, token: Optional[str], timeout: int = 15,
+                 org_id: Optional[str] = None):
     """GET a console JSON route; raise ``ConsoleApiError`` on any non-200."""
     url = _CONSOLE_API + path
-    req = Request(url, headers=_console_headers(token), method="GET")
+    req = Request(url, headers=_console_headers(token, org_id), method="GET")
     try:
         with urlopen(req, timeout=timeout) as resp:
             status = resp.status
@@ -655,9 +668,11 @@ def console_model_ids(token: str, provider: str = "opencode") -> list[str]:
     return sorted(set(ids))
 
 
-def fetch_usage_summary(token: str, range_: str = "7d") -> Optional[dict]:
+def fetch_usage_summary(token: str, range_: str = "7d",
+                        org_id: Optional[str] = None) -> Optional[dict]:
     """Vendor-side usage totals for *range_* (requests/tokens/cost)."""
-    return _console_get(f"/usage/summary?range={_check_range(range_)}", token)
+    return _console_get(f"/usage/summary?range={_check_range(range_)}", token,
+                        org_id=org_id)
 
 
 def fetch_usage_cost_by_day(token: str, range_: str = "7d") -> list[dict]:
@@ -684,13 +699,43 @@ def fetch_usage_users(token: str, range_: str = "7d") -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def fetch_account_credits(token: str) -> Optional[dict]:
-    """Console credits — ``GET /api/billing/account``.
+def fetch_orgs(token: str) -> list[dict]:
+    """Organizations the session can see — ``GET /api/orgs``.
 
-    Reachable only with a console *session* token; a service API key is
-    rejected with 403 even when its permissions are ``all``.
+    The console returns a bare JSON array of ``{id, name}``; the first entry is
+    the org every other org-scoped route must be told about via ``x-org-id``.
     """
-    return _console_get("/billing/account", token)
+    data = _console_get("/orgs", token)
+    if isinstance(data, dict):
+        data = data.get("data") or data.get("orgs") or []
+    return data if isinstance(data, list) else []
+
+
+def fetch_org_id(token: str) -> str:
+    """The first org id for *token*, or ``""`` when none is visible."""
+    for org in fetch_orgs(token):
+        if isinstance(org, dict) and org.get("id"):
+            return str(org["id"])
+    return ""
+
+
+def fetch_account_credits(token: str,
+                          org_id: Optional[str] = None) -> Optional[dict]:
+    """Console credits — ``GET /api/billing/status``.
+
+    Reachable only with a console *session* token plus ``x-org-id``: a service
+    API key is rejected with 403 even when its permissions are ``all``, and a
+    session token alone gets 400 ``OrgRequired``.  Returns
+    ``{billingMode, mode, balanceMicroCents, availableMicroCents,
+    creditLimitMicroCents, ...}``.
+    """
+    return _console_get("/billing/status", token, org_id=org_id)
+
+
+def fetch_billing_account(token: str,
+                          org_id: Optional[str] = None) -> Optional[dict]:
+    """Legacy alias route — kept for comparison during shape migrations."""
+    return _console_get("/billing/account", token, org_id=org_id)
 
 
 def _seconds_until(iso_stamp) -> Optional[int]:

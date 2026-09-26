@@ -257,14 +257,19 @@ def test_fetch_balance_uses_the_console_session(monkeypatch):
 
     seen = {}
 
-    def fake_credits(token):
-        seen["token"] = token
-        return {"availableMicroCents": 300000000}
+    def fake_credits(token, org_id=None):
+        seen["token"], seen["org_id"] = token, org_id
+        return {"availableMicroCents": 300000000, "mode": "pay-as-you-go",
+                "creditLimitMicroCents": None}
 
     monkeypatch.setattr(oa, "fetch_account_credits", fake_credits)
+    monkeypatch.setattr(co, "resolve_org_id", lambda token="": "wrk_test")
     result = plugin.fetch_balance()
     assert seen["token"] == "sess"
+    assert seen["org_id"] == "wrk_test"
     assert result["available_credits"] == 3.0
+    assert result["plan"] == "pay-as-you-go"
+    assert result["credit_limit_usd"] is None
 
 
 def test_fetch_balance_reports_a_403_distinctly(monkeypatch):
@@ -273,10 +278,11 @@ def test_fetch_balance_reports_a_403_distinctly(monkeypatch):
     monkeypatch.setattr(co, "current_access_token", lambda force_refresh=False: "sess")
     from api.cost_plugins import opencode_api as oa
 
-    def forbidden(token):
-        raise oa.ConsoleApiError(403, "/api/billing/account", "Forbidden")
+    def forbidden(token, org_id=None):
+        raise oa.ConsoleApiError(403, "/api/billing/status", "Forbidden")
 
     monkeypatch.setattr(oa, "fetch_account_credits", forbidden)
+    monkeypatch.setattr(co, "resolve_org_id", lambda token="": "wrk_test")
     result = plugin.fetch_balance()
     assert result["_error"] == "auth_failed"
     assert "403" in result["detail"]
@@ -288,7 +294,9 @@ def test_fetch_balance_flags_an_unknown_payload_shape(monkeypatch):
     monkeypatch.setattr(co, "current_access_token", lambda force_refresh=False: "sess")
     from api.cost_plugins import opencode_api as oa
 
-    monkeypatch.setattr(oa, "fetch_account_credits", lambda token: {"surprise": 1})
+    monkeypatch.setattr(oa, "fetch_account_credits",
+                        lambda token, org_id=None: {"surprise": 1})
+    monkeypatch.setattr(co, "resolve_org_id", lambda token="": "wrk_test")
     result = plugin.fetch_balance()
     assert result["_error"] == "api_error"
     assert "unrecognised" in result["detail"]
@@ -424,3 +432,65 @@ def test_current_access_token_refreshes_with_the_stored_flow(monkeypatch):
     monkeypatch.setattr(co, "refresh", fake_refresh)
     assert co.current_access_token() == "new"
     assert saved["flow_seen"] == "device"
+
+
+# ── org id (org-scoped console routes require x-org-id) ───────────────────
+
+def test_stored_org_id_round_trips(monkeypatch):
+    """The id captured at login is what later calls send as x-org-id."""
+    state = {"access_token": "a", "refresh_token": "r", "expires_at": 1.0}
+    monkeypatch.setattr(co, "load_tokens", lambda: dict(state))
+    monkeypatch.setattr(co, "save_tokens", lambda blob: state.update(blob))
+
+    assert co.stored_org_id() == ""
+    co.remember_org_id("wrk_abc")
+    assert co.stored_org_id() == "wrk_abc"
+    assert state["org_id"] == "wrk_abc"
+
+    # Remembering the same id again must not churn the store.
+    writes = []
+    monkeypatch.setattr(co, "save_tokens", lambda blob: writes.append(blob))
+    co.remember_org_id("wrk_abc")
+    assert writes == []
+
+
+def test_remember_org_id_ignores_an_empty_id(monkeypatch):
+    monkeypatch.setattr(co, "load_tokens", lambda: {"access_token": "a"})
+    writes = []
+    monkeypatch.setattr(co, "save_tokens", lambda blob: writes.append(blob))
+    co.remember_org_id("")
+    assert writes == []
+
+
+def test_resolve_org_id_prefers_the_stored_id_over_the_network(monkeypatch):
+    monkeypatch.setattr(co, "load_tokens", lambda: {"org_id": "wrk_stored"})
+    monkeypatch.setattr(co, "current_access_token", lambda force_refresh=False: "tok")
+    from api.cost_plugins import opencode_api as oa
+    monkeypatch.setattr(oa, "fetch_org_id",
+                        lambda token: pytest.fail("must not call the console"))
+    assert co.resolve_org_id() == "wrk_stored"
+
+
+def test_resolve_org_id_fetches_and_remembers_when_absent(monkeypatch):
+    state = {"access_token": "a", "expires_at": 1.0}
+    monkeypatch.setattr(co, "load_tokens", lambda: dict(state))
+    monkeypatch.setattr(co, "save_tokens", lambda blob: state.update(blob))
+    monkeypatch.setattr(co, "current_access_token", lambda force_refresh=False: "tok")
+    from api.cost_plugins import opencode_api as oa
+    monkeypatch.setattr(oa, "fetch_org_id", lambda token: "wrk_fetched")
+
+    assert co.resolve_org_id() == "wrk_fetched"
+    assert state["org_id"] == "wrk_fetched"
+
+
+def test_resolve_org_id_survives_a_console_failure(monkeypatch):
+    monkeypatch.setattr(co, "load_tokens", lambda: {"access_token": "a"})
+    monkeypatch.setattr(co, "save_tokens", lambda blob: None)
+    monkeypatch.setattr(co, "current_access_token", lambda force_refresh=False: "tok")
+    from api.cost_plugins import opencode_api as oa
+
+    def boom(token):
+        raise RuntimeError("console down")
+
+    monkeypatch.setattr(oa, "fetch_org_id", boom)
+    assert co.resolve_org_id() == ""  # never raises into a cost fetch

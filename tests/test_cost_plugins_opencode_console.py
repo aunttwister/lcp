@@ -160,18 +160,54 @@ def test_preset_points_at_the_current_inference_base(plugin):
     (lambda t: oa.fetch_usage_summary(t, "24h"), "/usage/summary?range=24h"),
     (lambda t: oa.fetch_usage_cost_by_day(t, "7d"), "/usage/cost-by-day?range=7d"),
     (lambda t: oa.fetch_usage_models(t, "30d"), "/usage/models?range=30d"),
-    (lambda t: oa.fetch_account_credits(t), "/billing/account"),
+    (lambda t: oa.fetch_account_credits(t), "/billing/status"),
+    (lambda t: oa.fetch_orgs(t), "/orgs"),
 ])
 def test_route_construction(monkeypatch, fn, expected):
     seen = {}
 
-    def fake_get(path, token, timeout=15):
+    def fake_get(path, token, timeout=15, org_id=None):
         seen["path"] = path
         return {}
 
     monkeypatch.setattr(oa, "_console_get", fake_get)
     fn("tok")
     assert seen["path"] == expected
+
+
+def test_org_scoped_calls_send_the_x_org_id_header(monkeypatch):
+    """Billing/usage answer 400 OrgRequired without this header."""
+    seen = {}
+
+    def fake_get(path, token, timeout=15, org_id=None):
+        seen["path"], seen["org_id"] = path, org_id
+        return {}
+
+    monkeypatch.setattr(oa, "_console_get", fake_get)
+    oa.fetch_account_credits("tok", org_id="wrk_abc")
+    assert seen["org_id"] == "wrk_abc"
+
+    oa.fetch_usage_summary("tok", "7d", org_id="wrk_abc")
+    assert seen["org_id"] == "wrk_abc"
+    assert oa.ORG_HEADER == "x-org-id"
+
+
+def test_console_headers_carry_the_org_header_only_when_asked():
+    assert oa.ORG_HEADER not in oa._console_headers("tok")
+    assert oa._console_headers("tok", "wrk_abc")[oa.ORG_HEADER] == "wrk_abc"
+
+
+def test_fetch_org_id_reads_the_first_org_of_a_bare_array(monkeypatch):
+    """``/api/orgs`` returns a bare JSON array of {id, name}."""
+    monkeypatch.setattr(oa, "_console_get",
+                        lambda *a, **k: [{"id": "wrk_first", "name": "DefaultPavle"},
+                                         {"id": "wrk_second", "name": "Other"}])
+    assert oa.fetch_org_id("tok") == "wrk_first"
+
+
+def test_fetch_org_id_tolerates_no_orgs(monkeypatch):
+    monkeypatch.setattr(oa, "_console_get", lambda *a, **k: [])
+    assert oa.fetch_org_id("tok") == ""
 
 
 def test_console_get_classifies_403_as_permission_not_auth(monkeypatch):

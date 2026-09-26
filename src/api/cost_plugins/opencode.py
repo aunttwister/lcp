@@ -73,7 +73,8 @@ def _map_account_credits(payload: Any) -> Optional[dict]:
         return None
     credits = available if available is not None else balance
 
-    plan = source.get("plan") or source.get("planName")
+    plan = (source.get("plan") or source.get("planName")
+            or source.get("mode") or source.get("billingMode"))
     if plan is None and isinstance(source.get("subscription"), dict):
         plan = source["subscription"].get("plan") or source["subscription"].get("name")
 
@@ -82,6 +83,10 @@ def _map_account_credits(payload: Any) -> Optional[dict]:
         "balance": credits,
         "currency": source.get("currency") or "USD",
         "plan": plan,
+        "billing_mode": source.get("billingMode"),
+        # Null on a pay-as-you-go account: there is no plan ceiling to show.
+        "credit_limit_usd": _first_usd("creditLimitMicroCents",
+                                       "credit_limit_micro_cents"),
         "workspace_id": source.get("workspaceId") or source.get("workspace_id"),
     }
 
@@ -322,7 +327,7 @@ class OpenCodeCostPlugin(CostPlugin):
                     "workspace_id": "wrk_mock", "fetched_at": None,
                 }
             from .opencode_api import ConsoleApiError, fetch_account_credits
-            from .console_oauth import current_access_token
+            from .console_oauth import current_access_token, resolve_org_id
 
             token = current_access_token()
             if not token:
@@ -339,20 +344,20 @@ class OpenCodeCostPlugin(CostPlugin):
                     ),
                 }
             try:
-                payload = fetch_account_credits(token)
+                payload = fetch_account_credits(token, org_id=resolve_org_id(token))
             except ConsoleApiError as exc:
                 logger.warning("opencode_credits_api_error", status=exc.status,
                                detail=exc.detail or exc.tag)
                 return {
                     "_error": "auth_failed",
-                    "detail": f"console API HTTP {exc.status} on /api/billing/account",
+                    "detail": f"console API HTTP {exc.status} on /api/billing/status",
                 }
             mapped = _map_account_credits(payload)
             if mapped is None:
                 logger.warning("opencode_credits_unmapped",
                                keys=sorted(payload)[:12] if isinstance(payload, dict) else None)
                 return {"_error": "api_error",
-                        "detail": "unrecognised /api/billing/account payload shape"}
+                        "detail": "unrecognised /api/billing/status payload shape"}
             return mapped
         except Exception as exc:
             logger.warning("billing_fetch_failed", error=str(exc))
@@ -447,30 +452,73 @@ class OpenCodeCostPlugin(CostPlugin):
                     "`python -m api.cost_plugins.console_oauth start`"
                 ),
             }
+        # ``/api/v1/*`` is a service-key surface: a console session token gets
+        # 401 there, so a failure is expected rather than a credential problem.
+        windows: dict = {}
         try:
-            members = fetch_budget_members(token)
+            windows = plan_windows(fetch_budget_members(token))
         except ConsoleApiError as exc:
-            logger.warning("opencode_budget_api_error", status=exc.status,
+            logger.info("opencode_budget_route_unavailable", status=exc.status)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("opencode_budget_route_error", error=str(exc))
+        if windows:
+            return windows
+
+        # No plan ceiling exists on this account (``creditLimitMicroCents`` is
+        # null), so report the vendor's real usage numbers instead of inventing
+        # a percentage.  The UI only draws bars for pct fields, so nothing is
+        # fabricated downstream either.
+        return self._console_usage_numbers(token)
+
+    def _console_usage_numbers(self, token: str) -> Optional[dict]:
+        """Vendor usage totals for the vendor card — ``GET /api/usage/summary``.
+
+        Used when the account exposes no plan limit.  Returns real numbers
+        (requests, tokens, cost) plus ``limit_available: False`` so the reader
+        can tell "no bars" from "not measured".
+        """
+        from .console_oauth import resolve_org_id
+        from .opencode_api import (
+            ConsoleApiError,
+            fetch_usage_summary,
+            micro_cents_to_usd,
+        )
+
+        try:
+            summary = fetch_usage_summary(token, "7d",
+                                          org_id=resolve_org_id(token)) or {}
+        except ConsoleApiError as exc:
+            logger.warning("opencode_usage_api_error", status=exc.status,
                            detail=exc.detail or exc.tag)
             return {
                 "_error": "auth_failed",
-                "detail": f"console API HTTP {exc.status} on /api/v1/budgets/members",
+                "detail": f"console API HTTP {exc.status} on /api/usage/summary",
             }
         except Exception as exc:  # noqa: BLE001
-            logger.warning("opencode_subscription_failed", error=str(exc))
+            logger.warning("opencode_usage_failed", error=str(exc))
             return {"_error": "api_error", "detail": str(exc)}
 
-        windows = plan_windows(members)
-        if not windows:
-            logger.info("opencode_plan_limits_absent")
-            return {
-                "_error": "no_subscription",
-                "detail": (
-                    "OpenCode console reports no plan limit for this account, "
-                    "so there is no percentage to show"
-                ),
-            }
-        return windows
+        def _count(key: str) -> int:
+            try:
+                return int(summary.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        return {
+            "source": "console-usage",
+            "range": "7d",
+            "total_requests": _count("totalRequests"),
+            "total_input_tokens": _count("totalInputTokens"),
+            "total_output_tokens": _count("totalOutputTokens"),
+            "total_cache_read_tokens": _count("totalCacheReadTokens"),
+            "total_cost_usd": micro_cents_to_usd(summary.get("totalCostMicroCents")),
+            "limit_available": False,
+            "note": (
+                "OpenCode exposes no plan limit to a console session "
+                "(creditLimitMicroCents is null), so no percentage bars exist "
+                "- these are the vendor's own numbers."
+            ),
+        }
 
     def credit_status(self, subscription: Optional[dict] = None,
                       balance: Optional[dict] = None) -> str:

@@ -366,6 +366,11 @@ class TestOpenCodeFetchSubscription:
         return patch("src.api.cost_plugins.console_oauth.current_access_token",
                      return_value=token)
 
+    def _with_org(self, org_id="wrk_test"):
+        """Pin the org id so tests never reach the console via /api/orgs."""
+        return patch("src.api.cost_plugins.console_oauth.resolve_org_id",
+                     return_value=org_id)
+
     def test_returns_error_without_a_console_session(self, plugin):
         """No session → the actionable one-time-approval reason, not a cookie."""
         with patch("src.api.cost_plugins.console_oauth.current_access_token",
@@ -376,22 +381,31 @@ class TestOpenCodeFetchSubscription:
         assert "console session" in result["detail"]
         assert "cookie" not in result["detail"].lower()
 
-    def test_absent_plan_limit_is_not_a_fabricated_percentage(self, plugin):
+    def test_absent_plan_limit_falls_back_to_vendor_numbers(self, plugin):
         """The live console reports limit_micro_cents: null for this org.
 
         A percentage without a denominator must never be invented, so the
-        payload carries an explicit state instead of a bar.
+        payload carries the vendor's real totals instead of a bar.
         """
         members = [{"user_id": "acc_1", "limit_micro_cents": None,
                     "spent_micro_cents": "0", "exceeded": False,
                     "resets_at": "2026-10-01T00:00:00.000Z"}]
-        with self._with_session():
+        summary = {"totalRequests": "9655", "totalInputTokens": "106384603",
+                   "totalOutputTokens": "11708909",
+                   "totalCacheReadTokens": "1549768128",
+                   "totalCostMicroCents": "4097884716"}
+        with self._with_session(), self._with_org():
             with patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
                        return_value=members):
-                result = plugin.fetch_subscription()
-        assert result["_error"] == "no_subscription"
+                with patch("src.api.cost_plugins.opencode_api.fetch_usage_summary",
+                           return_value=summary):
+                    result = plugin.fetch_subscription()
         assert "rolling_pct" not in result
         assert "monthly_pct" not in result
+        assert result["limit_available"] is False
+        assert result["total_requests"] == 9655
+        assert result["total_cache_read_tokens"] == 1549768128
+        assert result["total_cost_usd"] == 40.97884716
 
     def test_limit_is_mapped_to_a_monthly_window(self, plugin):
         """A real limit yields spent/limit, with the month-boundary reset."""
@@ -407,22 +421,48 @@ class TestOpenCodeFetchSubscription:
         assert result["monthly_pct"] == 25.0
         assert result["monthly_reset_sec"] > 0
 
-    def test_console_http_error_names_the_route(self, plugin):
+    def test_budget_route_403_falls_through_to_vendor_numbers(self, plugin):
+        """``/api/v1/*`` is service-key only, so a session 403 there is expected.
+
+        It must never be reported as a dead credential: the session is fine,
+        that route simply is not open to it.
+        """
         from src.api.cost_plugins.opencode_api import ConsoleApiError
-        with self._with_session():
+        summary = {"totalRequests": "11", "totalCostMicroCents": "2195760"}
+        with self._with_session(), self._with_org():
             with patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
                        side_effect=ConsoleApiError(403, "u", "Forbidden", "")):
-                result = plugin.fetch_subscription()
-        assert result["_error"] == "auth_failed"
-        assert "403" in result["detail"]
-        assert "budgets/members" in result["detail"]
+                with patch("src.api.cost_plugins.opencode_api.fetch_usage_summary",
+                           return_value=summary):
+                    result = plugin.fetch_subscription()
+        assert "_error" not in result
+        assert result["total_requests"] == 11
+        assert result["total_cost_usd"] == 0.0219576
 
-    def test_unexpected_failure_is_an_api_error(self, plugin):
-        with self._with_session():
+    def test_usage_route_error_names_the_route(self, plugin):
+        """A real failure of the route we *do* use must name the route."""
+        from src.api.cost_plugins.opencode_api import ConsoleApiError
+        with self._with_session(), self._with_org():
+            with patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
+                       side_effect=ConsoleApiError(401, "u", "Unauthorized", "")):
+                with patch("src.api.cost_plugins.opencode_api.fetch_usage_summary",
+                           side_effect=ConsoleApiError(401, "u", "Unauthorized", "")):
+                    result = plugin.fetch_subscription()
+        assert result["_error"] == "auth_failed"
+        assert "401" in result["detail"]
+        assert "usage/summary" in result["detail"]
+
+    def test_unexpected_budget_failure_still_reports_usage(self, plugin):
+        """A broken budget route must not hide the numbers we *can* read."""
+        summary = {"totalRequests": "3", "totalCostMicroCents": "1000000"}
+        with self._with_session(), self._with_org():
             with patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
                        side_effect=RuntimeError("network down")):
-                result = plugin.fetch_subscription()
-        assert result["_error"] == "api_error"
+                with patch("src.api.cost_plugins.opencode_api.fetch_usage_summary",
+                           return_value=summary):
+                    result = plugin.fetch_subscription()
+        assert result["total_requests"] == 3
+        assert result["total_cost_usd"] == 0.01
 
     def test_mock_env_short_circuits_without_a_session(self, plugin, monkeypatch):
         monkeypatch.setenv("LCP_MOCK_PLUGIN_DATA", "1")

@@ -636,6 +636,25 @@ function buildPage(providers) {
                     panelsHtml += '<div class="stat-card" style="border-left:3px solid #f97316;margin-bottom:1rem"><div class="label" style="color:#f97316">⚠ Credits Status</div><div class="value" style="font-size:0.85rem;font-weight:400">' + esc(ocbal.detail || ocbal._error) + '</div></div>';
                 }
 
+                // ── Vendor usage (console-reported) ──
+                // This account carries no plan ceiling, so there is no percentage
+                // to draw: show the vendor's real numbers instead of a bar.
+                if (sub.total_cost_usd != null || sub.total_requests != null) {
+                    var fmtTok = function (n) {
+                        if (!n) { return '0'; }
+                        if (n >= 1e9) { return (n / 1e9).toFixed(2) + 'B'; }
+                        if (n >= 1e6) { return (n / 1e6).toFixed(1) + 'M'; }
+                        if (n >= 1e3) { return (n / 1e3).toFixed(1) + 'K'; }
+                        return String(n);
+                    };
+                    panelsHtml += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:0.75rem;margin-bottom:1rem">' +
+                        '<div class="stat-card"><div class="label">Vendor Cost (' + esc(sub.range || '7d') + ')</div><div class="value">$' + (sub.total_cost_usd || 0).toFixed(2) + '</div><div class="sub">console-reported</div></div>' +
+                        '<div class="stat-card"><div class="label">Vendor Requests</div><div class="value">' + (sub.total_requests || 0).toLocaleString() + '</div><div class="sub">' + esc(sub.range || '7d') + '</div></div>' +
+                        '<div class="stat-card"><div class="label">Cache Reads</div><div class="value">' + fmtTok(sub.total_cache_read_tokens) + '</div><div class="sub">tokens</div></div>' +
+                        '</div>' +
+                        '<div style="font-size:0.625rem;color:hsl(var(--muted-foreground));margin-bottom:1rem">OpenCode exposes no plan limit to this account, so no percentage bars are drawn.</div>';
+                }
+
                 var barsHtml = '';
                 if (sub.rolling_pct != null) {
                     barsHtml += '<div class="usage-bar-item"><div class="bar-header"><span class="bar-label">Rolling (5h)</span><span class="bar-pct">' + sub.rolling_pct.toFixed(0) + '%</span></div><div class="bar-track"><div class="bar-fill ' + barColor(sub.rolling_pct) + '" style="width:' + sub.rolling_pct + '%"></div></div><div class="bar-sub"><span>' + fmtCountdown(sub.rolling_reset_sec) + '</span><span>' + fmtResetAt(sub.rolling_reset_sec) + '</span></div></div>';

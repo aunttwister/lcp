@@ -357,6 +357,45 @@ def fetch_account(token: str) -> dict:
     return {"user": user, "orgs": orgs if isinstance(orgs, list) else []}
 
 
+def stored_org_id() -> str:
+    """The org id saved alongside the session, or ``""`` when unknown.
+
+    Org-scoped console routes (billing, usage) require ``x-org-id``; the id is
+    captured once at login so the hourly refresh needs no extra round-trip.
+    """
+    state = load_tokens() or {}
+    org_id = state.get("org_id")
+    return str(org_id) if org_id else ""
+
+
+def remember_org_id(org_id: str) -> None:
+    """Persist the org id for org-scoped console calls."""
+    if not org_id:
+        return
+    state = load_tokens() or {}
+    if state.get("org_id") != str(org_id):
+        state["org_id"] = str(org_id)
+        save_tokens(state)
+
+
+def resolve_org_id(token: str = "") -> str:
+    """Stored org id, else ask the console ``/api/orgs`` and remember it."""
+    org_id = stored_org_id()
+    if org_id:
+        return org_id
+    token = token or current_access_token()
+    if not token:
+        return ""
+    try:
+        from .opencode_api import fetch_org_id
+        org_id = fetch_org_id(token)
+    except Exception:  # noqa: BLE001 - never fail a fetch over the org lookup
+        org_id = ""
+    if org_id:
+        remember_org_id(org_id)
+    return org_id
+
+
 def _request_with_token(url: str, token: str) -> dict:
     """GET *url* with a Bearer token (the console API's expected auth shape)."""
     request = Request(url, headers={
@@ -571,6 +610,8 @@ def _cli(argv: list[str]) -> int:
             account = fetch_account(state["access_token"])
             user = account.get("user") or {}
             orgs = account.get("orgs") or []
+            if orgs:
+                remember_org_id((orgs[0] or {}).get("id") or "")
             who = user.get("email") or user.get("id") or "?"
             org = f" · {orgs[0].get('name')}" if orgs else ""
             print(f"approved as {who}{org} ({len(orgs)} org(s))")
