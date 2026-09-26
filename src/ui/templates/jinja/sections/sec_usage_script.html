@@ -663,13 +663,16 @@ function buildPage(providers) {
 
                 // ── Plan status ──
                 // The Go plan reports an exhausted quota as status:"rate-limited"
-                // at percent 100.  A full bar alone does not say the plan is
-                // actively refusing calls, so say it.
+                // at percent 100.  Scope it to the route it applies to: the Go
+                // window is enforced on /zen/go/v1 only, while LCP's provider
+                // config points at /inference/openai/v1 (verified answering 200
+                // while the Go month read 100%), so the card must not read as
+                // "the gateway is being refused".
                 var ocLimited = ['rolling', 'weekly', 'monthly'].filter(function (w) {
                     return sub[w + '_status'] && sub[w + '_status'] !== 'ok';
                 });
                 if (ocLimited.length) {
-                    panelsHtml += '<div class="stat-card" style="border-left:3px solid #f97316;margin-bottom:1rem"><div class="label" style="color:#f97316">Rate limited</div><div class="value" style="font-size:0.85rem;font-weight:400">OpenCode Go is refusing calls on: ' + esc(ocLimited.join(', ')) + '</div></div>';
+                    panelsHtml += '<div class="stat-card" style="border-left:3px solid #f97316;margin-bottom:1rem"><div class="label" style="color:#f97316">Go plan quota exhausted</div><div class="value" style="font-size:0.85rem;font-weight:400">OpenCode Go is refusing calls on ' + esc(ocLimited.join(', ')) + ' — on the /zen/go/v1 route only. LCP calls /inference/openai/v1, which still answers, so this is not blocking gateway traffic.</div></div>';
                 }
 
                 var barsHtml = '';
