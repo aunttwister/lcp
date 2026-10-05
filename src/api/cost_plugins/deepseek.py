@@ -38,19 +38,19 @@ _FLASH_PRICING: dict[str, float] = {
     "peak_output": 1.20,
 }
 
-# DeepSeek-V4-Pro. NOTE (2026-10-05): these BASE rates are suspect — they match
-# MiMo V2.6 Pro's catalogue rates ($0.435 / $0.87) rather than DeepSeek's own
-# ($0.66 / $1.98, per https://api-docs.deepseek.com/quick_start/pricing). They
-# are left UNCHANGED here deliberately: re-pricing a model is a business input,
-# not part of adding peak-aware billing. Reported separately for a decision.
-# Peak = 2x each base rate, per DeepSeek's rule.
+# DeepSeek-V4-Pro-0813 (corrected 2026-10-05). Base rates are DeepSeek's own
+# OFF-PEAK rates per https://api-docs.deepseek.com/quick_start/pricing:
+# 1M input cache-hit $0.022, cache-miss $0.66, output $1.98. They previously held
+# MiMo V2.6 Pro's catalogue rates ($0.435 / $0.87) — a copy/paste error, fixed
+# with the operator's go-ahead. Peak = exactly 2x each base rate (DeepSeek's
+# rule: off-peak is half of peak).
 _V4_PRO_PRICING: dict[str, float] = {
-    "cache_hit": 0.003625,
-    "cache_miss": 0.435,
-    "output": 0.87,
-    "peak_cache_hit": 0.00725,
-    "peak_cache_miss": 0.87,
-    "peak_output": 1.74,
+    "cache_hit": 0.022,
+    "cache_miss": 0.66,
+    "output": 1.98,
+    "peak_cache_hit": 0.044,
+    "peak_cache_miss": 1.32,
+    "peak_output": 3.96,
 }
 
 _PRICING: dict[str, dict[str, float]] = {

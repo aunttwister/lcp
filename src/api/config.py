@@ -126,8 +126,8 @@ SEED_CONFIG: dict[str, Any] = {
     },
     "pricing": [
         {"provider": "deepseek", "model": "deepseek-v4-pro",
-         "cache_hit": 0.003625, "cache_miss": 0.435, "output": 0.87,
-         "peak_cache_hit": 0.00725, "peak_cache_miss": 0.87, "peak_output": 1.74},
+         "cache_hit": 0.022, "cache_miss": 0.66, "output": 1.98,
+         "peak_cache_hit": 0.044, "peak_cache_miss": 1.32, "peak_output": 3.96},
         # DeepSeek-V4.1-Flash. `deepseek-flash` is the current API name;
         # `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` are legacy names
         # DeepSeek still accepts and serves with the same model at the same
@@ -145,8 +145,8 @@ SEED_CONFIG: dict[str, Any] = {
          "cache_hit": 0.003, "cache_miss": 0.15, "output": 0.6,
          "peak_cache_hit": 0.006, "peak_cache_miss": 0.30, "peak_output": 1.20},
         {"provider": "opencode", "model": "deepseek-v4-pro",
-         "cache_hit": 0.003625, "cache_miss": 0.435, "output": 0.87,
-         "peak_cache_hit": 0.00725, "peak_cache_miss": 0.87, "peak_output": 1.74},
+         "cache_hit": 0.022, "cache_miss": 0.66, "output": 1.98,
+         "peak_cache_hit": 0.044, "peak_cache_miss": 1.32, "peak_output": 3.96},
         {"provider": "opencode", "model": "deepseek-flash",
          "cache_hit": 0.003, "cache_miss": 0.15, "output": 0.6,
          "peak_cache_hit": 0.006, "peak_cache_miss": 0.30, "peak_output": 1.20},
@@ -158,8 +158,8 @@ SEED_CONFIG: dict[str, Any] = {
          "peak_cache_hit": 0.006, "peak_cache_miss": 0.30, "peak_output": 1.20},
         # Command Code bills the catalogue ID (with the vendor prefix).
         {"provider": "commandcode", "model": "deepseek/deepseek-v4-pro",
-         "cache_hit": 0.003625, "cache_miss": 0.435, "output": 0.87,
-         "peak_cache_hit": 0.00725, "peak_cache_miss": 0.87, "peak_output": 1.74},
+         "cache_hit": 0.022, "cache_miss": 0.66, "output": 1.98,
+         "peak_cache_hit": 0.044, "peak_cache_miss": 1.32, "peak_output": 3.96},
         {"provider": "commandcode", "model": "deepseek/deepseek-v4.1-flash",
          "cache_hit": 0.003, "cache_miss": 0.15, "output": 0.6,
          "peak_cache_hit": 0.006, "peak_cache_miss": 0.30, "peak_output": 1.20},

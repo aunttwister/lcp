@@ -54,16 +54,17 @@ _FLASH_PRICING: dict[str, float] = {
 
 _COMMANDCODE_PRICING: dict[str, dict[str, float]] = {
     # DeepSeek (primary models — 75% off deal)
-    # DeepSeek-V4-Pro. Base rates left AS-IS on purpose — see the note in
-    # deepseek.py: they match MiMo V2.6 Pro's catalogue table, not DeepSeek's,
-    # and re-pricing is a business input reported separately. Peak = 2x.
+    # DeepSeek-V4-Pro-0813. Corrected 2026-10-05 to DeepSeek's own OFF-PEAK
+    # rates per https://api-docs.deepseek.com/quick_start/pricing — this entry
+    # previously held MiMo V2.6 Pro's catalogue table by mistake. Peak = exactly
+    # 2x each base rate (same rule as deepseek.py).
     "deepseek-v4-pro": {
-        "cache_hit": 0.003625,
-        "cache_miss": 0.435,
-        "output": 0.87,
-        "peak_cache_hit": 0.00725,
-        "peak_cache_miss": 0.87,
-        "peak_output": 1.74,
+        "cache_hit": 0.022,
+        "cache_miss": 0.66,
+        "output": 1.98,
+        "peak_cache_hit": 0.044,
+        "peak_cache_miss": 1.32,
+        "peak_output": 3.96,
     },
     # Every spelling of DeepSeek-V4.1-Flash shares ONE entry — the Provider API
     # catalog ID `deepseek/deepseek-v4.1-flash`, the bare benchmark name
