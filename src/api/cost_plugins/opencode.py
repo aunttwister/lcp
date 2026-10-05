@@ -19,7 +19,7 @@ from typing import Any, Optional
 from sqlalchemy import func
 
 from ..logging_config import get_logger
-from .base import CostPlugin, get_registry
+from .base import CostPlugin, get_registry, select_rates
 
 logger = get_logger("lcp.cost.opencode")
 
@@ -36,13 +36,22 @@ _FLASH_PRICING: dict[str, float] = {
     "cache_hit": 0.003,
     "cache_miss": 0.15,
     "output": 0.6,
+    "peak_cache_hit": 0.006,
+    "peak_cache_miss": 0.30,
+    "peak_output": 1.20,
 }
 
 _OPENCODE_PRICING: dict[str, dict[str, float]] = {
+    # DeepSeek-V4-Pro. Base rates left AS-IS on purpose — see the note in
+    # deepseek.py: they match MiMo V2.6 Pro's catalogue table, not DeepSeek's,
+    # and re-pricing is a business input reported separately. Peak = 2x.
     "deepseek-v4-pro": {
         "cache_hit": 0.003625,
         "cache_miss": 0.435,
         "output": 0.87,
+        "peak_cache_hit": 0.00725,
+        "peak_cache_miss": 0.87,
+        "peak_output": 1.74,
     },
     "deepseek-flash": dict(_FLASH_PRICING),
     "deepseek-v4-flash": dict(_FLASH_PRICING),
@@ -215,7 +224,7 @@ class OpenCodeCostPlugin(CostPlugin):
         if model in _FREE_MODELS:
             return 0.0
 
-        pricing = _OPENCODE_PRICING.get(model)
+        pricing = select_rates(_OPENCODE_PRICING.get(model), usage.get("__ts"))
         if pricing is None:
             return None
 
