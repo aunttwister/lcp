@@ -108,6 +108,29 @@ class TestPage:
         assert "History unavailable" in html
         assert "In flight" in html
 
+    def test_pager_is_windowed_not_exhaustive(self, cfg):
+        """The estate has hundreds of pages; listing every one is unreadable.
+
+        Renders 8 pages at per=5 and asserts the pager offers a window, not all 8
+        — the defect this guards against is the exhaustive `range(1, pages+1)`.
+        """
+        import re
+        from src.ui.pages import render_conversations_page
+        for i in range(41):
+            conv_store.capture_request(
+                "sess-%02d" % i, {"messages": [{"role": "user", "content": "q%d" % i}]},
+                reply="a", profile="l2", model="m1")
+            conv_store.upsert_conversation("sess-%02d" % i, name="n%d" % i)
+        html = render_conversations_page(cfg, None, {"per": "5", "page": "1"})
+        pager = html.split('class="pager"')[1].split("</div>")[0]
+        # The page-number window sits before the "per page" size choices, which are
+        # also numeric links — count only the window.
+        window = pager.split("per page")[0]
+        numbered = re.findall(r">(\d+)</a>", window)
+        assert 1 < len(numbered) <= 5, numbered
+        assert numbered == ["1", "2", "3", "4", "5"], numbered
+        assert "Next" in pager
+
 
 class TestMessagesView:
     def test_reports_a_clipped_transcript_as_truncated(self, store):
