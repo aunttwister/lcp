@@ -473,10 +473,21 @@ class LCPHandler(
 
             streaming = body.get("stream", False)
 
-            # OpenCode requires a stable per-conversation header (`x-opencode-session`).
-            # Forward the client's header when present (Hermes ≥0.21 sends one); else
-            # fall back to a stable per-profile ID so outbound requests always carry it.
-            session_id = self.headers.get("x-opencode-session") or f"lcp-{profile}"
+            # The client's per-conversation id, when it sends one. Hermes attaches
+            # its agent session id to every LCP request (see the `lcp` user
+            # provider plugin), so agent traffic is identified; other clients may
+            # still omit it.
+            #
+            # This MUST be bound before the accounting calls below: they read
+            # `conversation_id`, and the ternary they used only evaluated that name
+            # when the header was present — so the undefined name stayed latent
+            # while no client sent the header, then raised NameError for every
+            # identified request and silently dropped its cost row.
+            conversation_id = self.headers.get("x-opencode-session")
+
+            # Outbound requests must always carry a stable per-conversation header
+            # (`x-opencode-session`); fall back to a per-profile id.
+            session_id = conversation_id or f"lcp-{profile}"
 
             # Try provider chain
             _warning_sink: list[str] = []
@@ -551,7 +562,7 @@ class LCPHandler(
                             "latency_ms": latency_ms,
                         }
                     record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools,
-                                conversation_id=conversation_id if self.headers.get("x-opencode-session") else None)
+                                conversation_id=conversation_id)
 
                     # Increment budget spend and fire alerts
                     self._track_budget_spend(
@@ -610,7 +621,7 @@ class LCPHandler(
 
                 # Record cost
                 record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools,
-                                conversation_id=conversation_id if self.headers.get("x-opencode-session") else None)
+                                conversation_id=conversation_id)
 
                 # Budget spend tracking — unified: increments profile + key budgets
                 # and syncs ApiKey.total_spend with key-scoped budgets.
