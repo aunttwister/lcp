@@ -56,8 +56,12 @@ SECTION_TAB = {
     "sec_pmodels": "models",
 }
 
-NAV = ["/profiles", "/models", "/activity", "/usage", "/alerts", "/setup",
-       "/work/tasks", "/work/fleet"]
+# `/in-progress` is the 2026-10-06 addition: the only view that can show a
+# request the `requests` table has not recorded yet, because that table is
+# written on completion. It sits with the operational views, before the
+# "what happened" log realm.
+NAV = ["/profiles", "/models", "/in-progress", "/activity", "/usage", "/alerts",
+       "/setup", "/work/tasks", "/work/fleet"]
 
 
 @pytest.fixture
@@ -114,7 +118,7 @@ def _nav(html):
 # ── the nav ──────────────────────────────────────────────────────────────────
 
 def test_nav_is_flat_and_ordered_with_profiles_first(cfg):
-    """Eight entries, no group labels: the label only made the reader classify."""
+    """Nine entries, no group labels: the label only made the reader classify."""
     from src.ui.render import render_page
     html = render_page("pages/models.html", cfg)
     nav = _nav(html)

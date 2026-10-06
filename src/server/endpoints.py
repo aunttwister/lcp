@@ -2642,6 +2642,21 @@ class DashboardEndpoints:
         self._send_html(render_activity_page(self.config, self.engine,
                                              self._qs(), self._host_headers()))
 
+    def _serve_in_progress_page(self):
+        """Server-rendered In-progress page — what LCP is working on right now.
+
+        Reads the in-process registry (``api/inflight.py``), not the `requests`
+        table: that table gains its row only in ``record_cost()``, after the
+        reply has left, so it cannot show a call that is still running.
+        """
+        from ..ui.pages import render_in_progress_page
+        self._send_html(render_in_progress_page(self.config, self.engine, self._qs()))
+
+    def _serve_in_progress_json(self):
+        """``/api/in-progress`` — the payload the page's own refresh loop polls."""
+        from ..ui.pages import in_progress_payload
+        self._send_json(in_progress_payload(self.engine))
+
     def _serve_dashboard(self, profile_filter: str | None = None):
         """Legacy / and /dashboard — now the Overview tab of Activity (M2)."""
         target = "/activity"
