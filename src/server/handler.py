@@ -24,6 +24,7 @@ from ..api.prompt_cache import get_prompt_cache
 from ..api.token_verifier import get_token_verifier
 from ..api.key_manager import get_key_manager
 from ..api.alert_manager import get_alert_manager
+from ..api import inflight as in_flight
 from ..api.runtime import resolve_service
 from ..api.models import Budget, ApiKey, get_session
 from sqlalchemy import or_
@@ -392,6 +393,11 @@ class LCPHandler(
             }, 429)
             return
 
+        # Set before the try: `finally` runs even on a path that never reached
+        # the registry, and referencing an unassigned name there would raise
+        # NameError, masking the real error.
+        _inflight_token = None
+
         try:
             # Validate body has messages (after auth so we return 401 first if unauthenticated)
             if not isinstance(body.get("messages"), list) or len(body.get("messages", [])) == 0:
@@ -450,6 +456,20 @@ class LCPHandler(
             }
 
             t0 = time.time()
+
+            # Register the request as in-flight. The `requests` table gains
+            # its row only in record_cost(), after the reply has left, so a
+            # call that is still running is visible nowhere else. Cleared in
+            # the `finally` below, which covers the error paths too.
+            _inflight_token = in_flight.begin(
+                profile,
+                primary_step["model"],
+                primary_step["provider"],
+                prompt_tokens=estimation.get("input_tokens", 0),
+                stream=bool(body.get("stream", False)),
+                conversation_id=self.headers.get("x-opencode-session"),
+                tools=len(body.get("tools") or []),
+            )
 
             streaming = body.get("stream", False)
 
@@ -661,6 +681,11 @@ class LCPHandler(
         except Exception as e:
             logger.error("unhandled_error", error=str(e), traceback=traceback.format_exc()[-500:])
             self._send_error(e)
+        finally:
+            # Every exit path -- success, typed provider error, unhandled
+            # exception -- must deregister, or the In-progress page shows a
+            # request that has already finished or failed.
+            in_flight.end(_inflight_token)
 
     def do_PUT(self):
         logger.debug("request_start", method="PUT", path=self.path,
@@ -846,6 +871,10 @@ def _build_routes() -> RouteTable:
     # working. Work is a module with its own four entries.
     t.get("page.activity", exact("/activity"),
           lambda h, p: h._serve_activity_page())
+    # What the gateway is working on NOW. Exact match, so it cannot shadow the
+    # per-profile `/{profile}/dashboard` suffix rule further down.
+    t.get("page.in_progress", exact("/in-progress"),
+          lambda h, p: h._serve_in_progress_page())
     t.get("page.dashboard", exact("/", "/dashboard"),
           lambda h, p: h._serve_dashboard())
     t.get("page.keys", exact("/keys", "/keys/dashboard"),
@@ -887,6 +916,10 @@ def _build_routes() -> RouteTable:
             h._serve_dashboard()
 
     t.get("page.dashboard.profile", suffix("/dashboard"), _dashboard)
+
+    # ── in-progress (JSON for the page's own refresh loop) ──
+    t.get("api.in_progress", exact("/api/in-progress"),
+          lambda h, p: h._serve_in_progress_json())
 
     # ── health / models ──
     t.get("health", exact("/health"), lambda h, p: h._serve_health())

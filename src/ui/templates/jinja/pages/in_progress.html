@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}In progress — LCP{% endblock %}
+
+{#
+  The one view the `requests` table cannot produce. `record_cost()` writes that
+  row — and its latency — only after the reply has left, so a call that is still
+  running appears nowhere in the DB. This page reads the in-process registry
+  (src/api/inflight.py) instead.
+
+  `task` is the joined conversation name: the estate's closest thing to a
+  human-readable "what is this call for". When the client sent no
+  `x-opencode-session` header there is no conversation to join, and the page
+  says "untagged" rather than inventing a label.
+
+  ⚠️ `payload["items"]`, never `payload.items`: on a dict Jinja resolves the
+  dotted form to the built-in `.items()` METHOD, and the page then dies with
+  "builtin_function_or_method object has no element 0". Bracket access is the
+  fix, not a style preference — do not "tidy" it back.
+#}
+
+{% block content %}
+<h1>In progress</h1>
+<p class="subtitle">
+  Requests LCP has started and is still working on, right now. The Requests log
+  gains a row only when a call finishes, so this is the only place a running call
+  appears. <span class="muted">Source: the gateway's in-process registry — a
+  restart clears it.</span>
+</p>
+
+<div class="cards">
+  <div class="card">
+    <div class="muted">In flight</div>
+    <div class="mono" id="ipCount">{{ payload.count }}</div>
+  </div>
+  <div class="card">
+    <div class="muted">Profiles</div>
+    <div class="mono" id="ipProfiles">{{ payload.profiles | join(', ') if payload.profiles else '—' }}</div>
+  </div>
+  <div class="card">
+    <div class="muted">Providers</div>
+    <div class="mono" id="ipProviders">{{ payload.providers | join(', ') if payload.providers else '—' }}</div>
+  </div>
+  <div class="card">
+    <div class="muted">Longest running</div>
+    <div class="mono" id="ipOldest">{% if payload["items"] %}{{ payload["items"][0].elapsed_s }}s{% else %}—{% endif %}</div>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <table class="capability-table">
+    <thead>
+      <tr>
+        <th>Elapsed</th>
+        <th>Profile</th>
+        <th>Provider</th>
+        <th>Model</th>
+        <th>Task</th>
+        <th>Prompt tok</th>
+        <th>Tools</th>
+        <th>Mode</th>
+      </tr>
+    </thead>
+    <tbody id="ipRows">
+      {% for it in payload["items"] %}
+      <tr>
+        <td class="mono">{{ it.elapsed_s }}s</td>
+        <td>{{ it.profile }}</td>
+        <td>{{ it.provider }}</td>
+        <td class="mono">{{ it.model }}</td>
+        <td>{{ it.task or '—' }}</td>
+        <td class="mono">{{ it.prompt_tokens }}</td>
+        <td class="mono">{{ it.tools }}</td>
+        <td>{{ 'stream' if it.stream else 'buffered' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="empty" id="ipEmpty"{% if payload["items"] %} style="display:none"{% endif %}>
+    Nothing in flight. A request appears here the moment the gateway starts it,
+    and leaves when the reply is complete.
+  </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var IP_POLL_MS = 2000;
+var ipPayload = {{ payload_json | safe }};
+
+function ipFmt(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  return String(v);
+}
+
+function ipRender(p) {
+  document.getElementById('ipCount').textContent = p.count;
+  document.getElementById('ipProfiles').textContent = p.profiles.length ? p.profiles.join(', ') : '—';
+  document.getElementById('ipProviders').textContent = p.providers.length ? p.providers.join(', ') : '—';
+  document.getElementById('ipOldest').textContent = p.items.length ? p.items[0].elapsed_s + 's' : '—';
+
+  var tbody = document.getElementById('ipRows');
+  tbody.textContent = '';
+  p.items.forEach(function (it) {
+    var tr = document.createElement('tr');
+    // textContent, not innerHTML: a conversation name is model-generated text
+    // and must never be parsed as markup.
+    [
+      {v: it.elapsed_s + 's', mono: true},
+      {v: ipFmt(it.profile)},
+      {v: ipFmt(it.provider)},
+      {v: ipFmt(it.model), mono: true},
+      {v: it.task || '—'},
+      {v: it.prompt_tokens, mono: true},
+      {v: it.tools, mono: true},
+      {v: it.stream ? 'stream' : 'buffered'}
+    ].forEach(function (cell) {
+      var td = document.createElement('td');
+      if (cell.mono) td.className = 'mono';
+      td.textContent = String(cell.v);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  document.getElementById('ipEmpty').style.display = p.items.length ? 'none' : '';
+}
+
+// Self-scheduling: the next poll is booked from the END of the previous one, so
+// a slow response cannot stack requests, with a floor so a stopped gateway
+// cannot turn this into a hot loop.
+async function ipPoll() {
+  try {
+    var r = await fetch('/api/in-progress', {headers: {'Accept': 'application/json'}});
+    if (r.ok) ipRender(await r.json());
+  } catch (e) { /* gateway down or restarting: keep the last view, try again */ }
+  setTimeout(ipPoll, IP_POLL_MS);
+}
+
+ipRender(ipPayload);
+ipPoll();
+</script>
+{% endblock %}

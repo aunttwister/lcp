@@ -913,3 +913,69 @@ def _profile_tasks_view(name, params) -> dict:
     view["tasks_root"] = root or ""
     return view
 
+
+# ── In progress — the one question the requests table cannot answer ───────────
+# `record_cost()` writes the `requests` row (and its latency) only after the
+# reply has left, so a call that is still running has no row anywhere. The live
+# set therefore has to come from the in-process registry in `api/inflight.py`.
+
+def _inflight_conversation_names(ids) -> dict:
+    """``conversation_id -> name`` — the conversation's own task label.
+
+    Best-effort: an unreadable conversations table must not blank the page, so
+    a failure yields no names rather than an error.
+    """
+    ids = [i for i in dict.fromkeys(ids) if i]
+    if not ids:
+        return {}
+    try:
+        from ..api.work_conversations import _connect
+        con = _connect()
+        try:
+            marks = ",".join("?" * len(ids))
+            rows = con.execute(
+                "SELECT conversation_id, name FROM conversations "
+                "WHERE conversation_id IN (%s)" % marks, ids).fetchall()
+            return {r["conversation_id"]: r["name"] for r in rows}
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001 — a label is not worth failing the view for
+        return {}
+
+
+def in_progress_payload(engine=None) -> dict:
+    """What LCP is working on right now, as JSON-serialisable data.
+
+    ``task`` is the joined conversation name — the closest thing the estate has
+    to a human-readable answer for *what* a call is for. It is ``None`` when the
+    client sent no ``x-opencode-session`` header, and the page says "untagged"
+    rather than inventing a label.
+    """
+    from ..api import inflight as in_flight
+    try:
+        in_flight.sweep()
+    except Exception:  # noqa: BLE001
+        pass
+    items = in_flight.snapshot()
+    names = _inflight_conversation_names([i.get("conversation_id") for i in items])
+    for it in items:
+        it["task"] = names.get(it.get("conversation_id") or "")
+    return {
+        "count": len(items),
+        "profiles": sorted({i["profile"] for i in items}),
+        "providers": sorted({i["provider"] for i in items}),
+        "items": items,
+    }
+
+
+def render_in_progress_page(config, engine=None, params=None) -> str:
+    """The In-progress page — started-but-unfinished requests, live."""
+    import json as _json
+    from .render import render_page
+    payload = in_progress_payload(engine)
+    return render_page("pages/in_progress.html", config, engine,
+                       active_page="in_progress",
+                       tab="in_progress",
+                       params=params or {},
+                       payload=payload,
+                       payload_json=_json.dumps(payload))
