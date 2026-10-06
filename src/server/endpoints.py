@@ -2637,20 +2637,55 @@ class DashboardEndpoints:
         return {"Host": host, "X-Forwarded-Proto": scheme}
 
     def _serve_activity_page(self):
-        """Server-rendered Activity page (?tab=overview|logs[&view=...])."""
+        """Server-rendered Activity page (?tab=overview|logs[&view=...]).
+
+        ``?tab=logs&view=conversations`` is the retired realm — it redirects to the
+        Conversations page rather than rendering an empty table, so an old link
+        still reaches the data it was asking for.
+        """
+        qs = self._qs()
+        if str(qs.get("view") or "") == "conversations":
+            self._redirect("/conversations")
+            return
         from ..ui.pages import render_activity_page
         self._send_html(render_activity_page(self.config, self.engine,
-                                             self._qs(), self._host_headers()))
+                                             qs, self._host_headers()))
+
+    def _serve_conversations_page(self):
+        """Server-rendered Conversations page — live in-flight + history."""
+        from ..ui.pages import render_conversations_page
+        self._send_html(render_conversations_page(self.config, self.engine, self._qs()))
+
+    def _serve_conversations_json(self):
+        """``/api/conversations`` — a page of the history table, as JSON."""
+        from ..ui.pages import conversations_payload
+        self._send_json(conversations_payload(self.config, self.engine, self._qs()))
+
+    def _serve_conversation_messages_json(self):
+        """``/api/conversations/messages?cid=…`` — one conversation's transcript."""
+        from ..api import conv_store
+        cid = self._qs().get("cid")
+        if not cid:
+            self._send_json({"error": "cid required"}, 400)
+            return
+        self._send_json(conv_store.messages_view(str(cid)))
+
+    def _serve_conversation_audit_json(self):
+        """``/api/conversations/audit?cid=…`` — what was done in a conversation."""
+        from ..api import conv_store
+        cid = self._qs().get("cid")
+        if not cid:
+            self._send_json({"error": "cid required"}, 400)
+            return
+        self._send_json(conv_store.conversation_audit(str(cid)))
 
     def _serve_in_progress_page(self):
-        """Server-rendered In-progress page — what LCP is working on right now.
+        """Legacy /in-progress — the live table now heads /conversations.
 
-        Reads the in-process registry (``api/inflight.py``), not the `requests`
-        table: that table gains its row only in ``record_cost()``, after the
-        reply has left, so it cannot show a call that is still running.
+        Superseded rather than deleted: a bookmark or a link in an older page still
+        lands on the view that answers the same question.
         """
-        from ..ui.pages import render_in_progress_page
-        self._send_html(render_in_progress_page(self.config, self.engine, self._qs()))
+        self._redirect("/conversations")
 
     def _serve_in_progress_json(self):
         """``/api/in-progress`` — the payload the page's own refresh loop polls."""

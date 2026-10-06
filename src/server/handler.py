@@ -25,6 +25,7 @@ from ..api.token_verifier import get_token_verifier
 from ..api.key_manager import get_key_manager
 from ..api.alert_manager import get_alert_manager
 from ..api import inflight as in_flight
+from ..api import conv_store
 from ..api.runtime import resolve_service
 from ..api.models import Budget, ApiKey, get_session
 from sqlalchemy import or_
@@ -38,7 +39,7 @@ from ..api.exceptions import (
     ProviderError,
     ToolBlockedError,
 )
-from .sse_helpers import extract_last_sse_chunk
+from .sse_helpers import extract_last_sse_chunk, extract_sse_text, extract_message_text
 from .endpoints import (
     HealthEndpoints,
     ProviderEndpoints,
@@ -574,6 +575,17 @@ class LCPHandler(
                                  provider=provider, model=model, stream=True,
                                  error=str(e), traceback=traceback.format_exc()[-500:])
 
+                # Conversation capture. The assistant's words are not in the
+                # request body — they only exist in the stream this handler just
+                # wrote out — so the reply text is recovered from the SSE buffer.
+                # It stays bookkeeping: a failure stores nothing rather than
+                # corrupting a response the client already received.
+                conv_store.capture_request(
+                    conversation_id, body,
+                    reply=extract_sse_text(full_sse),
+                    profile=profile, model=model,
+                )
+
                 total_wall_ms = int((time.time() - t0) * 1000)
                 logger.info(
                     "request_complete",
@@ -644,6 +656,14 @@ class LCPHandler(
                 self.wfile.write(body_bytes)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 logger.debug("client_disconnected", path=self.path, stream=False)
+
+            # Conversation capture — see the streaming branch. Bookkeeping, so it
+            # is independent of the response that has already been sent.
+            conv_store.capture_request(
+                conversation_id, body,
+                reply=extract_message_text(response_body),
+                profile=profile, model=model,
+            )
 
             total_wall_ms = int((time.time() - t0) * 1000)
             logger.info(
@@ -882,8 +902,11 @@ def _build_routes() -> RouteTable:
     # working. Work is a module with its own four entries.
     t.get("page.activity", exact("/activity"),
           lambda h, p: h._serve_activity_page())
-    # What the gateway is working on NOW. Exact match, so it cannot shadow the
-    # per-profile `/{profile}/dashboard` suffix rule further down.
+    # What the gateway is working on NOW, and everything it has done. Exact match,
+    # so it cannot shadow the per-profile `/{profile}/dashboard` suffix rule below.
+    t.get("page.conversations", exact("/conversations"),
+          lambda h, p: h._serve_conversations_page())
+    # Legacy URL: the live table now heads /conversations, so this redirects there.
     t.get("page.in_progress", exact("/in-progress"),
           lambda h, p: h._serve_in_progress_page())
     t.get("page.dashboard", exact("/", "/dashboard"),
@@ -928,9 +951,17 @@ def _build_routes() -> RouteTable:
 
     t.get("page.dashboard.profile", suffix("/dashboard"), _dashboard)
 
-    # ── in-progress (JSON for the page's own refresh loop) ──
+    # ── in-progress (JSON for the live section's own refresh loop) ──
     t.get("api.in_progress", exact("/api/in-progress"),
           lambda h, p: h._serve_in_progress_json())
+
+    # ── conversations (history table + per-conversation detail) ──
+    t.get("api.conversations", exact("/api/conversations"),
+          lambda h, p: h._serve_conversations_json())
+    t.get("api.conversation.messages", exact("/api/conversations/messages"),
+          lambda h, p: h._serve_conversation_messages_json())
+    t.get("api.conversation.audit", exact("/api/conversations/audit"),
+          lambda h, p: h._serve_conversation_audit_json())
 
     # ── health / models ──
     t.get("health", exact("/health"), lambda h, p: h._serve_health())

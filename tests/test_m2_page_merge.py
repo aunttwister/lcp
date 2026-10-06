@@ -60,7 +60,7 @@ SECTION_TAB = {
 # request the `requests` table has not recorded yet, because that table is
 # written on completion. It sits with the operational views, before the
 # "what happened" log realm.
-NAV = ["/profiles", "/models", "/in-progress", "/activity", "/usage", "/alerts",
+NAV = ["/profiles", "/models", "/conversations", "/activity", "/usage", "/alerts",
        "/setup", "/work/tasks", "/work/fleet"]
 
 

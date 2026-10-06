@@ -91,6 +91,15 @@ def ensure_schema() -> None:
     con = _connect()
     try:
         for table in ("requests", "routing_decisions"):
+            # Guard on existence: ``ALTER TABLE`` raises on a table that is not
+            # there, which aborted the rest of this function — including the
+            # CREATE below — on any database that had never been served. That made
+            # the conversations table impossible to create from a clean DB.
+            present = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,)).fetchone()
+            if not present:
+                continue
             cols = {r[1] for r in con.execute("PRAGMA table_info(%s)" % table)}
             if "conversation_id" not in cols:
                 con.execute("ALTER TABLE %s ADD COLUMN conversation_id TEXT" % table)

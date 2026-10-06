@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+{% block title %}Conversations — LCP{% endblock %}
+
+{#
+  Two stores, one page.
+
+  LIVE (top): the in-process registry (src/api/inflight.py). `record_cost()` writes
+  the `requests` row only after the reply has left, so a call that is still running
+  appears nowhere in the DB — this is the only view that can show it.
+
+  HISTORY (bottom): LCP's own conversation store (`conversations` + `conv_messages`).
+  LCP owns this outright: it was migrated off the Hermes session DB and is appended
+  to on every served request, so it does not depend on that schema at read time.
+
+  ⚠️ `payload["live"]["items"]`, never the dotted form: on a dict Jinja resolves
+  `.items` to the built-in METHOD and the page dies with "builtin_function_or_method
+  object has no element 0". Bracket access is the fix, not a style preference.
+
+  Tool output is collapsed on purpose (it is the bulk of a transcript and rarely what
+  anyone is looking for), but the audit panel above it answers "what was done here"
+  without expanding anything.
+#}
+
+{% block content %}
+<h1>Conversations</h1>
+<p class="subtitle">
+  What LCP is working on now, and everything it has worked on before.
+  <span class="muted">Live calls come from the gateway's in-process registry; history
+  comes from LCP's own store, which is migrated from the agent session DB and
+  appended on every request.</span>
+</p>
+
+<h2>In flight</h2>
+<div class="cards">
+  <div class="card">
+    <div class="muted">In flight</div>
+    <div class="mono" id="ipCount">{{ payload["live"].count }}</div>
+  </div>
+  <div class="card">
+    <div class="muted">Profiles</div>
+    <div class="mono" id="ipProfiles">{{ payload["live"].profiles | join(', ') if payload["live"].profiles else '—' }}</div>
+  </div>
+  <div class="card">
+    <div class="muted">Providers</div>
+    <div class="mono" id="ipProviders">{{ payload["live"].providers | join(', ') if payload["live"].providers else '—' }}</div>
+  </div>
+  <div class="card">
+    <div class="muted">Longest running</div>
+    <div class="mono" id="ipOldest">{% if payload["live"]["items"] %}{{ payload["live"]["items"][0].elapsed_s }}s{% else %}—{% endif %}</div>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <table class="capability-table">
+    <thead>
+      <tr>
+        <th>Elapsed</th>
+        <th>Profile</th>
+        <th>Provider</th>
+        <th>Model</th>
+        <th>Conversation</th>
+        <th>Prompt tok</th>
+        <th>Tools</th>
+        <th>Mode</th>
+      </tr>
+    </thead>
+    <tbody id="ipRows">
+      {% for it in payload["live"]["items"] %}
+      <tr>
+        <td class="mono">{{ it.elapsed_s }}s</td>
+        <td>{{ it.profile }}</td>
+        <td>{{ it.provider }}</td>
+        <td class="mono">{{ it.model }}</td>
+        <td>{{ it.task or 'untagged' }}</td>
+        <td class="mono">{{ it.prompt_tokens }}</td>
+        <td class="mono">{{ it.tools }}</td>
+        <td>{{ 'stream' if it.stream else 'buffered' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="empty" id="ipEmpty"{% if payload["live"]["items"] %} style="display:none"{% endif %}>
+    Nothing in flight. A request appears here the moment the gateway starts it,
+    and leaves when the reply is complete.
+  </p>
+</div>
+
+<h2>History</h2>
+
+{% set h = payload["history"] %}
+{% set f = h.filter %}
+
+<form class="task-toolbar-row" method="get" action="/conversations">
+  <label for="convProfile">Profile</label>
+  <select id="convProfile" name="profile">
+    <option value="">All</option>
+    {% for p in f.profiles %}
+      <option value="{{ p }}"{% if f.profile == p %} selected{% endif %}>{{ p }}</option>
+    {% endfor %}
+  </select>
+  <label for="convQ">Search</label>
+  <input id="convQ" type="text" name="q" value="{{ f.q }}" placeholder="name or id">
+  <input type="hidden" name="per" value="{{ f.per }}">
+  <button type="submit" class="btn-sm">Filter</button>
+  {% if f.profile or f.q %}
+    <a class="btn-sm" href="/conversations">Clear</a>
+  {% endif %}
+</form>
+
+{% if not h.available %}
+  <div class="empty"><strong>History unavailable</strong><br><span class="muted">{{ h.error }}</span></div>
+{% else %}
+<div class="table-wrap">
+  <table class="capability-table" id="convTable">
+    <thead>
+      <tr>
+        <th>Conversation</th>
+        <th>Profile</th>
+        <th>Model</th>
+        <th>Source</th>
+        <th>Messages</th>
+        <th>Tool calls</th>
+        <th>Last activity</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in h.conversations %}
+      <tr class="conv-row" data-cid="{{ c.id }}">
+        <td>{{ c.name or c.id }}</td>
+        <td>{{ c.profile or '—' }}</td>
+        <td class="mono">{{ c.model or '—' }}</td>
+        <td>{{ c.source or '—' }}</td>
+        <td class="mono">{{ c.messages }}{% if c.active_messages and c.active_messages != c.messages %}
+          <span class="muted">({{ c.active_messages }} live)</span>{% endif %}</td>
+        <td class="mono">{{ c.tool_calls }}</td>
+        <td class="mono">{{ c.last_at or '—' }}</td>
+        <td><button type="button" class="btn-sm conv-toggle" data-cid="{{ c.id }}">View</button></td>
+      </tr>
+      <tr class="conv-detail" id="detail-{{ c.id }}" style="display:none">
+        <td colspan="8">
+          <div class="conv-audit" id="audit-{{ c.id }}"><span class="muted">Loading…</span></div>
+          <div class="conv-messages" id="msgs-{{ c.id }}"></div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if not h.conversations %}
+    <p class="empty">No conversations match this filter.</p>
+  {% endif %}
+
+  {% if f.pages > 1 %}
+  <div class="pager">
+    {% if f.page > 1 %}
+      <a class="btn-sm" href="/conversations?profile={{ f.profile }}&amp;q={{ f.q }}&amp;per={{ f.per }}&amp;page={{ f.page - 1 }}">Prev</a>
+    {% endif %}
+    {% for n in range(1, f.pages + 1) %}
+      <a class="btn-sm{% if n == f.page %} active{% endif %}" href="/conversations?profile={{ f.profile }}&amp;q={{ f.q }}&amp;per={{ f.per }}&amp;page={{ n }}">{{ n }}</a>
+    {% endfor %}
+    {% if f.page < f.pages %}
+      <a class="btn-sm" href="/conversations?profile={{ f.profile }}&amp;q={{ f.q }}&amp;per={{ f.per }}&amp;page={{ f.page + 1 }}">Next</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <p class="muted work-rule">Showing {{ h.conversations | length }} of {{ h.total }} conversations.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Live refresh ─────────────────────────────────────────────────────────────
+var IP_POLL_MS = 2000;
+
+function ipFmt(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  return String(v);
+}
+
+function ipRender(p) {
+  document.getElementById('ipCount').textContent = p.count;
+  document.getElementById('ipProfiles').textContent = p.profiles.length ? p.profiles.join(', ') : '—';
+  document.getElementById('ipProviders').textContent = p.providers.length ? p.providers.join(', ') : '—';
+  document.getElementById('ipOldest').textContent = p.items.length ? p.items[0].elapsed_s + 's' : '—';
+
+  var tbody = document.getElementById('ipRows');
+  tbody.textContent = '';
+  p.items.forEach(function (it) {
+    var tr = document.createElement('tr');
+    // textContent, not innerHTML: a conversation name is model-generated text and
+    // must never be parsed as markup.
+    [
+      {v: it.elapsed_s + 's', mono: true},
+      {v: ipFmt(it.profile)},
+      {v: ipFmt(it.provider)},
+      {v: ipFmt(it.model), mono: true},
+      {v: it.task || 'untagged'},
+      {v: it.prompt_tokens, mono: true},
+      {v: it.tools, mono: true},
+      {v: it.stream ? 'stream' : 'buffered'}
+    ].forEach(function (cell) {
+      var td = document.createElement('td');
+      if (cell.mono) td.className = 'mono';
+      td.textContent = String(cell.v);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  document.getElementById('ipEmpty').style.display = p.items.length ? 'none' : '';
+}
+
+// Self-scheduling: the next poll is booked from the END of the previous one, so a
+// slow response cannot stack requests. A stopped gateway cannot hot-loop this.
+async function ipPoll() {
+  try {
+    var r = await fetch('/api/in-progress', {headers: {'Accept': 'application/json'}});
+    if (r.ok) ipRender(await r.json());
+  } catch (e) { /* gateway down or restarting: keep the last view, try again */ }
+  setTimeout(ipPoll, IP_POLL_MS);
+}
+
+ipPoll();
+
+// ── Row expansion ────────────────────────────────────────────────────────────
+// Fetched on demand: a transcript can be megabytes, and a page of 20 would carry
+// all of it for rows nobody opened.
+var convLoaded = {};
+
+function el(tag, cls, text) {
+  var n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined && text !== null) n.textContent = String(text);
+  return n;
+}
+
+function renderAudit(box, a) {
+  box.textContent = '';
+  if (!a.available) {
+    box.appendChild(el('span', 'muted', 'No audit record for this conversation.'));
+    return;
+  }
+  var grid = el('div', 'conv-audit-grid');
+  [
+    ['Profile', ipFmt(a.profile)],
+    ['Model', ipFmt(a.model)],
+    ['Source', ipFmt(a.source)],
+    ['Messages', ipFmt(a.messages)],
+    ['In live window', ipFmt(a.active_messages)],
+    ['Tool calls', ipFmt(a.tool_calls)],
+    ['User turns', ipFmt(a.user_turns)],
+    ['Assistant turns', ipFmt(a.assistant_turns)],
+    ['First seen', ipFmt(a.started_at)],
+    ['Last seen', ipFmt(a.last_at)],
+    ['Tokens', ipFmt(a.tokens)],
+    ['Cost', ipFmt(a.cost)]
+  ].forEach(function (pair) {
+    var cell = el('div', 'conv-audit-cell');
+    cell.appendChild(el('div', 'muted', pair[0]));
+    cell.appendChild(el('div', 'mono', pair[1]));
+    grid.appendChild(cell);
+  });
+  box.appendChild(grid);
+
+  if (a.first_ask) {
+    box.appendChild(el('div', 'muted conv-audit-label', 'Opened with'));
+    box.appendChild(el('div', 'conv-first-ask', a.first_ask));
+  }
+
+  if (a.tools && a.tools.length) {
+    box.appendChild(el('div', 'muted conv-audit-label', 'What ran here'));
+    var list = el('div', 'conv-tools');
+    a.tools.forEach(function (t) {
+      var chip = el('span', 'conv-tool');
+      chip.appendChild(el('span', 'mono', t.tool));
+      chip.appendChild(el('span', 'muted', ' ×' + t.count));
+      list.appendChild(chip);
+    });
+    box.appendChild(list);
+  } else {
+    box.appendChild(el('div', 'muted conv-audit-label', 'What ran here'));
+    box.appendChild(el('div', 'muted', 'No tool calls in this conversation.'));
+  }
+}
+
+function renderMessages(box, msgs, truncated) {
+  box.textContent = '';
+  var head = el('div', 'conv-msgs-head');
+  head.appendChild(el('span', 'muted', msgs.length + ' messages'));
+  if (truncated) head.appendChild(el('span', 'muted', ' (truncated)'));
+  box.appendChild(head);
+
+  msgs.forEach(function (m) {
+    var role = m.role || 'unknown';
+    // Tool output is the bulk of a transcript and rarely what is being looked for,
+    // so each tool result is a collapsed <details>. The audit panel above already
+    // says which tools ran and how often.
+    if (role === 'tool') {
+      var det = el('details', 'conv-tool-body');
+      var sum = el('summary');
+      sum.appendChild(el('span', 'conv-role conv-role-tool', 'tool'));
+      sum.appendChild(el('span', 'mono', m.tool_name || ''));
+      sum.appendChild(el('span', 'muted', (m.content_len || 0) + ' chars'));
+      det.appendChild(sum);
+      det.appendChild(el('pre', 'conv-pre', m.content || ''));
+      if (m.truncated) {
+        det.appendChild(el('div', 'muted', 'Stored body is truncated; original length ' + m.content_len + ' chars.'));
+      }
+      box.appendChild(det);
+      return;
+    }
+    var wrap = el('div', 'conv-msg');
+    wrap.appendChild(el('span', 'conv-role conv-role-' + role, role));
+    wrap.appendChild(el('pre', 'conv-pre', m.content || ''));
+    if (!m.active) wrap.appendChild(el('div', 'muted', 'compacted away (not in the live window)'));
+    box.appendChild(wrap);
+  });
+}
+
+async function loadConversation(cid) {
+  var auditBox = document.getElementById('audit-' + cid);
+  var msgsBox = document.getElementById('msgs-' + cid);
+  try {
+    var a = await fetch('/api/conversations/audit?cid=' + encodeURIComponent(cid),
+                        {headers: {'Accept': 'application/json'}});
+    if (a.ok) renderAudit(auditBox, await a.json());
+  } catch (e) { auditBox.textContent = 'Audit unavailable.'; }
+  try {
+    var m = await fetch('/api/conversations/messages?cid=' + encodeURIComponent(cid),
+                        {headers: {'Accept': 'application/json'}});
+    if (m.ok) {
+      var data = await m.json();
+      renderMessages(msgsBox, data.messages || [], data.truncated);
+    }
+  } catch (e) { msgsBox.textContent = 'Messages unavailable.'; }
+}
+
+document.querySelectorAll('.conv-toggle').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var cid = btn.getAttribute('data-cid');
+    var row = document.getElementById('detail-' + cid);
+    var open = row.style.display !== 'none';
+    row.style.display = open ? 'none' : '';
+    btn.textContent = open ? 'View' : 'Hide';
+    if (!open && !convLoaded[cid]) {
+      convLoaded[cid] = true;
+      loadConversation(cid);
+    }
+  });
+});
+</script>
+{% endblock %}

@@ -212,14 +212,21 @@ def _logs_view(params) -> dict:
     """
     from ..api import work as work_api
     params = params or {}
-    tab = str(params.get("view") or "conversations")
+    # Default moved to 'requests': the conversations realm is retired (it became
+    # the /conversations page), and leaving the default pointed at a realm that no
+    # longer renders would have opened the Logs tab on an error.
+    tab = str(params.get("view") or "requests")
     view = {"tab": tab}
     if tab == "decisions":
         try:
             view.update({"decisions": work_api.decisions_view(params=params)})
         except Exception as e:  # never blank the page on a data error
             view["error"] = "%s: %s" % (type(e).__name__, e)
-    elif tab not in ("conversations", "requests", "providers"):
+    elif tab == "conversations":
+        # Retired: the Conversations page now owns both the live set and the
+        # history, so this realm has no data of its own to mount.
+        view["tab_error"] = ("Conversations moved to the Conversations page.")
+    elif tab not in ("requests", "providers"):
         view["tab_error"] = "unknown view %r" % tab
     return view
 
@@ -969,13 +976,54 @@ def in_progress_payload(engine=None) -> dict:
 
 
 def render_in_progress_page(config, engine=None, params=None) -> str:
-    """The In-progress page — started-but-unfinished requests, live."""
+    """The In-progress page — started-but-unfinished requests, live.
+
+    Superseded by /conversations, which keeps this live table at the top and adds
+    the history below it. The route stays and redirects, so a bookmark still lands.
+    """
     import json as _json
     from .render import render_page
     payload = in_progress_payload(engine)
     return render_page("pages/in_progress.html", config, engine,
                        active_page="in_progress",
                        tab="in_progress",
+                       params=params or {},
+                       payload=payload,
+                       payload_json=_json.dumps(payload))
+
+
+# ── Conversations — what LCP is doing now, and what it has done ───────────────
+# Two stores, one page. The live half is the in-process registry (a running call
+# has no `requests` row yet); the history half is LCP's own conversation store,
+# which it owns outright — migrated from the Hermes session DB and appended to on
+# every served request.
+
+def conversations_payload(config=None, engine=None, params=None) -> dict:
+    """The Conversations page's data: the live set plus a page of history."""
+    from ..api import conv_store
+
+    live = in_progress_payload(engine)
+    try:
+        history = conv_store.list_conversations(params or {})
+    except Exception as exc:  # noqa: BLE001 — the live half must still render
+        import logging
+        logging.getLogger("lcp.pages").warning("conversations_history_failed",
+                                               exc_info=True)
+        history = {"available": False, "error": str(exc), "conversations": [],
+                   "total": 0,
+                   "filter": {"per": "20", "page": 1, "pages": 1, "total": 0,
+                              "profile": "", "q": "", "profiles": []}}
+    return {"live": live, "history": history}
+
+
+def render_conversations_page(config, engine=None, params=None) -> str:
+    """Server-rendered Conversations page: live at the top, history below."""
+    import json as _json
+    from .render import render_page
+    payload = conversations_payload(config, engine, params)
+    return render_page("pages/conversations.html", config, engine,
+                       active_page="conversations",
+                       tab="conversations",
                        params=params or {},
                        payload=payload,
                        payload_json=_json.dumps(payload))
