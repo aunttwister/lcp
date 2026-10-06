@@ -232,12 +232,18 @@ def test_page_does_not_dot_access_the_items_key():
         "`payload.items` is the dict METHOD in Jinja, not the key")
 
 
-def test_navbar_links_the_in_progress_page():
+def test_navbar_links_the_conversations_page():
+    """The nav entry is 'Conversations' at /conversations.
+
+    It was 'In progress' at /in-progress until the history moved in beside the
+    live set; /in-progress still resolves (it redirects), so old links land.
+    """
     path = os.path.join(os.path.dirname(__file__), "..", "src", "ui", "templates",
                         "jinja", "_sidebar.html")
     nav = open(path, encoding="utf-8").read()
-    assert 'href="/in-progress"' in nav, "the navbar entry is gone"
-    assert "active_page == 'in_progress'" in nav, "the nav entry never highlights"
+    assert 'href="/conversations"' in nav, "the navbar entry is gone"
+    assert "active_page == 'conversations'" in nav, "the nav entry never highlights"
+    assert 'href="/in-progress"' not in nav, "the retired entry is still in the nav"
 
 
 def test_routes_are_registered():

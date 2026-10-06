@@ -22,6 +22,49 @@ def extract_last_sse_chunk(raw_bytes):
         return None
 
 
+def extract_sse_text(raw_bytes) -> str:
+    """Join the assistant text out of an SSE response buffer.
+
+    Only ``choices[].delta.content`` string fragments are concatenated. Reasoning
+    (``delta.reasoning_content``) and tool-call argument deltas are excluded on
+    purpose: they are not what the agent said, and the conversation store records
+    tool calls structurally instead of as prose.
+
+    Never raises — a stream that cannot be parsed yields "", because this feeds
+    bookkeeping rather than the response itself.
+    """
+    try:
+        text = raw_bytes.decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        return ""
+    parts: list[str] = []
+    for line in text.split("\n"):
+        if not line.startswith("data:"):
+            continue
+        data_str = line[5:].strip()
+        if not data_str or data_str == "[DONE]":
+            continue
+        try:
+            payload = json.loads(data_str)
+        except (ValueError, TypeError):
+            continue
+        for choice in (payload.get("choices") or []):
+            piece = (choice.get("delta") or {}).get("content")
+            if isinstance(piece, str):
+                parts.append(piece)
+    return "".join(parts)
+
+
+def extract_message_text(response_body) -> str:
+    """The assistant text of a non-streamed completion (empty when absent)."""
+    try:
+        message = (response_body.get("choices") or [{}])[0].get("message") or {}
+        content = message.get("content")
+    except (AttributeError, IndexError, TypeError):  # noqa: BLE001
+        return ""
+    return content if isinstance(content, str) else ""
+
+
 def estimate_cost_from_tokens(provider, model, cost_info, config):
     """Calculate cost from token counts using configured pricing or plugins.
 

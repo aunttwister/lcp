@@ -18,16 +18,15 @@
 
 {% if tab == 'logs' %}
 <p class="subtitle">
-  One tab over every log realm: grouped <strong>conversations</strong> (with generated
-  names + summaries), raw <strong>requests</strong>, provider <strong>routing
-  decisions</strong>, and the <strong>board decisions</strong> ledger. Conversations are correlated
-  by <span class="mono">conversation_id</span> — new calls carry the client's real per-conversation
-  header, legacy rows are burst-backfilled. Every tab paginates and sorts server-side,
-  newest first.
+  One tab over every log realm: raw <strong>requests</strong>, provider <strong>routing
+  decisions</strong>, and the <strong>board decisions</strong> ledger. Every tab paginates
+  and sorts server-side, newest first.
+  <span class="muted">Conversations moved to
+  <a href="/conversations">their own page</a>, which shows both the live calls and the
+  full history.</span>
 </p>
 
 <div class="logs-tabs">
-  {{ tab_link('conversations', 'Conversations') }}
   {{ tab_link('requests', 'Requests') }}
   {{ tab_link('providers', 'Provider decisions') }}
   {{ tab_link('decisions', 'Board decisions') }}

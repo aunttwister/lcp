@@ -25,6 +25,7 @@ from ..api.token_verifier import get_token_verifier
 from ..api.key_manager import get_key_manager
 from ..api.alert_manager import get_alert_manager
 from ..api import inflight as in_flight
+from ..api import conv_store
 from ..api.runtime import resolve_service
 from ..api.models import Budget, ApiKey, get_session
 from sqlalchemy import or_
@@ -38,7 +39,7 @@ from ..api.exceptions import (
     ProviderError,
     ToolBlockedError,
 )
-from .sse_helpers import extract_last_sse_chunk
+from .sse_helpers import extract_last_sse_chunk, extract_sse_text, extract_message_text
 from .endpoints import (
     HealthEndpoints,
     ProviderEndpoints,
@@ -473,10 +474,21 @@ class LCPHandler(
 
             streaming = body.get("stream", False)
 
-            # OpenCode requires a stable per-conversation header (`x-opencode-session`).
-            # Forward the client's header when present (Hermes ≥0.21 sends one); else
-            # fall back to a stable per-profile ID so outbound requests always carry it.
-            session_id = self.headers.get("x-opencode-session") or f"lcp-{profile}"
+            # The client's per-conversation id, when it sends one. Hermes attaches
+            # its agent session id to every LCP request (see the `lcp` user
+            # provider plugin), so agent traffic is identified; other clients may
+            # still omit it.
+            #
+            # This MUST be bound before the accounting calls below: they read
+            # `conversation_id`, and the ternary they used only evaluated that name
+            # when the header was present — so the undefined name stayed latent
+            # while no client sent the header, then raised NameError for every
+            # identified request and silently dropped its cost row.
+            conversation_id = self.headers.get("x-opencode-session")
+
+            # Outbound requests must always carry a stable per-conversation header
+            # (`x-opencode-session`); fall back to a per-profile id.
+            session_id = conversation_id or f"lcp-{profile}"
 
             # Try provider chain
             _warning_sink: list[str] = []
@@ -551,7 +563,7 @@ class LCPHandler(
                             "latency_ms": latency_ms,
                         }
                     record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools,
-                                conversation_id=conversation_id if self.headers.get("x-opencode-session") else None)
+                                conversation_id=conversation_id)
 
                     # Increment budget spend and fire alerts
                     self._track_budget_spend(
@@ -562,6 +574,17 @@ class LCPHandler(
                     logger.error("cost_accounting_failed", profile=profile,
                                  provider=provider, model=model, stream=True,
                                  error=str(e), traceback=traceback.format_exc()[-500:])
+
+                # Conversation capture. The assistant's words are not in the
+                # request body — they only exist in the stream this handler just
+                # wrote out — so the reply text is recovered from the SSE buffer.
+                # It stays bookkeeping: a failure stores nothing rather than
+                # corrupting a response the client already received.
+                conv_store.capture_request(
+                    conversation_id, body,
+                    reply=extract_sse_text(full_sse),
+                    profile=profile, model=model,
+                )
 
                 total_wall_ms = int((time.time() - t0) * 1000)
                 logger.info(
@@ -610,7 +633,7 @@ class LCPHandler(
 
                 # Record cost
                 record_cost(self.engine, profile, model, provider, cost_info, True, None, blocked_tools,
-                                conversation_id=conversation_id if self.headers.get("x-opencode-session") else None)
+                                conversation_id=conversation_id)
 
                 # Budget spend tracking — unified: increments profile + key budgets
                 # and syncs ApiKey.total_spend with key-scoped budgets.
@@ -633,6 +656,14 @@ class LCPHandler(
                 self.wfile.write(body_bytes)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 logger.debug("client_disconnected", path=self.path, stream=False)
+
+            # Conversation capture — see the streaming branch. Bookkeeping, so it
+            # is independent of the response that has already been sent.
+            conv_store.capture_request(
+                conversation_id, body,
+                reply=extract_message_text(response_body),
+                profile=profile, model=model,
+            )
 
             total_wall_ms = int((time.time() - t0) * 1000)
             logger.info(
@@ -871,8 +902,11 @@ def _build_routes() -> RouteTable:
     # working. Work is a module with its own four entries.
     t.get("page.activity", exact("/activity"),
           lambda h, p: h._serve_activity_page())
-    # What the gateway is working on NOW. Exact match, so it cannot shadow the
-    # per-profile `/{profile}/dashboard` suffix rule further down.
+    # What the gateway is working on NOW, and everything it has done. Exact match,
+    # so it cannot shadow the per-profile `/{profile}/dashboard` suffix rule below.
+    t.get("page.conversations", exact("/conversations"),
+          lambda h, p: h._serve_conversations_page())
+    # Legacy URL: the live table now heads /conversations, so this redirects there.
     t.get("page.in_progress", exact("/in-progress"),
           lambda h, p: h._serve_in_progress_page())
     t.get("page.dashboard", exact("/", "/dashboard"),
@@ -917,9 +951,17 @@ def _build_routes() -> RouteTable:
 
     t.get("page.dashboard.profile", suffix("/dashboard"), _dashboard)
 
-    # ── in-progress (JSON for the page's own refresh loop) ──
+    # ── in-progress (JSON for the live section's own refresh loop) ──
     t.get("api.in_progress", exact("/api/in-progress"),
           lambda h, p: h._serve_in_progress_json())
+
+    # ── conversations (history table + per-conversation detail) ──
+    t.get("api.conversations", exact("/api/conversations"),
+          lambda h, p: h._serve_conversations_json())
+    t.get("api.conversation.messages", exact("/api/conversations/messages"),
+          lambda h, p: h._serve_conversation_messages_json())
+    t.get("api.conversation.audit", exact("/api/conversations/audit"),
+          lambda h, p: h._serve_conversation_audit_json())
 
     # ── health / models ──
     t.get("health", exact("/health"), lambda h, p: h._serve_health())
