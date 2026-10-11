@@ -2725,6 +2725,158 @@ class DashboardEndpoints:
         from ..ui.pages import render_models_page
         self._send_html(render_models_page(self.config, self.engine, self._qs()))
 
+    def _serve_model_limits_api(self):
+        """GET /api/models/limits — the capability flags the vision gate reads.
+
+        One row per ``model_limits`` entry: what the model may do (vision,
+        thinking), its context window, and which providers and profile lanes use
+        it — so a flag that closes a lane is visible where the lane is defined.
+        """
+        cfg = self.config
+        limits = cfg.model_limits or {}
+
+        model_providers: dict[str, list[str]] = {}
+        model_lanes: dict[str, list[str]] = {}
+        for lane, pcfg in (cfg.profiles or {}).items():
+            for step in pcfg.get("chain", []):
+                mid = step.get("model")
+                if not mid:
+                    continue
+                prov = step.get("provider")
+                if prov and prov not in model_providers.setdefault(mid, []):
+                    model_providers[mid].append(prov)
+                if lane not in model_lanes.setdefault(mid, []):
+                    model_lanes[mid].append(lane)
+
+        rows = []
+        for mid, entry in limits.items():
+            if not isinstance(entry, dict):
+                continue
+            rows.append({
+                "model": mid,
+                "context_window": entry.get("context_window"),
+                "max_output_tokens": entry.get("max_output_tokens"),
+                "supports_vision": bool(entry.get("supports_vision", False)),
+                "supports_thinking": bool(entry.get("supports_thinking", False)),
+                "description": entry.get("description", ""),
+                "providers": model_providers.get(mid, []),
+                "lanes": model_lanes.get(mid, []),
+            })
+        rows.sort(key=lambda r: str(r["model"]).lower())
+        self._send_json({
+            "models": rows,
+            "providers": sorted((cfg.providers or {}).keys()),
+        })
+
+    def _serve_model_limits_update_api(self):
+        """POST /api/models/limits {model, supports_vision?, …} — set a flag.
+
+        Writes through the live Config object, so the change is in force for the
+        very next request (no restart): the vision gate reads
+        ``config.model_limits`` directly.
+        """
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        model = str(body.get("model") or "").strip()
+        if not model:
+            self._send_json({"error": "missing 'model'"}, 400)
+            return
+        cfg = self.config
+        limits = cfg.raw.setdefault("model_limits", {})
+        entry = limits.setdefault(model, {})
+        changed = []
+        for key in ("supports_vision", "supports_thinking"):
+            if key in body:
+                entry[key] = bool(body[key])
+                changed.append(key)
+        for key in ("context_window", "max_output_tokens"):
+            if key in body and body[key] is not None:
+                try:
+                    entry[key] = int(body[key])
+                    changed.append(key)
+                except (TypeError, ValueError):
+                    self._send_json({"error": f"{key} must be an integer"}, 400)
+                    return
+        if "description" in body:
+            entry["description"] = str(body["description"])
+            changed.append("description")
+        cfg.save()
+        logger.info("model_limits_updated", model=model, fields=sorted(changed))
+        self._send_json({"ok": True, "model": model, "changed": sorted(changed),
+                         "entry": entry})
+
+    def _serve_model_limits_probe_api(self):
+        """POST /api/models/limits/probe {model, provider?, apply?}
+
+        Send the fixture image to the model and report whether it read it back.
+        With ``apply=true`` the verified answer is written to the flag — that is
+        how a capability stops being an assumption (CUR-144).
+        """
+        try:
+            body = self._read_body()
+        except Exception:
+            self._send_json({"error": "invalid JSON body"}, 400)
+            return
+        model = str(body.get("model") or "").strip()
+        if not model:
+            self._send_json({"error": "missing 'model'"}, 400)
+            return
+        cfg = self.config
+        provider = str(body.get("provider") or "").strip()
+        if not provider:
+            # Default: the first provider in any lane chain that serves it.
+            for _lane, pcfg in (cfg.profiles or {}).items():
+                for step in pcfg.get("chain", []):
+                    if step.get("model") == model:
+                        provider = step.get("provider")
+                        break
+                if provider:
+                    break
+        if not provider:
+            self._send_json(
+                {"error": f"no provider serves {model} — pass 'provider'"},
+                400)
+            return
+        pdata = (cfg.providers or {}).get(provider)
+        if not pdata:
+            self._send_json({"error": f"unknown provider {provider}"}, 400)
+            return
+        api_base = (pdata.get("api_base") or "").rstrip("/")
+        ssrf = _validate_api_base_destination(api_base)
+        if ssrf:
+            self._send_json({"error": f"api_base not allowed: {ssrf}"}, 400)
+            return
+        store = _credential_store_for(self)
+        api_key = None
+        if store is not None:
+            api_key = store.get(provider) or None
+        from ..api.model_capabilities import probe_vision
+        result = probe_vision(api_base, api_key, model, timeout=60,
+                              browser_headers=_browser_headers(api_base))
+        vision = result.get("status") == "vision"
+        applied = False
+        if body.get("apply") and result.get("status") in ("vision", "no_vision"):
+            limits = cfg.raw.setdefault("model_limits", {})
+            entry = limits.setdefault(model, {})
+            entry["supports_vision"] = vision
+            cfg.save()
+            applied = True
+            logger.info("model_vision_probed", model=model, provider=provider,
+                        supports_vision=vision, applied=True)
+        self._send_json({
+            "model": model,
+            "provider": provider,
+            "status": result.get("status"),
+            "supports_vision": vision,
+            "applied": applied,
+            "snippet": result.get("snippet", ""),
+            "duration_ms": result.get("duration_ms"),
+            "error": result.get("error"),
+        })
+
     def _serve_capability_api(self):
         """GET /api/models/capability — return the capability matrix as JSON.
 

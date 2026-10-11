@@ -1092,6 +1092,11 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_capability_api())
     t.get("api.models.registry", exact("/api/models/registry"),
           lambda h, p: h._serve_registry_api())
+    # The capability flags the vision gate reads (supports_vision / thinking /
+    # context window) — one row per model_limits entry. Replaces the invisible
+    # DB-only surface that let CUR-144 hide.
+    t.get("api.models.limits", exact("/api/models/limits"),
+          lambda h, p: h._serve_model_limits_api())
 
     # ── memory: GET /{profile}/memory/count (last resort, as before) ──
     def _memory_count(h, p):
@@ -1168,6 +1173,13 @@ def _build_routes() -> RouteTable:
            lambda h, p: h._serve_capability_manual_api())
     t.post("api.models.capability.seed", exact("/api/models/capability/seed"),
            lambda h, p: h._serve_capability_seed_api())
+    # Idempotent write of one model's capability flags (no restart needed — the
+    # change lands in the live Config the gate reads).
+    t.post("api.models.limits", exact("/api/models/limits"),
+           lambda h, p: h._serve_model_limits_update_api())
+    # Probe a model with a real image and (optionally) write the answer back.
+    t.post("api.models.limits.probe", exact("/api/models/limits/probe"),
+           lambda h, p: h._serve_model_limits_probe_api())
 
     t.post("api.cost-plugins.cookie",
            regex(r"^/api/cost-plugins/cookie/(?P<provider>[^/]+)$"),

@@ -135,13 +135,8 @@
           <span class="muted">({{ c.active_messages }} live)</span>{% endif %}</td>
         <td class="mono">{{ c.tool_calls }}</td>
         <td class="mono">{{ c.last_at or '—' }}</td>
-        <td><button type="button" class="btn-sm conv-toggle" data-cid="{{ c.id }}">View</button></td>
-      </tr>
-      <tr class="conv-detail" id="detail-{{ c.id }}" style="display:none">
-        <td colspan="8">
-          <div class="conv-audit" id="audit-{{ c.id }}"><span class="muted">Loading…</span></div>
-          <div class="conv-messages" id="msgs-{{ c.id }}"></div>
-        </td>
+        <td><button type="button" class="btn-sm conv-toggle" data-cid="{{ c.id }}"
+                    data-name="{{ c.name or c.id }}">View</button></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -178,6 +173,26 @@
   <p class="muted work-rule">Showing {{ h.conversations | length }} of {{ h.total }} conversations.</p>
 </div>
 {% endif %}
+
+{# The transcript opens in a dialog rather than an expanded table row: a row is
+   width-bound by the table's columns, and its content lands inside a horizontal
+   scroll container — exactly where long transcript lines are hardest to read.
+   `openDialog`/`closeDialog` come from the shared static/js/modal.js (Escape,
+   click-outside, body-scroll lock, ARIA), so this reuses the app's dialog
+   behaviour instead of re-implementing it. #}
+<div class="modal-overlay dialog-overlay" id="convModal">
+  <div class="modal dialog-content" style="width:min(1000px,95vw)">
+    <div class="modal-header dialog-header">
+      <h2 class="dialog-title" id="convModalTitle">Conversation</h2>
+      <button type="button" class="modal-close dialog-close" onclick="closeDialog('convModal')"
+              aria-label="Close">&#10005;</button>
+    </div>
+    <div class="modal-body dialog-body">
+      <div class="conv-audit" id="convAudit"><span class="muted">Loading…</span></div>
+      <div class="conv-messages" id="convMessages"></div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -237,7 +252,6 @@ ipPoll();
 // ── Row expansion ────────────────────────────────────────────────────────────
 // Fetched on demand: a transcript can be megabytes, and a page of 20 would carry
 // all of it for rows nobody opened.
-var convLoaded = {};
 
 function el(tag, cls, text) {
   var n = document.createElement(tag);
@@ -246,24 +260,48 @@ function el(tag, cls, text) {
   return n;
 }
 
+function rep(value, small) {
+  var b = el('b', null, String(value));
+  if (small) b.appendChild(el('small', 'muted', ' ' + small));
+  return b;
+}
+
+function tsFmt(v) {
+  if (!v) return ipFmt(v);
+  // Stored ISO with microseconds, which is wider than the cell and wraps
+  // mid-token ("...7007" / "09+00:00"), reading as a corrupted value.
+  return String(v).replace('T', ' ').replace(/\.\d+/, '').replace(/(\+00:00|Z)$/, ' UTC');
+}
+
 function renderAudit(box, a) {
   box.textContent = '';
   if (!a.available) {
     box.appendChild(el('span', 'muted', 'No audit record for this conversation.'));
     return;
   }
+
+  // The audit is a header, not a panel. These numbers frame the transcript, but
+  // rendered open they took 289 of the dialog's 531 pixels and left the transcript
+  // a sliver — so the frame collapses to one line and the detail opens on demand.
+  // Collapsed-by-default is a presentation choice, not a loss: everything the audit
+  // knows is still one click away.
+  var det = el('details', 'conv-audit');
+  var line = el('summary', 'conv-audit-line');
+  [
+    ipFmt(a.profile), ipFmt(a.model), ipFmt(a.source),
+    ipFmt(a.messages) + ' messages', ipFmt(a.active_messages) + ' live',
+    ipFmt(a.tool_calls) + ' tool calls',
+    ipFmt(a.user_turns) + ' user / ' + ipFmt(a.assistant_turns) + ' assistant turns'
+  ].forEach(function (part) {
+    line.appendChild(el('span', null, String(part)));
+  });
+  det.appendChild(line);
+
+  var inner = el('div', 'conv-audit-inner');
   var grid = el('div', 'conv-audit-grid');
   [
-    ['Profile', ipFmt(a.profile)],
-    ['Model', ipFmt(a.model)],
-    ['Source', ipFmt(a.source)],
-    ['Messages', ipFmt(a.messages)],
-    ['In live window', ipFmt(a.active_messages)],
-    ['Tool calls', ipFmt(a.tool_calls)],
-    ['User turns', ipFmt(a.user_turns)],
-    ['Assistant turns', ipFmt(a.assistant_turns)],
-    ['First seen', ipFmt(a.started_at)],
-    ['Last seen', ipFmt(a.last_at)],
+    ['First seen', tsFmt(a.started_at)],
+    ['Last seen', tsFmt(a.last_at)],
     ['Tokens', ipFmt(a.tokens)],
     ['Cost', ipFmt(a.cost)]
   ].forEach(function (pair) {
@@ -272,92 +310,277 @@ function renderAudit(box, a) {
     cell.appendChild(el('div', 'mono', pair[1]));
     grid.appendChild(cell);
   });
-  box.appendChild(grid);
+  inner.appendChild(grid);
 
   if (a.first_ask) {
-    box.appendChild(el('div', 'muted conv-audit-label', 'Opened with'));
-    box.appendChild(el('div', 'conv-first-ask', a.first_ask));
+    inner.appendChild(el('div', 'muted conv-audit-label', 'Opened with'));
+    inner.appendChild(el('div', 'conv-first-ask', a.first_ask));
   }
 
   if (a.tools && a.tools.length) {
-    box.appendChild(el('div', 'muted conv-audit-label', 'What ran here'));
+    inner.appendChild(el('div', 'muted conv-audit-label', 'Tools'));
     var list = el('div', 'conv-tools');
-    a.tools.forEach(function (t) {
+    // Ordered by frequency (the API already sorts that way), so the shape of the
+    // work reads left-to-right: what was leaned on, then what was touched once.
+    a.tools.slice(0, 12).forEach(function (t) {
       var chip = el('span', 'conv-tool');
       chip.appendChild(el('span', 'mono', t.tool));
       chip.appendChild(el('span', 'muted', ' ×' + t.count));
       list.appendChild(chip);
     });
-    box.appendChild(list);
+    if (a.tools.length > 12) {
+      var rest = a.tools.slice(12);
+      list.appendChild(el('span', 'conv-tool conv-tool-more',
+        '+' + rest.length + ' more · ' +
+        rest.reduce(function (s, t) { return s + t.count; }, 0) + ' further calls'));
+    }
+    inner.appendChild(list);
   } else {
-    box.appendChild(el('div', 'muted conv-audit-label', 'What ran here'));
-    box.appendChild(el('div', 'muted', 'No tool calls in this conversation.'));
+    inner.appendChild(el('div', 'muted', 'No tool calls in this conversation.'));
   }
+
+  det.appendChild(inner);
+  box.appendChild(det);
 }
 
-function renderMessages(box, msgs, truncated) {
-  box.textContent = '';
-  var head = el('div', 'conv-msgs-head');
-  head.appendChild(el('span', 'muted', msgs.length + ' messages'));
-  if (truncated) head.appendChild(el('span', 'muted', ' (truncated)'));
-  box.appendChild(head);
+// ── Transcript ───────────────────────────────────────────────────────────────
+// A transcript answers two different questions: what was *said* (the turns) and
+// what the agent *did* (the tool calls). Scrolling past one to reach the other is
+// what makes a 5874-message conversation unreadable, so the filter switches which
+// question the transcript is answering rather than showing both at all times.
+var PAGE = 200;
+var CONV = { msgs: [], total: 0, filter: 'all', shown: PAGE };
 
-  msgs.forEach(function (m) {
-    var role = m.role || 'unknown';
-    // Tool output is the bulk of a transcript and rarely what is being looked for,
-    // so each tool result is a collapsed <details>. The audit panel above already
-    // says which tools ran and how often.
-    if (role === 'tool') {
-      var det = el('details', 'conv-tool-body');
-      var sum = el('summary');
-      sum.appendChild(el('span', 'conv-role conv-role-tool', 'tool'));
-      sum.appendChild(el('span', 'mono', m.tool_name || ''));
-      sum.appendChild(el('span', 'muted', (m.content_len || 0) + ' chars'));
-      det.appendChild(sum);
-      det.appendChild(el('pre', 'conv-pre', m.content || ''));
-      if (m.truncated) {
-        det.appendChild(el('div', 'muted', 'Stored body is truncated; original length ' + m.content_len + ' chars.'));
-      }
-      box.appendChild(det);
-      return;
-    }
-    var wrap = el('div', 'conv-msg');
-    wrap.appendChild(el('span', 'conv-role conv-role-' + role, role));
-    wrap.appendChild(el('pre', 'conv-pre', m.content || ''));
-    if (!m.active) wrap.appendChild(el('div', 'muted', 'compacted away (not in the live window)'));
-    box.appendChild(wrap);
+// The store records whatever role the source used. Fixed classes keep the styling
+// stable without inventing a colour for a role this page has never seen.
+var KNOWN_ROLES = ['user', 'assistant', 'tool', 'system'];
+function roleClass(role) { return KNOWN_ROLES.indexOf(role) >= 0 ? role : 'unknown'; }
+
+// Consecutive tool calls are one collapsed group, not N separate boxes: a
+// conversation here has 1085 tool results, and one-line summaries for each would
+// fill the scroll with scaffolding.
+// An assistant turn that only calls tools has no prose — its content is empty and
+// the intent lives in tool_calls (+ reasoning). Rendering it blank loses the work,
+// so the calls are shown as an ordered list of name + arguments.
+function callsOf(row) {
+  if (!row.tool_calls) return [];
+  var parsed;
+  try { parsed = JSON.parse(row.tool_calls); } catch (e) { return []; }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map(function (c) {
+    var fn = c.function || {};
+    return { name: fn.name || c.name || '(unnamed)', args: fn.arguments || '' };
   });
 }
 
+// Arguments arrive as a JSON string, so rendering it raw shows literal \n and \"
+// escapes. Parsing turns them back into real line breaks; a command then reads as
+// the command it was. Anything that will not parse is shown as-is rather than
+// dropped — the audit view's job is to show what ran.
+function callArgs(raw) {
+  var parsed;
+  try { parsed = JSON.parse(raw); } catch (e) { return [{ text: String(raw) }]; }
+  if (!parsed || typeof parsed !== 'object') return [{ text: String(parsed) }];
+  var out = [];
+  Object.keys(parsed).forEach(function (k) {
+    var v = parsed[k];
+    out.push({ label: k, text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) });
+  });
+  return out;
+}
+
+function callList(calls) {
+  var list = el('div', 'conv-calls');
+  calls.forEach(function (c) {
+    var row = el('div', 'conv-call');
+    row.appendChild(el('span', 'mono conv-call-name', c.name));
+    callArgs(c.args).forEach(function (a) {
+      var field = el('div', 'conv-call-field');
+      if (a.label) field.appendChild(el('span', 'muted conv-call-key', a.label));
+      field.appendChild(el('pre', 'conv-call-args', a.text));
+      row.appendChild(field);
+    });
+    list.appendChild(row);
+  });
+  return list;
+}
+function toolGroup(run) {
+  var det = el('details', 'conv-tool-group');
+  var sum = el('summary');
+  sum.appendChild(el('span', 'conv-role conv-role-tool',
+    run.length === 1 ? 'tool' : run.length + ' tool calls'));
+  var names = {};
+  run.forEach(function (m) { if (m.tool_name) names[m.tool_name] = (names[m.tool_name] || 0) + 1; });
+  var brief = Object.keys(names).map(function (k) { return k + (names[k] > 1 ? ' \u00d7' + names[k] : ''); });
+  sum.appendChild(el('span', 'mono conv-tool-names',
+    brief.slice(0, 4).join(', ') + (brief.length > 4 ? ', +' + (brief.length - 4) + ' more' : '')));
+  det.appendChild(sum);
+  run.forEach(function (m) {
+    var body = el('div', 'conv-tool-body');
+    var h = el('div', 'conv-tool-head');
+    h.appendChild(el('span', 'mono', m.tool_name || '(unnamed)'));
+    h.appendChild(el('span', 'muted', (m.content_len || 0) + ' chars'));
+    body.appendChild(h);
+    body.appendChild(el('pre', 'conv-pre', m.content || ''));
+    if (m.truncated) {
+      body.appendChild(el('div', 'muted conv-trunc-note',
+        'Stored body is truncated; original length ' + m.content_len + ' chars.'));
+    }
+    det.appendChild(body);
+  });
+  return det;
+}
+
+function appendGrouped(scroll, rows) {
+  var prev = null;
+  for (var i = 0; i < rows.length; i++) {
+    var m = rows[i];
+    var role = m.role || 'unknown';
+    if (role === '__boundary__') {
+      scroll.appendChild(el('div', 'conv-boundary', m.content));
+      prev = role;
+      continue;
+    }
+    if (role === 'tool') {
+      var run = [];
+      while (i < rows.length && (rows[i].role || 'unknown') === 'tool') { run.push(rows[i]); i++; }
+      i--;
+      scroll.appendChild(toolGroup(run));
+      prev = role;
+      continue;
+    }
+    var wrap = el('div', 'conv-msg conv-msg-' + roleClass(role));
+    if (role === prev) wrap.classList.add('conv-msg-cont');
+    // The glyph comes from CSS (::before) so the role distinction is a character,
+    // not only a colour — it survives a monochrome render.
+    wrap.appendChild(el('span', 'conv-role conv-role-' + roleClass(role), role));
+    var calls = callsOf(m);
+    if (m.content) wrap.appendChild(el('pre', 'conv-pre', m.content));
+    if (calls.length) wrap.appendChild(callList(calls));
+    if (!m.content && !calls.length) {
+      wrap.appendChild(el('div', 'muted conv-trunc-note',
+        'No stored text for this turn' + (m.reasoning ? ' (reasoning stored, not shown)' : '')));
+    }
+    scroll.appendChild(wrap);
+    prev = role;
+  }
+  if (prev === null) scroll.appendChild(el('p', 'muted conv-none', 'No messages.'));
+}
+
+// The compacted/live split is a property of the archive, not of each message:
+// 5719 of this conversation's 5874 rows are compacted, so a per-message badge
+// would be ~97% noise. It is stated once, as a boundary, and only against the
+// rows the agent actually loaded — in a filter view the unfiltered position says
+// nothing about where the live window sits.
+function boundaryIndex(rows) {
+  for (var i = 0; i < rows.length; i++) { if (rows[i].active) return i; }
+  return -1;
+}
+
+function withBoundary(rows) {
+  var at = boundaryIndex(rows);
+  if (at <= 0) return rows;
+  var out = rows.slice(0, at);
+  out.push({ role: '__boundary__', content: 'Live window — the messages the agent currently sees' });
+  return out.concat(rows.slice(at));
+}
+
+function renderMessages(box, msgs, truncated, total) {
+  CONV = { msgs: msgs, total: total || msgs.length, truncated: !!truncated,
+           filter: 'all', shown: PAGE };
+  box.textContent = '';
+
+  var head = el('div', 'conv-msgs-head');
+  var count = el('span', 'conv-count');
+  head.appendChild(count);
+
+  var filters = el('div', 'conv-filters');
+  [['all', 'All'], ['user', 'User'], ['assistant', 'Assistant'], ['tool', 'Tools']]
+    .forEach(function (pair) {
+      var b = el('button', 'btn-sm conv-filter' + (pair[0] === 'all' ? ' active' : ''), pair[1]);
+      b.type = 'button';
+      b.addEventListener('click', function () {
+        CONV.filter = pair[0];
+        CONV.shown = PAGE;
+        Array.prototype.forEach.call(filters.children, function (c) {
+          c.classList.toggle('active', c === b);
+        });
+        paint();
+      });
+      filters.appendChild(b);
+    });
+  head.appendChild(filters);
+  box.appendChild(head);
+
+  var scroll = el('div', 'conv-scroll');
+  box.appendChild(scroll);
+
+  function matched() {
+    if (CONV.filter === 'all') return CONV.msgs;
+    return CONV.msgs.filter(function (m) { return (m.role || 'unknown') === CONV.filter; });
+  }
+
+  function paint() {
+    var rows = matched();
+    count.textContent = '';
+    count.appendChild(rep(rows.length,
+      CONV.filter === 'all' ? 'messages' : CONV.filter + ' messages'));
+    var bits = [];
+    if (CONV.total > CONV.msgs.length) bits.push(CONV.total + ' in store');
+    if (rows.length > CONV.shown) bits.push('showing ' + CONV.shown);
+    if (bits.length) count.appendChild(el('span', 'muted', bits.join(' \u00b7 ')));
+    scroll.textContent = '';
+    if (!rows.length) {
+      scroll.appendChild(el('p', 'muted conv-none', 'Nothing matches this filter in the loaded range.'));
+      return;
+    }
+    appendGrouped(scroll, withBoundary(rows.slice(0, CONV.shown)));
+    if (rows.length > CONV.shown) {
+      var left = rows.length - CONV.shown;
+      var more = el('button', 'btn-sm conv-more',
+        'Show ' + Math.min(PAGE, left) + ' more of ' + left + ' remaining');
+      more.type = 'button';
+      more.addEventListener('click', function () { CONV.shown += PAGE; paint(); });
+      scroll.appendChild(more);
+    }
+  }
+
+  paint();
+}
+
 async function loadConversation(cid) {
-  var auditBox = document.getElementById('audit-' + cid);
-  var msgsBox = document.getElementById('msgs-' + cid);
+  var auditBox = document.getElementById('convAudit');
+  var msgsBox = document.getElementById('convMessages');
+  auditBox.textContent = '';
+  auditBox.appendChild(el('span', 'muted', 'Loading…'));
+  msgsBox.textContent = '';
   try {
     var a = await fetch('/api/conversations/audit?cid=' + encodeURIComponent(cid),
                         {headers: {'Accept': 'application/json'}});
     if (a.ok) renderAudit(auditBox, await a.json());
+    else auditBox.textContent = 'Audit unavailable.';
   } catch (e) { auditBox.textContent = 'Audit unavailable.'; }
   try {
     var m = await fetch('/api/conversations/messages?cid=' + encodeURIComponent(cid),
                         {headers: {'Accept': 'application/json'}});
     if (m.ok) {
       var data = await m.json();
-      renderMessages(msgsBox, data.messages || [], data.truncated);
+      renderMessages(msgsBox, data.messages || [], data.truncated, data.total);
+    } else {
+      msgsBox.textContent = 'Messages unavailable.';
     }
   } catch (e) { msgsBox.textContent = 'Messages unavailable.'; }
 }
 
+// One modal, filled on demand. Re-fetching on every open is deliberate: the
+// transcript grows while you read, and a cached one would show a stale window.
 document.querySelectorAll('.conv-toggle').forEach(function (btn) {
   btn.addEventListener('click', function () {
     var cid = btn.getAttribute('data-cid');
-    var row = document.getElementById('detail-' + cid);
-    var open = row.style.display !== 'none';
-    row.style.display = open ? 'none' : '';
-    btn.textContent = open ? 'View' : 'Hide';
-    if (!open && !convLoaded[cid]) {
-      convLoaded[cid] = true;
-      loadConversation(cid);
-    }
+    var name = btn.getAttribute('data-name') || cid;
+    document.getElementById('convModalTitle').textContent = name;
+    openDialog('convModal');
+    loadConversation(cid);
   });
 });
 </script>

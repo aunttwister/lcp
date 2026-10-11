@@ -7,6 +7,7 @@ Handles the full request flow:
 import json
 import os
 import random
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -331,6 +332,42 @@ def ensure_thinking_reasoning_content(messages: list[dict], model: str,
                 and "reasoning_content" not in msg:
             msg["reasoning_content"] = ""
     return messages
+
+
+# ── Per-chain bad-request memory ──────────────────────────────────────────
+#
+# A provider can reject a request as "invalid" (HTTP 400) for a reason that is
+# request-shaped rather than provider-wide — e.g. a long tool-calling history
+# whose reasoning_content a client stripped. Re-sending the *same* body to the
+# *same* provider will fail identically, so that provider is skipped for the
+# lifetime of the chain (cheap, no wasted round-trips). The next chain member
+# gets a genuinely independent chance, and the chain is NOT aborted.
+#
+# Entry count / message are bounded so logging stays legible.
+_BAD_REQUEST_MAX_ENTRIES = 256
+_BAD_REQUEST_MSG_MAXLEN = 600
+
+_bad_request_lock = threading.Lock()
+_bad_request_this_chain: dict[str, str] = {}
+
+
+def _bad_request_key(provider_name: str, base_url: str, model: str) -> str:
+    """Cache key: the model is part of it because a chain can reuse a provider
+    with different models."""
+    return f"{provider_name}|{base_url}|{model}"
+
+
+def _remember_bad_request(provider_name: str, base_url: str, model: str,
+                          err: str) -> str:
+    """Record that (provider, base_url, model) rejected THIS request body as
+    invalid, and return the (truncated) message for the final error."""
+    msg = (err or "")[:_BAD_REQUEST_MSG_MAXLEN]
+    key = _bad_request_key(provider_name, base_url, model)
+    with _bad_request_lock:
+        if len(_bad_request_this_chain) >= _BAD_REQUEST_MAX_ENTRIES:
+            _bad_request_this_chain.clear()
+        _bad_request_this_chain[key] = msg
+    return msg
 
 
 def sanitize_messages(messages: list[dict]) -> list[dict]:
@@ -792,6 +829,11 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config,
     chain_len = len(chain)
     errors = []
 
+    # Per-chain memory of providers that rejected THIS request body as invalid.
+    # Cleared here (concurrent chains each track their own) so a 400 on one
+    # request never affects the next.
+    _bad_request_this_chain.clear()
+
     # ── Memory harness: auto-recall + inject relevant facts into the request ─
     # Opt-in via plugins.memory.auto_recall. No-op when memory is inactive.
     try:
@@ -873,6 +915,24 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config,
             attempt=i + 1,
             chain_len=chain_len,
         )
+
+        # Skip a provider that already rejected THIS request body as invalid
+        # earlier in this same chain (e.g. the same underlying provider named
+        # twice with different models). Re-sending the identical body would
+        # fail identically, so don't waste the round-trip.
+        # NOTE: the memory key includes the model, so a same-provider step with
+        # a DIFFERENT model is still attempted.
+        if _bad_request_key(provider_name, base_url, model) in _bad_request_this_chain:
+            logger.info(
+                "chain_skip_remembered_bad_request",
+                profile=profile_name,
+                provider=provider_name,
+                model=model,
+                attempt=i + 1,
+                chain_len=chain_len,
+            )
+            errors.append(f"{provider_name}/{model}: skipped (rejected this body as invalid)")
+            continue
 
         # Check vision support — fail gracefully so user knows why
         if has_image_content(body.get("messages", [])):
@@ -976,12 +1036,21 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config,
             )
             return resp, status, provider_name, model
         except ProviderBadRequestError as e:
-            # Bad request — the problem is in the body, not the provider.
-            # Falling back to another provider just wastes attempts.
-            # Re-raise immediately so the client sees the real error.
+            # Bad request. The body is (probably) the problem, so re-sending it
+            # to the SAME provider is pointless — but aborting the whole chain
+            # is worse: when the head of the chain is a fragile aggregator (e.g.
+            # Command Code returning an opaque "invalid request error"), every
+            # remaining provider — including a healthy local one at the tail —
+            # used to be skipped and the user got a hard 502.
+            #
+            # So: remember that this provider rejected this body (cheap skip if
+            # the chain names it again), then fall through to the next provider,
+            # which gets a genuinely independent chance.
             # NOTE: deliberately NOT calling cb.record_failure() — a 400 caused
             # by a bad client body is not a provider outage, and counting it
             # against provider health would falsely degrade healthy providers.
+            reason = _remember_bad_request(provider_name, base_url, model, str(e))
+            errors.append(f"{provider_name}/{model}: rejected as invalid: {reason}")
             logger.error(
                 "chain_bad_request",
                 profile=profile_name,
@@ -989,11 +1058,9 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config,
                 model=model,
                 attempt=i + 1,
                 chain_len=chain_len,
-                error=str(e),
+                next=chain[i + 1]["provider"] if i + 1 < chain_len else "none",
+                error=reason,
             )
-            raise AllProvidersFailedError(
-                f"Provider {provider_name} rejected the request as invalid: {e}"
-            ) from e
         except (ProviderTimeoutError, ProviderAuthError, ProviderCreditsError,
                 ProviderRateLimitError, ProviderInternalError) as e:
             cb.record_failure(provider_name, base_url, profile_name,

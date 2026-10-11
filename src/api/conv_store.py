@@ -377,12 +377,18 @@ def conversation_audit(conversation_id: str) -> dict[str, Any]:
 
 
 def read_messages(conversation_id: str, limit: int = 2000,
-                  include_inactive: bool = True) -> list[dict[str, Any]]:
+                  include_inactive: bool = True, newest: bool = False) -> list[dict[str, Any]]:
     """The stored transcript of a conversation, oldest first.
 
     ``include_inactive=False`` hides compacted context — the rows the agent no
     longer sees. Default is to include them, because the audit view has to show
     what was actually done, not what survived compaction.
+
+    ``newest=True`` returns the LAST ``limit`` messages in reading order rather
+    than the first. A conversation here runs to 5874 messages and a transcript
+    that only ever shows the opening is the least useful part of it: the live
+    window — what the agent is doing now — sits at the end. The slice is taken
+    from the tail and re-sorted so the reading order is still oldest first.
     """
     con = _connect()
     try:
@@ -391,6 +397,9 @@ def read_messages(conversation_id: str, limit: int = 2000,
                "FROM conv_messages WHERE conversation_id=?")
         if not include_inactive:
             sql += " AND active=1"
+        if newest:
+            sql += " ORDER BY seq DESC LIMIT ?"
+            return [dict(r) for r in reversed(list(con.execute(sql, (conversation_id, limit))))]
         sql += " ORDER BY seq LIMIT ?"
         return [dict(r) for r in con.execute(sql, (conversation_id, limit))]
     finally:
@@ -398,18 +407,27 @@ def read_messages(conversation_id: str, limit: int = 2000,
 
 
 def messages_view(conversation_id: str, limit: int = 2000,
-                  include_inactive: bool = True) -> dict[str, Any]:
+                  include_inactive: bool = True, newest: bool = True) -> dict[str, Any]:
     """A conversation's transcript plus whether the limit cut it short.
 
     ``read_messages`` applies a hard LIMIT with no way for a caller to tell a
     complete transcript from a clipped one, which would let the page present a
     truncated conversation as the whole thing.
+
+    Defaults to the NEWEST ``limit`` messages: the live window is at the end of
+    the transcript, and the opening is the part already summarised by the audit.
+    The window is contiguous because the tail of the transcript is ordered, so a
+    clipped slice is a real window rather than a sample.
     """
     messages = read_messages(conversation_id, limit=limit + 1,
-                             include_inactive=include_inactive)
+                             include_inactive=include_inactive, newest=newest)
     truncated = len(messages) > limit
-    return {"id": conversation_id, "messages": messages[:limit],
-            "truncated": truncated, "total": message_count(conversation_id)}
+    # newest=True over-fetches the oldest end of the window, so dropping the FIRST
+    # row keeps the tail intact; oldest-first drops the last.
+    kept = messages[1:] if (truncated and newest) else messages[:limit]
+    return {"id": conversation_id, "messages": kept,
+            "truncated": truncated, "total": message_count(conversation_id),
+            "newest": newest}
 
 
 def message_count(conversation_id: str) -> int:

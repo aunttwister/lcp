@@ -259,6 +259,31 @@ SEED_CONFIG: dict[str, Any] = {
             "supports_thinking": False,
             "description": "Qwen3.8-Flash-Next — local vLLM (DGX Spark 128GB, SEQS=16), vision-capable",
         },
+        # Rows previously present ONLY in the live DB (never seeded) — a rebuild
+        # re-seed dropped them and silently closed the local vision path
+        # (CUR-144). Vision flags below are engine-probed, not assumed: a real
+        # 480x320 "ZEBRA 7291" image was transcribed correctly by both.
+        "GLM-5.3-Flash-EXL3": {
+            "context_window": 1048576,
+            "max_output_tokens": 32768,
+            "supports_vision": True,
+            "supports_thinking": True,
+            "description": "GLM 5.3 Flash EXL3 (local-sparks, DGX Spark 2x, TensorFold v1.6) — 1M ctx, vision-probed 2026-10-07",
+        },
+        "deepseek-flash": {
+            "context_window": 1000000,
+            "max_output_tokens": 384000,
+            "supports_vision": True,
+            "supports_thinking": True,
+            "description": "DeepSeek V4.1 Flash — gateway logical lane (deepseek + opencode); vision-probed 2026-10-07; thinking mode REQUIRES reasoning_content echoed back",
+        },
+        "deepseek/deepseek-v4.1-flash-fast": {
+            "context_window": 128000,
+            "max_output_tokens": 16384,
+            "supports_vision": True,
+            "supports_thinking": True,
+            "description": "DeepSeek V4.1 Flash Fast (Command Code) — thinking",
+        },
     },
     "database": {
         "path": "/app/data/costs.db",
