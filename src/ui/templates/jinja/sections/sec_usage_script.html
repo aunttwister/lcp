@@ -688,6 +688,23 @@ function buildPage(providers) {
                 if (barsHtml) {
                     panelsHtml += '<div class="usage-bars">' + barsHtml + '</div>';
                 }
+
+                // ── v2 member-budget rules (configuration, not spend) ──
+                // Shared / model-specific policy rules, listed by the console
+                // only on /api/v2/budgets/members.  The payload carries no
+                // measured spend against them, so they are shown as config —
+                // never as a percentage bar.
+                var ocRules = sub.budget_rules || [];
+                if (ocRules.length) {
+                    panelsHtml += '<div class="stat-card" style="margin-bottom:1rem"><div class="label">Member budget rules (' + ocRules.length + ')</div><div class="sub">' +
+                        ocRules.map(function (r) {
+                            var lim = (r.limit_usd != null) ? '$' + Number(r.limit_usd).toFixed(2) : 'no limit';
+                            var per = r.per ? ' / ' + esc(String(r.per)) : '';
+                            var tgt = r.selector ? ' · ' + esc(String(r.selector)) : '';
+                            return esc(String(r.audience || 'rule')) + ': ' + lim + ' · ' + esc(String(r.scope || '')) + per + tgt;
+                        }).join('<br>') +
+                        '</div><div class="sub" style="font-size:0.625rem">Shared and model-specific caps apply independently of the member cap above.</div></div>';
+                }
             } else if (prov === 'commandcode') {
                 var ccsub = subscriptions['commandcode'] || {};
                 // ── Collapsible credentials card (cookie only) ──

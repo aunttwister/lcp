@@ -462,6 +462,7 @@ class OpenCodeCostPlugin(CostPlugin):
             }
         from .opencode_api import (
             ConsoleApiError,
+            budget_rules,
             fetch_budget_members,
             fetch_go_usage,
             plan_windows,
@@ -507,16 +508,29 @@ class OpenCodeCostPlugin(CostPlugin):
         from .console_oauth import current_access_token
 
         token = current_access_token()
-        # ── 2. Console budget rows (``/api/v1/*`` is service-key only) ───────
-        if token:
-            windows = {}
+        # ── 2. Console budget rows ───────────────────────────────────────────
+        # ``/api/v1|v2/budgets/members`` is a *service-key* surface: a console
+        # session token is rejected there (verified live 2026-10-11 — v2 answers
+        # 403 for a session + x-org-id, 200 for the ``all`` service key), so
+        # prefer the key and keep the session only for keyless instances.
+        # ``fetch_budget_members`` reads v2 (policy-backed) and falls back to v1
+        # on the vendor's 409 for budget rows not yet converted to policies.
+        members: list = []
+        budget_token = self._token() or token
+        if budget_token:
             try:
-                windows = plan_windows(fetch_budget_members(token))
+                members = fetch_budget_members(budget_token)
             except ConsoleApiError as exc:
                 logger.info("opencode_budget_route_unavailable", status=exc.status)
             except Exception as exc:  # noqa: BLE001
                 logger.info("opencode_budget_route_error", error=str(exc))
+            windows = plan_windows(members)
             if windows:
+                # v2-only configuration: shared / model-specific policy rules.
+                # Attached as descriptors; ``plan_windows`` alone owns the bars.
+                rules = budget_rules(members)
+                if rules:
+                    windows["budget_rules"] = rules
                 return windows
         else:
             logger.info("opencode_console_session_missing")
@@ -535,8 +549,13 @@ class OpenCodeCostPlugin(CostPlugin):
         # No plan ceiling exists on this account (``creditLimitMicroCents`` is
         # null), so report the vendor's real usage numbers instead of inventing
         # a percentage.  The UI only draws bars for pct fields, so nothing is
-        # fabricated downstream either.
-        return self._console_usage_numbers(token)
+        # fabricated downstream either.  v2's ``additional_budget_rules`` ride
+        # along as configuration when the console budget read produced any.
+        numbers = self._console_usage_numbers(token)
+        rules = budget_rules(members)
+        if isinstance(numbers, dict) and rules:
+            numbers["budget_rules"] = rules
+        return numbers
 
     def _console_usage_numbers(self, token: str) -> Optional[dict]:
         """Vendor usage totals for the vendor card — ``GET /api/usage/summary``.
