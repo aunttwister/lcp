@@ -1839,3 +1839,216 @@ tbody tr:hover td { background: hsl(var(--secondary) / 0.4); }
 /* An uncovered profile whose traffic points at a lane nothing serves: the gateway
    answers those requests with 400, so the row says so rather than looking normal. */
 .pu-unserved { color: hsl(var(--amber-fg, 38 92% 50%)); }
+
+/* ── Conversation transcript ─────────────────────────────────────────────────
+   Anatomy follows shadcn's Message pattern: a message is a ROW (role marker +
+   body), grouping comes from the gap BETWEEN rows, and tool calls are a
+   collapsed Marker rather than prose.
+
+   Two rules are load-bearing rather than cosmetic:
+
+   * Role is carried by a GLYPH + label + tint, never by hue alone — the glyph
+     is a text character, so the distinction survives a monochrome rendering.
+   * Wrapping is explicit. A transcript body is arbitrary model output; with the
+     browser default (white-space: pre) one long line min-contents the whole
+     page and the transcript reads as a horizontal scrollbar.
+
+   Prose is sans (the house body font) and tool output is mono, so the two read
+   as different kinds of thing at a glance. */
+
+.conv-messages { margin-top: 0.75rem; }
+
+.conv-msgs-head {
+  display: flex; align-items: center; gap: 0.5rem; font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
+  padding-bottom: 0.5rem; margin-bottom: 0.625rem;
+  border-bottom: 1px solid hsl(var(--card-border));
+}
+
+/* No scroll box of its own: the transcript lives in the dialog body, which
+   already scrolls. Nesting a second scrollbar inside it would trap the wheel. */
+.conv-scroll { display: block; }
+
+.conv-msg {
+  display: flex; flex-direction: column; gap: 0.25rem;
+  padding: 0.5rem 0.625rem 0.5rem 0.75rem; margin-bottom: 0.5rem;
+  border: 1px solid transparent; border-left-width: 3px; border-radius: var(--radius);
+}
+.conv-msg:last-child { margin-bottom: 0; }
+
+.conv-role {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.625rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: hsl(var(--muted-foreground));
+}
+.conv-role::before { font-weight: 400; }
+.conv-role-user::before      { content: "\25B8"; }
+.conv-role-assistant::before { content: "\25C7"; }
+.conv-role-tool::before      { content: "\2699"; }
+.conv-role-system::before    { content: "\25AA"; }
+.conv-role-unknown::before   { content: "\2022"; }
+
+.conv-msg-user      { background: hsl(var(--cyan-bg) / 0.55); border-color: hsl(var(--cyan-fg) / 0.22);
+                      border-left-color: hsl(var(--cyan-fg)); }
+.conv-msg-assistant { background: hsl(var(--secondary) / 0.28); border-color: hsl(var(--card-border));
+                      border-left-color: hsl(var(--muted-foreground) / 0.5); }
+.conv-msg-system,
+.conv-msg-unknown   { background: hsl(var(--muted) / 0.22); border-color: hsl(var(--card-border));
+                      border-left-color: hsl(var(--muted-foreground) / 0.5); }
+.conv-msg-user .conv-role { color: hsl(var(--cyan-fg)); }
+
+/* The compacted/live split, stated once instead of on every affected message. */
+.conv-boundary {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin: 0.75rem 0 0.6rem; font-size: 0.6875rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: hsl(var(--muted-foreground));
+}
+.conv-boundary::before, .conv-boundary::after {
+  content: ""; flex: 1; height: 1px; background: hsl(var(--card-border));
+}
+
+.conv-pre {
+  margin: 0; font-size: 0.8125rem; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+  max-height: 22rem; overflow: auto;
+}
+
+/* Tool output is command output or file contents, so it stays monospace and
+   darker than prose — subordinate, but still selectable and searchable. */
+.conv-tool-body { background: hsl(var(--muted) / 0.25); }
+
+/* ── Audit: one collapsed line that frames the transcript ──
+   Collapsed by default because open it measured 289px of a 531px dialog, leaving
+   the transcript a sliver. Everything stays one click away. */
+.conv-audit { flex: none; margin-bottom: 0.5rem; }
+.conv-audit > summary.conv-audit-line {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.6rem;
+  cursor: pointer; list-style: none; padding: 0.3rem 0.5rem;
+  border: 1px solid hsl(var(--card-border)); border-radius: var(--radius);
+  font-size: 0.6875rem; color: hsl(var(--muted-foreground));
+}
+.conv-audit > summary.conv-audit-line::-webkit-details-marker { display: none; }
+.conv-audit > summary.conv-audit-line::before {
+  content: "\25B8"; font-size: 0.6rem; margin-right: 0.1rem;
+}
+.conv-audit[open] > summary.conv-audit-line::before { content: "\25BE"; }
+.conv-audit-line > span + span::before {
+  content: "\00b7"; margin-right: 0.6rem; opacity: 0.5;
+}
+.conv-audit-inner { padding: 0.5rem 0.1rem 0; }
+.conv-audit-line:hover { color: hsl(var(--foreground)); }
+
+.conv-audit-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.5rem 0.75rem; margin-bottom: 0.625rem;
+}
+.conv-audit-cell > div:first-child {
+  font-size: 0.625rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: hsl(var(--muted-foreground));
+}
+.conv-audit-cell > div:last-child { font-size: 0.75rem; overflow-wrap: anywhere; }
+.conv-audit-label {
+  font-size: 0.625rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; margin-bottom: 0.25rem;
+}
+.conv-first-ask {
+  font-size: 0.8125rem; margin-bottom: 0.75rem; padding-left: 0.625rem;
+  border-left: 2px solid hsl(var(--muted-foreground) / 0.4); overflow-wrap: anywhere;
+}
+.conv-tools { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.conv-tool {
+  display: inline-flex; align-items: baseline; gap: 0.25rem;
+  padding: 0.15rem 0.45rem; border-radius: 9999px;
+  background: hsl(var(--secondary)); border: 1px solid hsl(var(--card-border));
+  font-size: 0.6875rem; white-space: normal;
+}
+.conv-tool .mono { font-size: 0.6875rem; }
+
+/* ── Transcript dialog ──
+   The modal is the reading surface, so it gets the height a transcript needs.
+   `max-height` must be raised alongside `height`: the base .dialog-content rule
+   sets max-height: 85vh, and min() is clamped by it, which silently held the
+   dialog at 490px and squeezed the transcript into a 22px sliver. */
+#convModal .dialog-content { height: min(92vh, 1100px); max-height: 92vh; }
+#convModal .dialog-body { display: flex; flex-direction: column; padding-bottom: 0.5rem; }
+#convModal .conv-audit { flex: none; }
+#convModal .conv-messages { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#convModal .conv-scroll {
+  flex: 1; min-height: 12rem; overflow-y: auto; overflow-x: hidden;
+  border: 1px solid hsl(var(--card-border)); border-radius: var(--radius);
+  background: hsl(var(--background)); padding: 0.5rem;
+}
+
+/* ── Transcript head: count on the left, role filter on the right ── */
+.conv-msgs-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.75rem; flex-wrap: wrap;
+}
+.conv-count { display: inline-flex; align-items: baseline; gap: 0.35rem; flex-wrap: wrap; }
+.conv-count > b { font-weight: 700; font-variant-numeric: tabular-nums; }
+.conv-count .muted { font-size: 0.6875rem; }
+.conv-filters { display: inline-flex; gap: 0.25rem; }
+.conv-filter.active { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.conv-more { display: block; margin: 0.5rem auto 0; }
+.conv-none { margin: 0.5rem 0; font-size: 0.75rem; }
+
+/* ── Tool calls: one collapsed group per run of calls ── */
+.conv-tool-group {
+  margin: 0.35rem 0 0.5rem; border: 1px solid hsl(var(--card-border));
+  border-left: 3px solid hsl(var(--muted-foreground) / 0.35);
+  border-radius: var(--radius); background: hsl(var(--muted) / 0.18);
+}
+/* The summary carries the muted-foreground token at body size; at 0.6875rem it
+   failed contrast, so the tool line sits a step darker than the rest. */
+.conv-tool-group > summary {
+  display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;
+  padding: 0.35rem 0.625rem; cursor: pointer; list-style: none;
+  font-size: 0.6875rem; color: hsl(var(--foreground));
+}
+.conv-tool-group > summary:hover { background: hsl(var(--secondary) / 0.3); }
+.conv-tool-group > summary::-webkit-details-marker { display: none; }
+.conv-tool-group > summary::before { content: "\25B8"; font-size: 0.6rem; }
+.conv-tool-group[open] > summary::before { content: "\25BE"; }
+.conv-tool-group[open] > summary { border-bottom: 1px solid hsl(var(--card-border)); }
+.conv-tool-names { overflow-wrap: anywhere; }
+.conv-tool-body { border-top: 1px solid hsl(var(--card-border)); }
+.conv-tool-body:first-of-type { border-top: none; }
+.conv-tool-head {
+  display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;
+  padding: 0.375rem 0.625rem 0;
+}
+.conv-tool-body > .conv-pre {
+  padding: 0.375rem 0.625rem 0.5rem;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.75rem; max-height: 30rem;
+}
+.conv-tool-more { font-style: italic; }
+
+/* ── Tool calls inside an assistant turn (no prose, calls only) ── */
+.conv-calls { display: flex; flex-direction: column; gap: 0.25rem; }
+.conv-call {
+  display: flex; flex-direction: column; gap: 0.15rem;
+  padding: 0.3rem 0.5rem; border-radius: var(--radius);
+  background: hsl(var(--muted) / 0.3);
+}
+.conv-call-name { font-size: 0.6875rem; font-weight: 600; color: hsl(var(--foreground)); }
+.conv-call-field { display: flex; flex-direction: column; gap: 0.1rem; }
+.conv-call-key {
+  font-size: 0.5625rem; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.conv-call-args {
+  margin: 0; font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.6875rem; color: hsl(var(--muted-foreground));
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8rem; overflow: auto;
+}
+
+.conv-row .conv-toggle { min-width: 3.5rem; }
+
+@media (max-width: 768px) {
+  #convModal .dialog-content { height: 94vh; max-height: 94vh; }
+  .conv-pre { max-height: 16rem; font-size: 0.8125rem; }
+  .conv-audit-grid { grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr)); }
+  #convModal .conv-scroll { padding: 0.375rem; }
+  .conv-msgs-head { gap: 0.4rem; }
+}
