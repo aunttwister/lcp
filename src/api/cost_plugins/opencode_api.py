@@ -564,6 +564,17 @@ MICRO_CENTS = 1e-8  # console money unit → USD (fixed-point, matches _BALANCE_
 # same ``wrk_...`` id that appears in console URLs — but it must be sent.
 ORG_HEADER = "x-org-id"
 
+# Member-budget routes.  v2 is the policy-backed line: identical request body
+# (``{"budget_dollars": n}``), identical response fields and money units, plus
+# ``additional_budget_rules``.  The vendor documents HTTP 409 for budgets not
+# yet converted to policies ("unconverted legacy budgets"), and v1 keeps
+# working through the transition — so v1 stays as the fallback rather than
+# being deleted.  Verified live 2026-10-11: both paths answer 200 to the same
+# ``all`` service key; v2 with a console *session* token is 403 (service-key
+# surface, like v1), and /api/v2/budget-policies also exists on the key.
+BUDGET_MEMBERS_PATH_V2 = "/v2/budgets/members"
+BUDGET_MEMBERS_PATH_V1 = "/v1/budgets/members"
+
 
 class ConsoleApiError(RuntimeError):
     """Console API returned a non-200 status."""
@@ -810,24 +821,69 @@ def _seconds_until(iso_stamp) -> Optional[int]:
     return max(0, int((when - datetime.now(timezone.utc)).total_seconds()))
 
 
-def fetch_budget_members(token: str) -> list[dict]:
-    """Plan/budget rows — ``GET /api/v1/budgets/members``.
+def fetch_budget_members(token: str, version: str = "v2") -> list[dict]:
+    """Plan/budget rows — ``GET /api/v2/budgets/members`` (v1 fallback).
 
-    Observed shape (2026-09-26, service key with permissions ``all``)::
+    Observed shape (2026-09-26 service key, 2026-10-11 v2) — v1::
 
         [{"user_id": "acc_…", "email": "…", "limit_micro_cents": null,
           "spent_micro_cents": "0", "exceeded": false,
           "resets_at": "2026-10-01T00:00:00.000Z", "source": null}]
 
-    Note the versioned ``/v1`` prefix: this route is not on the ts-rest ``/api``
-    surface the other console reads use.  Returns ``[]`` on an unfamiliar shape
-    so the caller degrades instead of raising into the refresh loop.
+    v2 returns the *same* keys and money units plus
+    ``additional_budget_rules: []`` (shared / model-specific policy rules).
+
+    Note the versioned prefix: these routes are not on the ts-rest ``/api``
+    surface the other console reads use.  v2 answers HTTP 409 for a budget the
+    vendor has not yet converted to a policy ("unconverted legacy budgets"), so
+    a 409 falls back to v1 rather than blanking the card — v1 stays supported
+    through the transition.  Any other status propagates.  Returns ``[]`` on an
+    unfamiliar shape so the caller degrades instead of raising into the refresh
+    loop.
     """
-    data = _console_get("/v1/budgets/members", token)
+    path = BUDGET_MEMBERS_PATH_V2 if version == "v2" else BUDGET_MEMBERS_PATH_V1
+    try:
+        data = _console_get(path, token)
+    except ConsoleApiError as exc:
+        if version == "v2" and exc.status == 409:
+            logger.info("opencode_budget_v2_unconverted_fallback_to_v1",
+                        status=exc.status, tag=exc.tag)
+            data = _console_get(BUDGET_MEMBERS_PATH_V1, token)
+        else:
+            raise
     if isinstance(data, dict):
         items = data.get("items")
         return items if isinstance(items, list) else []
     return data if isinstance(data, list) else []
+
+
+def budget_rules(members: Optional[list[dict]]) -> list[dict]:
+    """``additional_budget_rules`` from v2 rows — configuration, not spend.
+
+    v2 lists shared and model-specific policy rules separately from the scalar
+    per-member cap.  The vendor is explicit that they are configuration, not
+    spend or admission status, so they are surfaced as descriptors only and
+    never turned into a percentage bar (a percentage needs a measured spend
+    against that rule, which this payload does not carry).
+    """
+    rules: list[dict] = []
+    for row in members or []:
+        if not isinstance(row, dict):
+            continue
+        for rule in row.get("additional_budget_rules") or []:
+            if not isinstance(rule, dict):
+                continue
+            limit = micro_cents_to_usd(rule.get("limit_micro_cents"))
+            rules.append({
+                "policy_id": rule.get("policy_id"),
+                "rule_id": rule.get("rule_id"),
+                "limit_usd": limit,
+                "audience": rule.get("audience"),
+                "scope": rule.get("scope"),          # each | combined
+                "per": rule.get("per"),              # set | model
+                "selector": rule.get("selector"),
+            })
+    return rules
 
 
 def plan_windows_from_go(usage: dict) -> dict:

@@ -472,6 +472,64 @@ class TestOpenCodeFetchSubscription:
             result = plugin.fetch_subscription()
         assert result["rolling_pct"] == 17.0
 
+    # ── v2 member-budget rules ─────────────────────────────────────────────
+
+    def test_budget_read_prefers_the_service_key(self, plugin):
+        """``/api/v{1,2}/budgets/members`` is a service-key surface.
+
+        A console session token is rejected there (live: 403 for v2 + x-org-id,
+        200 for the ``all`` service key), so the read must use the key when one
+        is stored — otherwise this branch can never return rows.
+        """
+        with self._with_session(), patch.object(plugin, "_token",
+                                                return_value="oc_sk_key"):
+            with patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
+                       return_value=[]) as fetch:
+                plugin.fetch_subscription()
+        fetch.assert_called_once_with("oc_sk_key")
+
+    def test_v2_rules_ride_along_with_the_monthly_window(self, plugin):
+        """``additional_budget_rules`` is config: descriptors, never a bar."""
+        from datetime import datetime, timedelta, timezone
+        resets = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+        members = [{
+            "limit_micro_cents": 1_000_000_000,               # $10
+            "spent_micro_cents": 250_000_000,                 # $2.50
+            "resets_at": resets,
+            "additional_budget_rules": [{
+                "policy_id": "pol_1", "rule_id": "rul_1",
+                "limit_micro_cents": 500_000_000,             # $5
+                "audience": "shared", "scope": "each", "per": "model",
+                "selector": "glm-5.3-flash",
+            }],
+        }]
+        with self._with_session():
+            with patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
+                       return_value=members):
+                result = plugin.fetch_subscription()
+        assert result["monthly_pct"] == 25.0                    # unchanged bar
+        assert result["budget_rules"] == [{
+            "policy_id": "pol_1", "rule_id": "rul_1", "limit_usd": 5.0,
+            "audience": "shared", "scope": "each", "per": "model",
+            "selector": "glm-5.3-flash",
+        }]
+
+    def test_rules_do_not_invent_a_window(self, plugin):
+        """Rules alone carry no measured spend → no percentage is derived."""
+        members = [{"limit_micro_cents": None, "spent_micro_cents": "0",
+                    "additional_budget_rules": [{"rule_id": "rul_1",
+                                                 "limit_micro_cents": 500_000_000}]}]
+        summary = {"totalRequests": "5", "totalCostMicroCents": "1000000"}
+        with self._with_session(), self._with_org():
+            with patch("src.api.cost_plugins.opencode_api.fetch_budget_members",
+                       return_value=members):
+                with patch("src.api.cost_plugins.opencode_api.fetch_usage_summary",
+                           return_value=summary):
+                    result = plugin.fetch_subscription()
+        assert "monthly_pct" not in result
+        assert result["total_requests"] == 5
+        assert result["budget_rules"][0]["limit_usd"] == 5.0
+
 
     # ── credit_status ─────────────────────────────────────────────────────
 
