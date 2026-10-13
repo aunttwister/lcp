@@ -1,15 +1,19 @@
-"""L2's intent margin gate — R6, the layer the plan calls the highest-value change.
+"""L2's intent margin gate — R6, RE-AIMED per §26.4 (M4).
 
-The plan's spec (README, "The deterministic router (R6)"):
+The original M3 gate sat in the provider-ranking path and returned None on a
+thin margin — discarding the provider ranking. §26.2 measured that 97% of
+gated reorders were pure provider swaps worth ~$390/month + 10.3 h latency on
+l2: the gate was a confidence test applied to a decision the confidence does
+not inform. It now lives in `_choose_target_model`, where it vetoes a MODEL
+change only — the provider ranking always continues (§26.4).
 
-    L2  PER-PROFILE INTENT   score ONLY against this profile's declared intents (R5)
-                             gate: (top1 - top2) < intent_margin_gate -> DO NOT REORDER
+So the re-aimed invariant 3 is: *margin < gate ⇒ the winner's MODEL is the
+static chain head's model, always*. A provider swap under a fired gate is not
+a violation; a model change is.
 
-and invariant 3: *margin < gate ⇒ output == static chain head, always*.
-
-`select_step` returns None to mean "leave the static chain alone", so the invariant
-is "the gate fired ⇒ None". These tests pin the gate itself, the two off switches
-(absent field, gate 0.0), and the layer order (an explicit rule outranks the gate).
+These tests pin the gate itself, the two off switches (absent field, gate
+0.0), the layer order (an explicit rule outranks the gate), and the
+re-aimed veto.
 """
 import os
 import tempfile
@@ -20,7 +24,7 @@ import src.api.router as router_mod
 from src.api.config import ConfigError, validate_profile_fields
 from src.api.models import Base
 from src.api.models import get_engine
-from src.api.router import CapabilityRouter, ClassifyResult
+from src.api.router import CapabilityRouter, ClassifyResult, logical_model_name
 
 
 @pytest.fixture
@@ -149,14 +153,17 @@ def test_a_thin_margin_does_not_reorder(routed):
 
 
 def test_a_thin_margin_is_recorded_so_it_can_be_replayed(routed):
+    """The veto is recorded as an L4 row: layer L2, rule intent_margin_gate."""
     cfg = Cfg({"p": {"intent_margin_gate": 0.1}})
     r = routed([("unit_tests", 0.62), ("planning", 0.60)], {"p": {"intent_margin_gate": 0.1}})
     r.select_step([{"role": "user", "content": "hi"}], chain=CHAIN, profile="p", config=cfg)
     d = r._decisions[-1]
-    assert d["action"] == "margin_gate"
-    assert d["score"] == pytest.approx(0.02, abs=1e-3)   # score carries the margin
-    assert d["model"] == CHAIN[0]["model"]               # the head that stood
-    assert "margin 0.020 < gate 0.1" in d["note"]        # the gate, which has no column
+    l4 = d["l4"]
+    assert l4["layer"] == "L2"
+    assert l4["rule_id"] == "intent_margin_gate"
+    assert l4["margin"] == pytest.approx(0.02, abs=1e-3)
+    assert l4["to"]["model"] == CHAIN[0]["model"]          # the head model that stood
+    assert "margin 0.020 < gate 0.1" in d["note"]          # the gate, in the note too
     assert "unit_tests vs planning" in d["note"]
 
 
@@ -204,13 +211,15 @@ def test_an_explicit_rule_outranks_the_gate(routed, registry_db):
     assert all(d["action"] != "margin_gate" for d in r._decisions)
 
 
-# ── invariant 3, as a property ────────────────────────────────────────────────
+# ── invariant 3, as a property (re-aimed: the gate vetoes a MODEL change) ─────
 
-def test_invariant_3_margin_below_gate_always_keeps_the_static_chain(routed):
-    """*margin < gate ⇒ output == static chain head, always* — swept, not sampled.
+def test_invariant_3_margin_below_gate_never_changes_the_model(routed):
+    """*margin < gate ⇒ winner model == static chain head model, always* — swept.
 
-    Chain order is the observable: every "do not reorder" must leave the head the
-    caller passed in, since the caller applies whatever `select_step` returns.
+    The gate no longer forces `select_step` to None (§26.4: that discarded the
+    provider ranking). It pins the MODEL to the static chain head's; the
+    provider ranking continues and may swap providers — that is the point.
+    A MODEL change under a fired gate would be the violation.
     """
     thin = []
     for i in range(1, 20):
@@ -224,17 +233,22 @@ def test_invariant_3_margin_below_gate_always_keeps_the_static_chain(routed):
         cfg = Cfg({"p": {"intent_margin_gate": gate}})
         r = routed([("unit_tests", top1), ("planning", top2)],
                    {"p": {"intent_margin_gate": gate}})
-        head_before = (CHAIN[0]["provider"], CHAIN[0]["model"])
+        head_model = CHAIN[0]["model"]
         out = r.select_step([{"role": "user", "content": "hi"}], chain=CHAIN,
                             profile="p", config=cfg)
-        assert out is None, f"reordered at margin {top1 - top2} < gate {gate}"
-        assert (CHAIN[0]["provider"], CHAIN[0]["model"]) == head_before
-        assert r._decisions[-1]["action"] == "margin_gate"
+        # Whatever came back (None == static chain, or a reordered copy),
+        # the head MODEL is the static chain head's model.
+        winner_model = CHAIN[0]["model"] if out is None else out[0]["model"]
+        assert logical_model_name(winner_model) == logical_model_name(head_model), \
+            f"model changed at margin {top1 - top2} < gate {gate}"
+        # And the veto is on the record, every time.
+        d = r._decisions[-1]
+        assert d["l4"]["layer"] == "L2" and d["l4"]["rule_id"] == "intent_margin_gate"
 
 
-def test_invariant_3_is_not_vacuous(routed):
-    """Negative control: the same sweep above the gate must NOT always keep the chain."""
-    fired = 0
+def test_invariant_3_is_not_vacuous(routed, registry_db):
+    """Negative control: wide margins must NOT be gated (no L2 veto)."""
+    gated = 0
     for i in range(1, 20):
         margin = i / 100
         gate = 0.05
@@ -242,11 +256,13 @@ def test_invariant_3_is_not_vacuous(routed):
             cfg = Cfg({"p": {"intent_margin_gate": gate}})
             r = routed([("unit_tests", 0.5 + margin), ("planning", 0.5)],
                        {"p": {"intent_margin_gate": gate}})
+            r.db_path = registry_db
             r.select_step([{"role": "user", "content": "hi"}], chain=CHAIN,
                           profile="p", config=cfg)
-            if all(d["action"] != "margin_gate" for d in r._decisions):
-                fired += 1
-    assert fired == 14, f"expected the 14 wide-margin cases to pass the gate, got {fired}"
+            if any(d["l4"] and d["l4"]["rule_id"] == "intent_margin_gate"
+                   for d in r._decisions if d.get("l4")):
+                gated += 1
+    assert gated == 0, f"{gated} wide-margin cases were wrongly vetoed"
 
 
 # ── the API the modal writes through ──────────────────────────────────────────
