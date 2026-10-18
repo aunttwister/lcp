@@ -140,3 +140,45 @@ def test_embedder_from_config_reads_the_backend_key():
     with patch.object(emb, "embedder_from_config", emb.embedder_from_config):
         m = emb.embedder_from_config(cfg)
     assert m.requested_backend == emb.BACKEND_TORCH
+
+
+# ── baked-cache resolution ──────────────────────────────────────────────────
+
+def test_fastembed_uses_the_baked_cache_when_no_cache_dir_was_given(tmp_path):
+    """A bare EmbeddingModel() must still find the baked model.
+
+    Regression: cache_dir defaulted to None, so the container ignored
+    /app/models/embedding, tried the network on first use, and offline fell
+    through to a torch fallback that the image no longer contains.
+    """
+    seen = {}
+    mod = _fake_fastembed()
+
+    class Recording(mod.TextEmbedding):
+        def __init__(self, model_name, threads=None, cache_dir=None):
+            seen["cache_dir"] = cache_dir
+            super().__init__(model_name, threads=threads, cache_dir=cache_dir)
+
+    mod.TextEmbedding = Recording
+    with patch.dict(sys.modules, {"fastembed": mod}), \
+         patch.object(emb, "memory_models", lambda: str(tmp_path), create=True):
+        # memory_models is imported inside the function; patch the source module.
+        with patch("src.api.memory.memory_models", lambda: str(tmp_path)):
+            emb.EmbeddingModel()._load()
+    assert seen["cache_dir"] == str(tmp_path / "fastembed")
+
+
+def test_an_explicit_cache_dir_wins_over_the_baked_one(tmp_path):
+    seen = {}
+    mod = _fake_fastembed()
+
+    class Recording(mod.TextEmbedding):
+        def __init__(self, model_name, threads=None, cache_dir=None):
+            seen["cache_dir"] = cache_dir
+            super().__init__(model_name, threads=threads, cache_dir=cache_dir)
+
+    mod.TextEmbedding = Recording
+    explicit = tmp_path / "explicit"
+    with patch.dict(sys.modules, {"fastembed": mod}):
+        emb.EmbeddingModel(cache_dir=str(explicit))._load()
+    assert seen["cache_dir"] == str(explicit / "fastembed")

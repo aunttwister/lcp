@@ -106,12 +106,26 @@ class EmbeddingModel:
     def _load_fastembed(self):
         from fastembed import TextEmbedding
 
+        # A bare EmbeddingModel() has no cache_dir, but the image bakes the
+        # model at /app/models/embedding. Without this the container goes to
+        # the network on first use and, offline, falls through to a torch
+        # fallback that no longer exists in the image.
+        cache_dir = self.cache_dir
+        if not cache_dir:
+            try:
+                from . import memory_models
+                cache_dir = memory_models()
+            except Exception:  # noqa: BLE001 — no baked cache is not fatal
+                cache_dir = ""
         kwargs: dict = {}
-        if self.cache_dir:
-            # fastembed keeps its own layout under the same persistent dir.
-            kwargs["cache_dir"] = os.path.join(self.cache_dir, "fastembed")
-        # Leave a core for the gateway's own work.
-        threads = max(1, (os.cpu_count() or 4) - 1)
+        if cache_dir:
+            # fastembed keeps its own layout under the shared models dir.
+            kwargs["cache_dir"] = os.path.join(cache_dir, "fastembed")
+        # Leave a core for the gateway's own work, and cap it: ONNX Runtime
+        # sets thread affinity per worker, and on a container whose cpuset is
+        # narrower than the reported cpu_count that logs an affinity error for
+        # every thread it cannot pin.
+        threads = max(1, min((os.cpu_count() or 4) - 1, 8))
         try:
             model = TextEmbedding(model_name=self.model_name,
                                   threads=threads, **kwargs)
