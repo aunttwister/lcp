@@ -61,7 +61,7 @@ SECTION_TAB = {
 # written on completion. It sits with the operational views, before the
 # "what happened" log realm.
 NAV = ["/profiles", "/models", "/conversations", "/activity", "/usage", "/alerts",
-       "/setup", "/work/tasks", "/work/fleet"]
+       "/setup", "/work/tasks"]
 
 
 @pytest.fixture

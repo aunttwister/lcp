@@ -420,29 +420,6 @@ def render_work_tasks_page(config, engine=None, params=None) -> str:
                                       ("Assessments", None) if tab == "assessments" else ("All tasks", None)))
 
 
-def render_work_fleet_page(config, engine=None) -> str:
-    """Render the Work > Fleet page (Jinja2).
-
-    Reads LCP's own provider/profile APIs, so the chain shown is the chain LCP
-    will actually use -- not a second copy that can drift from it.
-    """
-    from .render import render_page
-    from ..api import work_fleet
-    try:
-        view = work_fleet.fleet_view()
-    except Exception as e:  # never blank the page on a data error
-        view = {
-            "available": False,
-            "empty": {"reason": "could not read the fleet",
-                      "hint": "%s: %s" % (type(e).__name__, e)},
-            "summary": None, "flaky": [], "profiles": [],
-            "failover_moments": [], "failover_stats": None, "routing": None,
-        }
-    return render_page("pages/work_fleet.html", config, engine,
-                       active_page="work_fleet", view=view,
-                       crumbs=_crumbs(("Fleet", None)))
-
-
 def _work_cron_view(params=None) -> dict:
     """The Cron tab's data: the host snapshot, recent ops, and the resolved sources.
 

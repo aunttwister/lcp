@@ -928,8 +928,6 @@ def _build_routes() -> RouteTable:
     # ── Work section (work layer merged into LCP as a module) ──
     t.get("page.work.tasks", exact("/work/tasks"),
           lambda h, p: h._serve_work_tasks_page())
-    t.get("page.work.fleet", exact("/work/fleet"),
-          lambda h, p: h._serve_work_fleet_page())
     t.get("page.work.cron", exact("/work/cron"),
           lambda h, p: h._serve_work_cron_page())
     t.get("page.work.config", exact("/work/config"),
@@ -1001,8 +999,6 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_work_tasks_api())
     t.get("api.work.tasks.detail", exact("/api/work/tasks/detail"),
           lambda h, p: h._serve_work_tasks_detail_api())
-    t.get("api.work.fleet", exact("/api/work/fleet"),
-          lambda h, p: h._serve_work_fleet_api())
     t.get("api.work.cron", exact("/api/work/cron"),
           lambda h, p: h._serve_work_cron_api())
     t.get("api.work.cron.ops", exact("/api/work/cron/ops"),
