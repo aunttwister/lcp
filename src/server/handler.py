@@ -50,7 +50,6 @@ from .endpoints import (
     PluginEndpoints,
     UsageEndpoints,
     DashboardEndpoints,
-    SetupEndpoints,
     SettingsEndpoints,
     MemoryEndpoints,
     WorkEndpoints,
@@ -128,7 +127,6 @@ class LCPHandler(
     PluginEndpoints,
     UsageEndpoints,
     DashboardEndpoints,
-    SetupEndpoints,
     SettingsEndpoints,
     MemoryEndpoints,
     WorkEndpoints,
@@ -767,11 +765,6 @@ class LCPHandler(
         elif self.path.startswith("/api/models/registry/") and len(self.path.split("/")) == 5:
             logical = self.path.split("/")[4]
             self._serve_registry_delete_api(logical)
-        elif self.path.startswith("/api/setup/") and len(self.path.split("/")) == 5:
-            # DELETE /api/setup/{kind}/{name}
-            kind = self.path.split("/")[3]
-            name = self.path.split("/")[4]
-            self._serve_setup_remove_api(kind, name)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -887,8 +880,7 @@ def _build_routes() -> RouteTable:
     ORDER IS SIGNIFICANT — the first matching rule wins, which is the contract
     the previous if/elif chain had. Specific paths must be registered before
     generic ones that would also match them (e.g. ``/api/providers/presets``
-    before ``/api/providers``; ``/api/setup`` before ``/api/setup/progress`` is
-    safe because both are exact matches).
+    before ``/api/providers``).
 
     Rule names are used by ``RouteTable.describe()`` for the routing inventory
     and are asserted against in tests.
@@ -923,8 +915,6 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_profile_avatar(h._path_part(h.path, 3)))
     t.get("page.models", exact("/models"),
           lambda h, p: h._serve_models_page())
-    t.get("page.setup", exact("/setup"),
-          lambda h, p: h._serve_setup_page())
     # ── Work section (work layer merged into LCP as a module) ──
     t.get("page.work.cron", exact("/work/cron"),
           lambda h, p: h._serve_work_cron_page())
@@ -982,14 +972,11 @@ def _build_routes() -> RouteTable:
     t.get("metrics", exact("/metrics"), lambda h, p: h._serve_metrics())
     t.get("export", exact("/export"), lambda h, p: h._serve_export())
 
-    # ── settings / setup / routing ──
+    # ── settings / routing ──
     t.get("api.settings", exact("/api/settings"),
           lambda h, p: h._serve_settings_api())
     t.get("api.routing.status", exact("/api/routing/status"),
           lambda h, p: h._serve_routing_status_api())
-    t.get("api.setup", exact("/api/setup"), lambda h, p: h._serve_setup_api())
-    t.get("api.setup.progress", exact("/api/setup/progress"),
-          lambda h, p: h._serve_setup_progress_api())
     # ── Work layer ──
     t.get("api.work.cron", exact("/api/work/cron"),
           lambda h, p: h._serve_work_cron_api())
@@ -1121,13 +1108,6 @@ def _build_routes() -> RouteTable:
 
     t.post("api.budgets", exact("/api/budgets"),
            lambda h, p: h._serve_budget_create())
-
-    t.post("api.setup.skip", exact("/api/setup/skip"),
-           lambda h, p: h._serve_setup_skip_api())
-    t.post("api.setup.install",
-           regex(r"^/api/setup/install/(?P<kind>[^/]+)/(?P<name>[^/]+)$"),
-           lambda h, p: h._serve_setup_install_api(
-               h._path_part(h.path, 4), h._path_part(h.path, 5)))
 
     t.post("api.settings.cache.refresh", exact("/api/settings/cache/refresh"),
            lambda h, p: h._serve_settings_refresh_api())

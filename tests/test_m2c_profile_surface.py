@@ -305,7 +305,6 @@ def test_every_level_two_page_has_a_breadcrumb(cfg, engine):
         ("/activity", pages.render_activity_page(cfg, engine, {}, {"Host": "t:8734"})),
         ("/usage", pages.render_usage_page(cfg, engine, {})),
         ("/alerts", pages.render_alerts_page(cfg, engine)),
-        ("/setup", pages.render_setup_page(cfg, engine)),
     ):
         assert '<nav class="breadcrumbs"' in html, label
         assert 'class="crumb-current"' in html, label

@@ -49,12 +49,6 @@ class TestPageRenderers:
         html = render_models_page(None)
         assert isinstance(html, str) and html
 
-    def test_render_setup_page(self):
-        from src.ui.pages import render_setup_page
-        html = render_setup_page(None)
-        assert isinstance(html, str) and html
-
-
 # ── ui.render: credential-store branch (render.py:118-119) ───────────────────
 
 class TestRenderPageCredentialLookup:

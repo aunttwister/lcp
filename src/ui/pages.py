@@ -348,13 +348,6 @@ def render_models_page(config, engine=None, params=None) -> str:
                        params=dict(params or {}))
 
 
-def render_setup_page(config, engine=None) -> str:
-    """Render the first-run setup wizard page (Jinja2)."""
-    from .render import render_page
-    return render_page("pages/setup.html", config, engine, active_page="setup",
-                       crumbs=_crumbs(("Setup", None)))
-
-
 def _work_cron_view(params=None) -> dict:
     """The Cron tab's data: the host snapshot, recent ops, and the resolved sources.
 
