@@ -387,15 +387,23 @@ class TestRouteCoverage:
     """
 
     def test_live_route_table_is_fully_loaded(self, secret, temp_dir, monkeypatch):
-        """Sanity: if the table came back empty the coverage assertion below
-        would pass vacuously, which is the classic way this kind of test rots."""
+        """Sanity: if the table came back empty the coverage assertions below
+        would pass vacuously, which is the classic way this kind of test rots.
+
+        Deliberately does NOT assert exact counts. The slim-surface refactor
+        (CUR-222) removes 16 rules, taking this table from 108 to 92 and POST
+        from 30 to 29 — an earlier version of this test asserted ``POST >= 30``
+        and would have failed the refactor for doing exactly what it was
+        chartered to do. The guard's job is to protect the SECURITY property,
+        not to pin the size of the surface. Keep this threshold low enough that
+        deleting routes never trips it; if the table ever gets near it, the
+        concern is a truncated table, not a smaller one."""
         monkeypatch.chdir(temp_dir)
         from src.server.handler import LCPHandler
         LCPHandler._routes = None
         table = LCPHandler._route_table()
-        assert table.count() >= 80, f"route table looks truncated: {table.count()}"
-        assert table.count("GET") >= 40
-        assert table.count("POST") >= 30
+        assert table.count() >= 20, f"route table looks truncated: {table.count()}"
+        assert table.count("GET") >= 10
 
     def test_no_admin_rule_classifies_as_public_by_accident(
             self, secret, temp_dir, monkeypatch):
@@ -469,6 +477,7 @@ class TestRouteCoverage:
         from src.server.handler import LCPHandler
         LCPHandler._routes = None
         table = LCPHandler._route_table()
+        # 1 today (PUT /api/work/sources), 0 after the slim cut. Never more.
         assert table.count("PUT") <= 1
         assert table.count("DELETE") == 0
 
