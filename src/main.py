@@ -111,6 +111,17 @@ def main():
     logger.info("startup_begin", version=__import__("src").__version__,
                 port=port, log_level=os.environ.get("LOG_LEVEL", "INFO"))
 
+    # ── Admin auth: refuse to start rather than come up wide open ────────
+    # Deliberately before the DB opens: a misconfigured deployment should fail
+    # in a second with a clear message, not after a 1 GB database initialises.
+    from .api.admin_auth import AdminAuthError, assert_configured
+    try:
+        assert_configured()
+    except AdminAuthError as exc:
+        logger.error("startup_refused", reason="admin_auth_unconfigured",
+                     detail=str(exc))
+        raise SystemExit(str(exc)) from exc
+
     # ── Database (must exist before the DB-backed config can be read) ────
     assert db_path is not None
     engine = get_engine(db_path)
