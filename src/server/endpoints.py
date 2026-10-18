@@ -3566,17 +3566,6 @@ class WorkEndpoints:
     end_headers: Any
     wfile: Any
 
-    def _serve_work_tasks_page(self):
-        """Server-rendered Work > Tasks page (supports ?states/q/tag/per/page)."""
-        from ..ui.pages import render_work_tasks_page
-        from urllib.parse import parse_qs, urlsplit
-        qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
-        html = render_work_tasks_page(self.config, self.engine, qs)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(html.encode("utf-8"))
-
     def _tasks_root_for(self, profile: Any) -> str:
         """Resolved task tree for ?profile=, or "" to mean "use the default"."""
         from ..api import work_sources
@@ -3584,52 +3573,6 @@ class WorkEndpoints:
             return work_sources.tasks_root_for(str(profile or "").strip().lower())
         except Exception:  # noqa: BLE001
             return ""
-
-    def _serve_work_tasks_api(self):
-        """GET /api/work/tasks — the Tasks view as JSON (filters supported,
-        faint lite=1 strips the heavy per-row PLAN/RESULTS payloads)."""
-        from ..api import work_tasks
-        from urllib.parse import parse_qs, urlsplit
-
-        try:
-            qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
-            # ?profile= scopes the tree (M2c). Without it the per-profile Tasks tab
-            # would render its own heading over the default profile's rows.
-            root = self._tasks_root_for(qs.get("profile"))
-            if root:
-                with work_tasks.use_root(root):
-                    self._send_json(work_tasks.tasks_view(qs))
-            else:
-                self._send_json(work_tasks.tasks_view(qs))
-        except Exception as e:
-            self._send_json({"error": str(e)}, 500)
-
-    def _serve_work_tasks_detail_api(self):
-        """GET /api/work/tasks/detail?task=<state>/<slug> — one task's heavy
-        payload (PLAN.md, RESULTS.md, STATE-SUMMARY, SESSION-FACTS, artifacts)
-        fetched lazily when its row is expanded."""
-        from ..api import work_tasks
-        from urllib.parse import parse_qs, urlsplit
-
-        try:
-            qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
-            key = qs.get("task") or ""
-            if not key:
-                self._send_json({"error": "task key required"}, 400)
-                return
-            # A task's detail must be read from the same tree its row came from.
-            root = self._tasks_root_for(qs.get("profile"))
-            if root:
-                with work_tasks.use_root(root):
-                    self._send_json(work_tasks.task_detail(key))
-            else:
-                self._send_json(work_tasks.task_detail(key))
-        except ValueError as e:
-            self._send_json({"error": str(e)}, 400)
-        except FileNotFoundError as e:
-            self._send_json({"error": str(e)}, 404)
-        except Exception as e:
-            self._send_json({"error": str(e)}, 500)
 
     def _serve_work_cron_page(self):
         """Legacy /work/cron — redirects to the Cron tab of Profiles (M2b)."""
@@ -3730,17 +3673,3 @@ class WorkEndpoints:
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
-    def _serve_work_status_api(self):
-        """GET /api/work/status — the work layer's own health.
-
-        Distinct from a view's payload: this reports which read-only sources are
-        reachable and therefore which views can render. It exists so a missing
-        bind mount is diagnosable from the UI instead of looking like an empty
-        table.
-        """
-        from ..api import workspace
-
-        try:
-            self._send_json(workspace.workspace_status())
-        except Exception as e:
-            self._send_json({"error": str(e)}, 500)

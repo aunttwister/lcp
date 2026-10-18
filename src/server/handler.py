@@ -926,8 +926,6 @@ def _build_routes() -> RouteTable:
     t.get("page.setup", exact("/setup"),
           lambda h, p: h._serve_setup_page())
     # ── Work section (work layer merged into LCP as a module) ──
-    t.get("page.work.tasks", exact("/work/tasks"),
-          lambda h, p: h._serve_work_tasks_page())
     t.get("page.work.cron", exact("/work/cron"),
           lambda h, p: h._serve_work_cron_page())
     t.get("page.work.config", exact("/work/config"),
@@ -993,10 +991,6 @@ def _build_routes() -> RouteTable:
     t.get("api.setup.progress", exact("/api/setup/progress"),
           lambda h, p: h._serve_setup_progress_api())
     # ── Work layer ──
-    t.get("api.work.tasks", exact("/api/work/tasks"),
-          lambda h, p: h._serve_work_tasks_api())
-    t.get("api.work.tasks.detail", exact("/api/work/tasks/detail"),
-          lambda h, p: h._serve_work_tasks_detail_api())
     t.get("api.work.cron", exact("/api/work/cron"),
           lambda h, p: h._serve_work_cron_api())
     t.get("api.work.cron.ops", exact("/api/work/cron/ops"),
@@ -1011,8 +1005,6 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_work_requests_api())
     t.get("api.work.provider-decisions", exact("/api/work/provider-decisions"),
           lambda h, p: h._serve_work_provider_decisions_api())
-    t.get("api.work.status", exact("/api/work/status"),
-          lambda h, p: h._serve_work_status_api())
 
     # ── cost / usage / logs ──
     t.get("api.daily-costs", exact("/api/daily-costs"),
