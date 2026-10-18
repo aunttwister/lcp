@@ -1007,10 +1007,6 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_work_sources_get())
     t.put("api.work.sources", exact("/api/work/sources"),
           lambda h, p: h._serve_work_sources_put())
-    t.get("api.work.conversations", exact("/api/work/conversations"),
-          lambda h, p: h._serve_work_conversations_api())
-    t.get("api.work.conversations.detail", exact("/api/work/conversations/detail"),
-          lambda h, p: h._serve_work_conversations_detail_api())
     t.get("api.work.requests", exact("/api/work/requests"),
           lambda h, p: h._serve_work_requests_api())
     t.get("api.work.provider-decisions", exact("/api/work/provider-decisions"),

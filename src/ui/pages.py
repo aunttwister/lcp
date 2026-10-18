@@ -447,48 +447,6 @@ def _work_config_view() -> dict:
         return {"sources": None}
 
 
-def render_work_cron_page(config, engine=None, params=None) -> str:
-    """Legacy /work/cron — now the Cron tab of Profiles (M2b)."""
-    p = dict(params or {})
-    p["tab"] = "cron"
-    return render_profiles_page(config, engine, p)
-
-
-def render_work_config_page(config, engine=None, params=None) -> str:
-    """Legacy /work/config — now the Config tab of Profiles (M2b)."""
-    p = dict(params or {})
-    p["tab"] = "config"
-    return render_profiles_page(config, engine, p)
-
-
-def render_work_conversations_page(config, engine=None, params=None) -> str:
-    """Render the Work > Conversations page (Jinja2).
-
-    The unified conversation log: every conversation groups its request rows
-    and the router's provider-decision rows by conversation_id, newest first,
-    with a deterministic summary (first user turn + counts). Expanding a
-    conversation shows the chronological sequence of events.
-    """
-    from .render import render_page
-    from ..api import work_conversations
-    try:
-        view = work_conversations.conversations_view(params or {})
-        for c in view.get("conversations", []):
-            det = work_conversations.conversation_detail(c["id"], limit=50)
-            c["detail"] = det.get("events", [])
-            c["detail_truncated"] = det.get("truncated", False)
-    except Exception as e:
-        view = {
-            "available": False,
-            "error": "%s: %s" % (type(e).__name__, e),
-            "conversations": [], "total": 0,
-            "filter": {"per": "20", "page": 1, "pages": 1,
-                       "profile": "", "profiles": []},
-        }
-    return render_page("pages/work_conversations.html", config, engine,
-                       active_page="work_conversations", view=view)
-
-
 def _profile_config_payload(config, name, pcfg) -> dict:
     """The profile's declared configuration, as the page init payload carries it.
 

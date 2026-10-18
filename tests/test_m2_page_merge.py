@@ -421,15 +421,26 @@ def test_the_retired_templates_are_really_gone():
         assert not os.path.exists(os.path.join(TEMPLATES, "pages", gone)), gone
 
 
-def test_the_legacy_work_routes_render_the_profiles_page(cfg, engine):
-    """render_work_cron_page/config_page are aliases onto the Profiles page.
+def test_the_legacy_work_routes_redirect_to_the_profiles_page(cfg, engine):
+    """`/work/cron` and `/work/config` 302 into the Profiles tabs that own them.
 
-    M2c: cron is a per-profile tab, so the cron alias lands on the profile
-    directory (the HTTP route 302s there). Config is still a level-2 tab.
+    M2c: cron and config are per-profile tabs. Before the slim the handlers
+    redirected while two unused render aliases sat behind them; the aliases are
+    gone, so this pins the behaviour that actually ships.
     """
-    from src.ui.pages import render_work_config_page, render_work_cron_page
-    for render, marker, title in ((render_work_cron_page, "profileEditModal", "Profiles — LCP"),
-                                  (render_work_config_page, "sources-form", "Config — LCP")):
-        html = render(cfg, engine, {})
-        assert "<title>%s</title>" % title in html
-        assert 'id="%s"' % marker in html
+    from src.server.handler import LCPHandler
+    for path, want in (("/work/cron", "tab=cron"), ("/work/config", "tab=config")):
+        h = LCPHandler.__new__(LCPHandler)
+        h.path = path
+        h.config = cfg
+        h.engine = engine
+        sent = []
+        h._redirect = lambda location, code=302, sent=sent: sent.append((location, code))
+        if path == "/work/cron":
+            h._serve_work_cron_page()
+        else:
+            h._serve_work_config_page()
+        assert sent, path
+        location, code = sent[0]
+        assert code == 302, (path, code)
+        assert want in location, (path, location)

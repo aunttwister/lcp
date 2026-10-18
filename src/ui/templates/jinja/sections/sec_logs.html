@@ -37,18 +37,6 @@
   <div class="empty"><span class="muted">{{ view.tab_error }}</span></div>
 {% endif %}
 
-{% if view.tab == 'conversations' %}
-  <div class="task-toolbar" id="lg-controls"></div>
-  <div class="work-scroll">
-    <table class="work-table">
-      <thead id="lg-head"></thead>
-      <tbody id="lg-rows"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
-    </table>
-  </div>
-  <div class="task-pager" id="lg-pager"></div>
-  <p class="muted work-rule" id="lg-count"></p>
-{% endif %}
-
 {% if view.tab == 'requests' %}
   <div class="task-toolbar" id="lg-controls"></div>
   <div class="work-scroll">
