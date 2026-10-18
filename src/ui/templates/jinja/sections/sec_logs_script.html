@@ -172,42 +172,6 @@
     });
   }
 
-  if (tab === 'decisions') {
-    var mount = document.getElementById('lg-rows');
-    if (mount) {
-      LCPTable.mount({
-        ids: {head: 'lg-head', body: 'lg-rows', pager: 'lg-pager', count: 'lg-count'},
-        endpoint: '/api/work/decisions',
-        rowsKey: 'ledger.rows',
-        noun: 'decision rows',
-        params: {{ {'view': 'decisions'} | tojson }},
-        empty: 'No decisions recorded.',
-        columns: [
-          {key: 't', label: 'Event time', cell: function (m) {
-            return '<span class="mono">' + esc(ts(m.t)) + '</span>';
-          }},
-          {key: 'computed_at', label: 'Asked at', cell: function (m) {
-            return '<span class="mono muted">' + esc(ts(m.computed_at)) + '</span>';
-          }},
-          {key: 'subject', label: 'Subject', cell: function (m) { return esc(m.subject); }},
-          {key: 'actor', label: 'Actor', cell: function (m) {
-            return '<span class="work-actor">' + esc(m.actor) + '</span>';
-          }},
-          {key: 'kind', label: 'Kind', cell: function (m) {
-            return '<span class="mono">' + esc((m.payload || {}).event_kind || '—') + '</span>';
-          }},
-          {key: 'label', label: 'Label', cell: function (m) {
-            var l = (m.payload || {}).label;
-            return '<span class="work-label work-label-' + esc(l) + '">' + esc(l) + '</span>';
-          }},
-          {key: 'confidence', label: 'Conf', num: true, cell: function (m) {
-            var c = (m.payload || {}).confidence;
-            return c != null ? Number(c).toFixed(3) : '—';
-          }}
-        ]
-      });
-    }
-  }
 })();
 </script>
 {% endif %}

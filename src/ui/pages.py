@@ -204,25 +204,19 @@ def _profile_groups(config, budgets, routing_on=None) -> dict:
 
 
 def _logs_view(params) -> dict:
-    """The logs tab's view dict: which realm, plus its server-side funnel data.
+    """The logs tab's view dict: which realm.
 
-    Only the decisions realm reads data here — its funnel describes the whole
-    ledger, not one page of it; every other realm is a mount of the shared table
-    module (static/js/logtable.js), which fetches its own rows.
+    Every realm is a mount of the shared table module (static/js/logtable.js),
+    which fetches its own rows.
     """
-    from ..api import work as work_api
     params = params or {}
-    # Default moved to 'requests': the conversations realm is retired (it became
-    # the /conversations page), and leaving the default pointed at a realm that no
-    # longer renders would have opened the Logs tab on an error.
+    # Default is 'requests': the conversations realm is retired (it became the
+    # /conversations page), and the board-decisions realm was cut with the work
+    # surface — leaving the default pointed at a realm that no longer renders
+    # would have opened the Logs tab on an error.
     tab = str(params.get("view") or "requests")
     view = {"tab": tab}
-    if tab == "decisions":
-        try:
-            view.update({"decisions": work_api.decisions_view(params=params)})
-        except Exception as e:  # never blank the page on a data error
-            view["error"] = "%s: %s" % (type(e).__name__, e)
-    elif tab == "conversations":
+    if tab == "conversations":
         # Retired: the Conversations page now owns both the live set and the
         # history, so this realm has no data of its own to mount.
         view["tab_error"] = ("Conversations moved to the Conversations page.")
@@ -359,28 +353,6 @@ def render_setup_page(config, engine=None) -> str:
     from .render import render_page
     return render_page("pages/setup.html", config, engine, active_page="setup",
                        crumbs=_crumbs(("Setup", None)))
-
-
-def render_work_decisions_page(config, engine=None) -> str:
-    """Render the Work > Decisions page (Jinja2).
-
-    The Work section is the work layer merged into LCP as a module: the moments
-    the board recorded, attributed to the actor that decided each one.
-    """
-    from .render import render_page
-    from ..api import work as work_api
-    try:
-        view = work_api.decisions_view()
-    except Exception as e:  # never blank the page on a data error
-        view = {
-            "available": False,
-            "empty": {"reason": "could not read the decisions ledger",
-                      "hint": "%s: %s" % (type(e).__name__, e)},
-            "funnel": None,
-            "ledger": None,
-        }
-    return render_page("pages/work_decisions.html", config, engine,
-                       active_page="work_decisions", view=view)
 
 
 def render_work_tasks_page(config, engine=None, params=None) -> str:

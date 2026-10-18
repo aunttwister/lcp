@@ -3566,30 +3566,6 @@ class WorkEndpoints:
     end_headers: Any
     wfile: Any
 
-    def _serve_work_decisions_page(self):
-        """Server-rendered Work > Decisions page."""
-        from ..ui.pages import render_work_decisions_page
-        html = render_work_decisions_page(self.config, self.engine)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(html.encode("utf-8"))
-
-    def _serve_work_decisions_api(self):
-        """GET /api/work/decisions — the Decisions view as JSON.
-
-        ``?per=``/``?page=``/``?sort=`` page the ledger (shared table module);
-        without them the whole ledger is returned, as before.
-        """
-        from ..api import work as work_api
-        from urllib.parse import parse_qs, urlsplit
-
-        try:
-            qs = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
-            self._send_json(work_api.decisions_view(params=qs))
-        except Exception as e:
-            self._send_json({"error": str(e)}, 500)
-
     def _serve_work_tasks_page(self):
         """Server-rendered Work > Tasks page (supports ?states/q/tag/per/page)."""
         from ..ui.pages import render_work_tasks_page

@@ -993,8 +993,6 @@ def _build_routes() -> RouteTable:
     t.get("api.setup.progress", exact("/api/setup/progress"),
           lambda h, p: h._serve_setup_progress_api())
     # ── Work layer ──
-    t.get("api.work.decisions", exact("/api/work/decisions"),
-          lambda h, p: h._serve_work_decisions_api())
     t.get("api.work.tasks", exact("/api/work/tasks"),
           lambda h, p: h._serve_work_tasks_api())
     t.get("api.work.tasks.detail", exact("/api/work/tasks/detail"),
