@@ -2831,7 +2831,7 @@ class DashboardEndpoints:
 
         Writes the shipped ``data/declared_capabilities.json`` into
         ``model_capabilities`` — the instant "give the router capability data to
-        route by" action surfaced by the Setup page when no scores exist yet.
+        route by" action for when no scores exist yet.
         Idempotent; never touches hand-set (``source="manual"``) rows.
         """
         from ..api.seed_capabilities import seed_capabilities
@@ -3345,7 +3345,7 @@ class MemoryEndpoints:
                 "error": {
                     "code": "LCP-5010",
                     "message": "Memory plugin is not installed or disabled — "
-                               "install the Memory (LanceDB) module from the Setup page.",
+                               "rebuild with WITH_MEMORY=1 to enable the Memory (LanceDB) module.",
                 }
             }, 501)
             return None
