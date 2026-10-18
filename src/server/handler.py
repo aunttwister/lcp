@@ -8,7 +8,7 @@ import traceback
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from ..api.logging_config import get_logger
 from ..api.request_pipeline import (
@@ -25,6 +25,8 @@ from ..api.token_verifier import get_token_verifier
 from ..api.key_manager import get_key_manager
 from ..api.alert_manager import get_alert_manager
 from ..api import inflight as in_flight
+from ..api import admin_auth
+from .admin_login import AdminLoginEndpoints
 from ..api import conv_store
 from ..api.runtime import resolve_service
 from ..api.models import Budget, ApiKey, get_session
@@ -132,6 +134,7 @@ class LCPHandler(
     SettingsEndpoints,
     MemoryEndpoints,
     WorkEndpoints,
+    AdminLoginEndpoints,
     BaseHTTPRequestHandler,
 ):
     """HTTP request handler for LCP gateway."""
@@ -265,6 +268,48 @@ class LCPHandler(
         """
         return unquote(path.split("?")[0].split("/")[index]).replace("\u00a0", " ")
 
+    # ── admin authentication ────────────────────────────────────────────
+    def _admin_guard(self) -> bool:
+        """Return True when the request may proceed; otherwise respond and False.
+
+        Called from **every** method entry point. The route table alone is not
+        enough: ``do_PUT`` and ``do_DELETE`` are hand-written if/elif chains that
+        never reach ``dispatch()``, so a guard placed only in the table would
+        leave ``DELETE /api/keys/{id}`` open. Measured 2026-10-18.
+
+        The proxy surface (``/{profile}/...``), ``/health``, ``/metrics``, the
+        static assets and the login routes are public — see
+        ``admin_auth.is_public_path``. The proxy keeps its own API-key auth.
+        """
+        if not hasattr(admin_auth, "is_authenticated"):
+            # Defensive: a partial import must not turn into an open surface.
+            return True
+        if admin_auth.anonymous_admin_allowed():
+            # The documented dev escape hatch. Coherent with the startup gate:
+            # if the operator explicitly opted out of admin auth, the gate is
+            # open by design and the startup log says so loudly.
+            return True
+        path_no_query = (self.path or "/").split("?", 1)[0]
+        profiles = getattr(self.config, "profiles", {}) if self.config else {}
+        if admin_auth.is_public_path(path_no_query, profiles):
+            return True
+        if admin_auth.is_authenticated(self):
+            return True
+
+        client_ip = self.client_address[0] if self.client_address else "-"
+        logger.warning("admin_auth_rejected", path=path_no_query,
+                       method=getattr(self, "command", "?"), client_ip=client_ip)
+        if admin_auth.wants_json(self, path_no_query):
+            self._send_json({"error": {"code": "LCP-4011",
+                                       "message": "admin authentication required"}},
+                            401)
+        else:
+            self.send_response(302)
+            self.send_header("Location", "/admin/login?next=" + quote(path_no_query, safe="/"))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        return False
+
     def do_GET(self):
         """Dispatch a GET through the declarative route table.
 
@@ -274,6 +319,8 @@ class LCPHandler(
         """
         logger.debug("request_start", method="GET", path=self.path,
                      client_ip=self.client_address[0])
+        if not self._admin_guard():
+            return
         if not self._route_table().dispatch(self, "GET"):
             self._send_json({"error": "not found"}, 404)
     def do_POST(self):
@@ -281,7 +328,15 @@ class LCPHandler(
         logger.debug("request_start", method="POST", path=self.path,
                      client_ip=self.client_address[0], profile=profile or "none")
 
-        # ── Admin / UI routes: declarative table (see _build_routes) ─────────
+        # ── Admin / UI routes: guarded, then the declarative table ─────────
+        # The guard runs here rather than after dispatch() because a POST that
+        # matches no admin rule still falls through to the proxy path below,
+        # and that path must keep its API-key auth and stay reachable.
+        path_no_query = (self.path or "/").split("?", 1)[0]
+        if not admin_auth.is_public_path(
+                path_no_query, getattr(self.config, "profiles", {}) or {}):
+            if not self._admin_guard():
+                return
         if self._route_table().dispatch(self, "POST"):
             return
 
@@ -721,6 +776,8 @@ class LCPHandler(
     def do_PUT(self):
         logger.debug("request_start", method="PUT", path=self.path,
                      client_ip=self.client_address[0])
+        if not self._admin_guard():
+            return
         if self.path.startswith("/api/providers/") and len(self.path.split("?")[0].split("/")) == 4:
             provider_name = self._path_part(self.path, 3)
             self._serve_provider_update(provider_name)
@@ -747,6 +804,8 @@ class LCPHandler(
     def do_DELETE(self):
         logger.debug("request_start", method="DELETE", path=self.path,
                      client_ip=self.client_address[0])
+        if not self._admin_guard():
+            return
         if self.path.startswith("/api/providers/") and len(self.path.split("?")[0].split("/")) == 4:
             provider_name = self._path_part(self.path, 3)
             self._serve_provider_delete(provider_name)
@@ -950,6 +1009,16 @@ def _build_routes() -> RouteTable:
             h._serve_dashboard()
 
     t.get("page.dashboard.profile", suffix("/dashboard"), _dashboard)
+
+    # ── admin login / logout (public: these ARE the auth surface) ──
+    t.get("page.admin.login", exact("/admin/login"),
+          lambda h, p: h._serve_admin_login_page())
+    t.post("api.admin.login", exact("/admin/login"),
+           lambda h, p: h._serve_admin_login_post())
+    t.get("page.admin.logout", exact("/admin/logout"),
+          lambda h, p: h._serve_admin_logout())
+    t.post("api.admin.logout", exact("/admin/logout"),
+           lambda h, p: h._serve_admin_logout())
 
     # ── in-progress (JSON for the live section's own refresh loop) ──
     t.get("api.in_progress", exact("/api/in-progress"),

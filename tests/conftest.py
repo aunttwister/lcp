@@ -130,6 +130,32 @@ def mock_handler():
 
 
 @pytest.fixture(autouse=True)
+def _admin_auth_optout(monkeypatch):
+    """Run the existing suite with admin auth explicitly disabled.
+
+    The admin auth work (2026-10-18) put a guard in front of every mutating and
+    admin route, which turned 311 previously-passing tests red — not because the
+    guard is wrong, but because those tests exercise admin endpoints with no
+    credentials. That *is* the vulnerability being fixed, so they cannot simply
+    be pointed at a live token.
+
+    Two options were considered:
+      * mint a real session cookie in each test — invasive, and it would hide the
+        fact that the endpoints are now guarded;
+      * set the documented dev opt-out (``LCP_ALLOW_ANONYMOUS_ADMIN=1``) — the
+        same switch an operator uses for local development, so the tests run
+        through a supported configuration rather than a test-only backdoor.
+
+    This fixture takes the second route. The dedicated auth tests
+    (``tests/test_admin_auth*.py``) DELETE the env var for themselves, so the
+    guard's real behaviour is still covered rather than masked.
+    """
+    monkeypatch.setenv("LCP_ALLOW_ANONYMOUS_ADMIN", "1")
+    monkeypatch.delenv("LCP_ADMIN_TOKEN", raising=False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _init_circuit_breaker():
     """Initialize the circuit breaker singleton before each test."""
     from unittest.mock import MagicMock
