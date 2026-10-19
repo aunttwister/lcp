@@ -309,6 +309,9 @@ class RoutingDecision(Base):
     semantic_json = Column(Text, nullable=True)  # top-5 (task, score) JSON, or None
     min_score = Column(Float, nullable=True)  # semantic gate applied (plugins.router.min_score)
     sem_available = Column(Boolean, nullable=True)  # embedder was up when classified
+    # §9 L4 — the one replayable row: {layer, rule_id, intent, margin, scores,
+    # balances, from, to, reason}. Replaying it reproduces the winner (M4).
+    l4_json = Column(Text, nullable=True)
     # No transcript capture here. `conversation_json` used to hold a trimmed copy of the request
     # messages: 101 MB of a 139 MB DB (73%), all of it duplicating what the harness's own session
     # stores already hold. The text that drove the decision is in `intent_text` above, and the

@@ -379,6 +379,25 @@ _HEALTH_BONUS: dict[str, float] = {
 # Score penalty when a provider's cached usage suggests it is running low.
 _LOW_CREDIT_PENALTY = -0.10
 
+# ── The L0–L4 deterministic router (§9, M4) ──────────────────────────────────
+#
+#   L0  HARD FILTER    breaker availability, block rules, context gate (below)
+#   L1  EXPLICIT RULES policy / block / prefer — first match wins
+#   L2  INTENT GATE    margin < gate vetoes a MODEL change (in the chooser)
+#   L3  RANK           the total order in `_l3_sort_key` — no ties, no RNG
+#   L4  RECORD         {layer, rule_id, intent, margin, scores, balances,
+#                       from, to, reason} — one replayable row
+#
+# Declared pool roles (§10): a chain step may carry a ``role`` tag. The L3
+# role_rank prefers a workhorse, then an escalation, then a free-local;
+# untagged steps rank with escalation.
+_ROLE_RANK: dict[str, int] = {"workhorse": 0, "escalation": 1, "free-local": 2}
+_ROLE_RANK_UNTAGGED = 1
+# Chain-index fallback for a step that predates the static chain (direct calls
+# to `_build_chain_for_model` without a map): ordered after every real step,
+# by walk position — still deterministic.
+_CHAIN_INDEX_FALLBACK = 1_000_000
+
 # Context-awareness: never route a request to a model whose context window
 # can't hold the request (plus an output reserve). When a model has no
 # ``model_limits.context_window`` entry we default conservatively so a
@@ -711,6 +730,8 @@ class CapabilityRouter:
                     semantic_json=decision.get("semantic_json"),
                     min_score=decision.get("min_score"),
                     sem_available=decision.get("sem_available"),
+                    l4_json=(_json.dumps(decision["l4"])
+                             if decision.get("l4") else None),
                 ))
                 session.commit()
         except Exception:  # noqa: BLE001 — persistence must never break routing
@@ -747,6 +768,7 @@ class CapabilityRouter:
                         "intent_text": r.intent_text,
                         "semantic_json": r.semantic_json,
                         "min_score": r.min_score, "sem_available": r.sem_available,
+                        "l4": _json.loads(r.l4_json) if r.l4_json else None,
                     } for r in rows]
         except Exception:  # noqa: BLE001 — fall back to in-memory
             pass
@@ -1012,23 +1034,41 @@ class CapabilityRouter:
 
     def _choose_target_model(self, candidates: set, task: str, policy: str,
                              min_score: float, bias: Optional[float],
-                             default_logical: str) -> Optional[str]:
+                             default_logical: str,
+                             margin: Optional[float] = None,
+                             gate: float = 0.0) -> Optional[str]:
         """Pick the target logical model from *candidates* (provider-agnostic).
 
         - ``eager`` / ``cost_first``: the highest-scoring model, unless it only
-          beats the chain default within hysteresis (avoid flapping).
+          beats the chain default within hysteresis (avoid flapping). Score
+          ties break LEXICOGRAPHICALLY on the model name — never on set
+          iteration order (invariant 4).
         - ``explore``: weighted random among models within hysteresis of the
-          best (spread traffic / A/B over MODELS).
+          best (spread traffic / A/B over MODELS). This is the SINGLE explicit
+          exception to invariant 4 (``random`` in the decision): everything
+          else in L0–L3 is deterministic, and explore's *pool* is — the pick
+          is only ever a within-hysteresis model.
+        - L2 margin gate (re-aimed per §26.4): ``margin < gate`` vetoes a
+          MODEL change — the static chain head's logical model stands — but
+          NEVER vetoes the provider ranking, which continues for that model.
+          The head model is pinned only when it is itself an eligible
+          candidate that clears ``min_score``; otherwise no model decision is
+          made (static chain).
         Returns None when the best model is below ``min_score`` (static chain).
         """
         scored = sorted(
             ((self._score_model(m, task, bias), m) for m in candidates),
-            key=lambda x: -x[0],
+            key=lambda x: (-x[0], x[1]),
         )
         if not scored:
             return None
         best_score, best_model = scored[0]
         if best_score < min_score:
+            return None
+        if gate > 0.0 and margin is not None and margin < gate:
+            if (default_logical in candidates
+                    and self._score_model(default_logical, task, bias) >= min_score):
+                return default_logical
             return None
         if policy == "explore" and len(scored) > 1:
             import random
@@ -1074,11 +1114,69 @@ class CapabilityRouter:
         """
         return 1 if self._provider_credit_status(provider) == "drained" else 0
 
+    def _balance_headroom(self, provider: str) -> int:
+        """Coarse balance headroom (§9 L3, R12): 1 funded/unknown, 0 drained.
+
+        M5 (CUR-102) replaces this with the real remaining-balance number once
+        a balance source exists for every provider; until then a drained
+        provider loses balance comparisons and everyone else ties — which is
+        exactly the all-balances-equal case invariant 5 pins: equal balances
+        must route exactly as a router with no balance term at all.
+        """
+        return 0 if self._provider_credit_status(provider) == "drained" else 1
+
+    def _l3_sort_key(self, step: dict, task: str,
+                     preferred_provider: Optional[str],
+                     profile: Optional[str], config: Optional[object],
+                     bias: Optional[float], chain_index: int) -> tuple:
+        """The §9 L3 total order over provider steps — NO ties, NO RNG.
+
+        (role_rank, -declared_quality, balance_headroom, cost_bias*cost,
+         chain_index)
+
+        ``role_rank`` folds the L1 provider tiebreak (a prefer-named provider
+        goes first), the declared pool role and the breaker's health rank into
+        one rank. ``declared_quality`` is the model's capability score.
+        ``balance_headroom`` is NEGATED here — ascending keys put the largest
+        remaining balance first. ``cost_bias*cost`` is ascending, so a
+        positive bias prefers the cheaper step. ``chain_index`` — the step's
+        position in the STATIC chain, fixed before any filtering — is the
+        FINAL tiebreak: the order is total, so no dict/set iteration order and
+        no randomness can ever decide a winner (invariant 4), and permuting
+        the input pool cannot change one except through chain_index
+        (invariant 1).
+        """
+        provider = step["provider"]
+        logical = logical_model_name(step["model"], self.db_path)
+        role_rank = (
+            0 if (preferred_provider and provider == preferred_provider) else 1,
+            _ROLE_RANK.get(step.get("role"), _ROLE_RANK_UNTAGGED),
+            self._provider_health_rank(step, profile, config),
+        )
+        quality = self.get_model_score(logical, task)
+        price = _MODEL_PRICES.get(logical, 1.0)
+        max_price = max(_MODEL_PRICES.values()) if _MODEL_PRICES else 1.0
+        cost_factor = price / max_price if max_price > 0 else 0.5
+        b = self.cost_bias if bias is None else bias
+        return (role_rank, -quality, -self._balance_headroom(provider),
+                b * cost_factor, chain_index)
+
+    @staticmethod
+    def _l4_record(layer: str, rule_id: str, intent: str, margin,
+                   scores: dict, balances: dict, frm: dict, to: dict,
+                   reason: str) -> dict:
+        """§9 L4 — the one replayable row: why this (provider, model) won."""
+        return {"layer": layer, "rule_id": rule_id, "intent": intent,
+                "margin": margin, "scores": scores, "balances": balances,
+                "from": frm, "to": to, "reason": reason}
+
     def _build_chain_for_model(self, chain: list, target_model: str,
                                preferred_provider: Optional[str] = None,
                                profile: Optional[str] = None,
                                config: Optional[object] = None,
-                               request_tokens: int = 0) -> list:
+                               request_tokens: int = 0,
+                               task: str = "", bias: Optional[float] = None,
+                               chain_index: Optional[dict] = None) -> list:
         """Build the DETERMINISTIC chain for *target_model*.
 
         Walks the ORIGINAL chain in order, emitting one step per chain step
@@ -1086,9 +1184,12 @@ class CapabilityRouter:
         the original non-target steps as fallbacks (tuple-deduped). The CHAIN
         is the source of truth: a provider is a target provider for a model
         only when its chain step uses that model — the provider's global
-        ``models`` list is never consulted. Target providers are ordered:
-        ``preferred_provider`` first, then healthy before degraded, then funded
-        before drained (credits) — stable by chain order within each band.
+        ``models`` list is never consulted. Target and fallback steps are
+        ordered by the §9 L3 TOTAL ORDER (``_l3_sort_key``): role, declared
+        quality, balance, cost, then ``chain_index`` — the step's position in
+        the static ``chain``, passed in as a map (or derived from the walk
+        order for direct callers). chain_index is the FINAL tiebreak, so the
+        order is total: no ties, no RNG, no dict-iteration dependence.
 
         This is the SINGLE resolver shared by the prefer path and the scoring
         path — so both yield the same provider for the same target model.
@@ -1097,9 +1198,15 @@ class CapabilityRouter:
         can't hold the request (+ reserve) are dropped so a drained/dead head
         never falls through to a too-small-context model that 400s.
         """
-        target_steps: list[dict] = []
+        if chain_index is None:
+            # Direct callers (no static-chain map): derive from walk order.
+            # Still deterministic — same input, same indices.
+            chain_index = {}
+            for i, s in enumerate(chain):
+                chain_index.setdefault((s.get("provider"), s.get("model")), i)
+        target_steps: list[tuple[int, dict]] = []
         seen_providers: set[str] = set()
-        for step in chain:
+        for pos, step in enumerate(chain):
             p = step["provider"]
             if p in seen_providers:
                 continue
@@ -1115,35 +1222,37 @@ class CapabilityRouter:
                      "model": provider_model_name(target_model, p, self.db_path)}
                 if step.get("base_url"):
                     s["base_url"] = step["base_url"]
-                target_steps.append(s)
-        target_tuples = {(s["provider"], s["model"]) for s in target_steps}
-        fallbacks = [dict(s) for s in chain
-                     if (s["provider"], s["model"]) not in target_tuples]
-        if request_tokens > 0:
-            # Drop fallback models whose context can't hold the request — a
-            # fallback that would 400 on exceed_context_size is worse than
-            # skipping it (the next fitting fallback is tried instead).
-            fallbacks = [
-                s for s in fallbacks
-                if self._fits_context(logical_model_name(s["model"], self.db_path),
-                                      request_tokens, config)
-            ]
+                idx = chain_index.get((p, step["model"]),
+                                      _CHAIN_INDEX_FALLBACK + pos)
+                target_steps.append((idx, s))
+        target_tuples = {(s["provider"], s["model"]) for _, s in target_steps}
+        fallbacks: list[tuple[int, dict]] = []
+        for pos, s in enumerate(chain):
+            if (s["provider"], s["model"]) in target_tuples:
+                continue
+            if request_tokens > 0:
+                # Drop fallback models whose context can't hold the request — a
+                # fallback that would 400 on exceed_context_size is worse than
+                # skipping it (the next fitting fallback is tried instead).
+                if not self._fits_context(logical_model_name(s["model"], self.db_path),
+                                          request_tokens, config):
+                    continue
+            idx = chain_index.get((s["provider"], s["model"]),
+                                  _CHAIN_INDEX_FALLBACK + pos)
+            fallbacks.append((idx, dict(s)))
 
-        def _key(s):
-            return (
-                0 if (preferred_provider and s["provider"] == preferred_provider) else 1,
-                self._provider_health_rank(s, profile, config),
-                self._provider_credit_rank(s["provider"]),
-            )
+        def _key(pair):
+            idx, s = pair
+            return self._l3_sort_key(s, task, preferred_provider, profile,
+                                     config, bias, idx)
+
         target_steps.sort(key=_key)
-        # Also order the FALLBACK steps by health/credit so a drained provider
-        # (e.g. commandcode with no credits) isn't tried before a funded one
-        # when the target head fails — the router should prefer the best
-        # fallback (e.g. the previously-preferred deepseek-v4-flash) over a
-        # provider that will 400 on "insufficient credits". Stable sort keeps
-        # the profile's original order within each band.
+        # The FALLBACK steps run through the SAME total order, so a drained
+        # provider (e.g. commandcode with no credits) isn't tried before a
+        # funded one when the target head fails, and a higher-quality fallback
+        # outranks a lower one — with chain order as the final word.
         fallbacks.sort(key=_key)
-        return target_steps + fallbacks
+        return [s for _, s in target_steps] + [s for _, s in fallbacks]
 
     # ── Routing rules (UI-defined overrides) ─────────────────────────────
 
@@ -1624,63 +1733,80 @@ class CapabilityRouter:
         bias = min(self.cost_bias + 0.15, 0.5) if policy == "cost_first" else None
         prefer_fired = "prefer" in fired_desc
 
+        # L2 inputs, computed once: the profile's gate and the classifier's
+        # intent margin. The gate is RE-AIMED per §26.4 — it vetoes a MODEL
+        # change (inside `_choose_target_model`), never a provider swap. The
+        # measured 97% of gated reorders were pure provider swaps worth
+        # ~$390/month + 10.3 h latency on l2; gating those priced out the
+        # best thing the router does.
+        gate = self._intent_margin_gate(config, profile)
+        margin, top1, top2 = (
+            self._intent_margin(detail) if gate > 0.0 else (None, None, None))
+        gate_fired = bool(gate > 0.0 and margin is not None and margin < gate)
+        gate_note = None
+        if gate_fired:
+            gate_note = (f"margin {margin:.3f} < gate {gate:g} "
+                         f"({top1} vs {top2})")
+
+        # chain_index: each step's position in the STATIC chain, fixed BEFORE
+        # any filtering — the L3 final tiebreak (§9). Freezing it here is what
+        # makes the winner independent of how the pool is later permuted
+        # (invariant 1).
+        chain_index = {}
+        for i, s in enumerate(chain):
+            chain_index.setdefault((s.get("provider"), s.get("model")), i)
+
         # 4b. No prefer mandate -> score candidate MODELS (provider-agnostic).
         #    Context gate: models that can't hold request + output reserve are
         #    excluded, so the router picks the next-best model that FITS rather
         #    than sending an oversized request to a too-small context.
+        model_scores: dict[str, float] = {}
         if target_model is None:
-            # L2 — the margin gate. The plan's layer order puts explicit rules (L1)
-            # above this, so it only runs when no prefer mandate fired: a rule is a
-            # deliberate pin and does not get second-guessed by a coin flip. When the
-            # classifier's top two intents are closer than the gate, there is no
-            # decision to make, so none is made — the static chain head stands and the
-            # request is not reordered. Recorded with the margin so the non-decision is
-            # replayable and the gate can be tuned from the log.
-            gate = self._intent_margin_gate(config, profile)
-            if gate > 0.0:
-                margin, top1, top2 = self._intent_margin(detail)
-                if margin is not None and margin < gate:
-                    # Only persisted columns are set here — score carries the margin and
-                    # semantic_json already carries the full top-N it came from, so the
-                    # non-decision is replayable from the row alone. The gate itself has
-                    # no column, so it goes in the note, appended to the rules audit
-                    # rather than replacing it: the note is how the gate gets tuned.
-                    gate_note = (f"margin {margin:.3f} < gate {gate:g} "
-                                 f"({top1} vs {top2}): not reordered")
-                    self._record_decision({
-                        **self._decision_base(detail, messages, profile or "",
-                                              policy, note, fired_desc),
-                        "action": "margin_gate", "model": chain[0]["model"],
-                        "provider": chain[0]["provider"],
-                        "score": round(margin, 3),
-                        "note": f"{note}; {gate_note}" if note else gate_note,
-                    })
-                    return None
-
             default_logical = logical_model_name(chain[0]["model"], self.db_path)
             candidates = self._candidate_models(
                 chain, blocked_models, config, request_tokens)
+            # Scores for the L4 row: sorted keys, so the JSON never depends on
+            # set iteration order (invariant 4).
+            model_scores = {m: round(self._score_model(m, task, bias), 6)
+                            for m in sorted(candidates)}
             target_model = self._choose_target_model(
-                candidates, task, policy, min_score, bias, default_logical)
+                candidates, task, policy, min_score, bias, default_logical,
+                margin=margin, gate=gate)
             if target_model is None:
-                # Best model below min_score (or no candidate fits the context)
-                # -> keep the static chain. The caller's pre-flight already
-                # 413s when NO model in the chain can fit, so reaching here
-                # with a too-large request means a fitting model exists but was
-                # breaker-blocked/min-scored — degrade to the static chain.
+                # Best model below min_score, no candidate fits the context,
+                # or the L2 gate fired but the head model is not an eligible
+                # candidate -> keep the static chain. The caller's pre-flight
+                # already 413s when NO model in the chain can fit, so reaching
+                # here with a too-large request means a fitting model exists
+                # but was breaker-blocked/min-scored — degrade to static.
                 head_score = self._score_model(default_logical, task, bias)
+                if gate_fired:
+                    gate_note += (f": {default_logical} pinned but not "
+                                  f"eligible — static chain stands")
+                    note = f"{note}; {gate_note}" if note else gate_note
                 self._record_decision({
                     **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
                     "action": "below_min_score", "model": chain[0]["model"],
                     "provider": chain[0]["provider"],
                     "score": round(head_score, 3),
+                    "l4": self._l4_record(
+                        "L2" if gate_fired else "L3",
+                        "intent_margin_gate" if gate_fired else "min_score",
+                        task, None if margin is None else round(margin, 6),
+                        model_scores, self._l4_balances(chain),
+                        {"provider": chain[0]["provider"], "model": chain[0]["model"]},
+                        {"provider": chain[0]["provider"], "model": chain[0]["model"]},
+                        ("below_min_score" if not gate_fired
+                         else "gate pinned an ineligible head model"),
+                    ),
                 })
                 return None
 
         # 5. resolve the provider ONCE (rule path == scoring path).
         result = self._build_chain_for_model(
             chain, target_model, preferred_provider, profile, config,
-            request_tokens=request_tokens)
+            request_tokens=request_tokens, task=task, bias=bias,
+            chain_index=chain_index)
         if not result:
             return None
         head = result[0]
@@ -1699,11 +1825,31 @@ class CapabilityRouter:
         else:
             action = "reorder"
 
+        # The L4 row (§9): layer, rule_id, intent, margin, scores, balances,
+        # from, to, reason — persisted with the decision so any row replays
+        # to the same winner (invariant 2).
+        layer = "L2" if gate_fired else ("L1" if prefer_fired else "L3")
+        rule_id = ("intent_margin_gate" if gate_fired
+                   else ("prefer" if prefer_fired else policy))
+        if gate_fired:
+            gate_note += (f": model pinned to {target_model}, "
+                          f"providers still ranked")
+            note = f"{note}; {gate_note}" if note else gate_note
+        l4 = self._l4_record(
+            layer, rule_id, task, None if margin is None else round(margin, 6),
+            model_scores or {target_model: round(head_score, 6)},
+            self._l4_balances(chain),
+            {"provider": chain[0]["provider"], "model": chain[0]["model"]},
+            {"provider": head["provider"], "model": head["model"]},
+            action,
+        )
+
         if head_unchanged and not prefer_fired:
             self._record_decision({
                 **self._decision_base(detail, messages, profile or "", policy, note, fired_desc),
                 "action": "keep_default", "model": head["model"],
                 "provider": head["provider"], "score": round(head_score, 3),
+                "l4": l4,
             })
             return None
 
@@ -1722,8 +1868,15 @@ class CapabilityRouter:
             "action": action, "model": head["model"], "provider": head["provider"],
             "score": round(head_score, 3),
             "from_model": chain[0]["model"], "from_provider": chain[0]["provider"],
+            "l4": l4,
         })
         return result
+
+    def _l4_balances(self, chain: list) -> dict:
+        """Per-provider balance headroom for the L4 row — sorted, so the JSON
+        never depends on pool order (invariant 4)."""
+        return {p: self._balance_headroom(p)
+                for p in sorted({s["provider"] for s in chain})}
 
 
 # ── Global instances ──────────────────────────────────────────────────────────
