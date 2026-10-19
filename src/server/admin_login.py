@@ -15,6 +15,7 @@ import html
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from ..api import admin_auth
+from ..api import admin_oidc
 from ..api.logging_config import get_logger
 
 logger = get_logger("lcp.admin_login")
@@ -61,12 +62,28 @@ _LOGIN_HTML = """<!doctype html>
            required autofocus>
     <button type="submit">Sign in</button>
   </form>
+  {sso}
 </main>
 </body>
 </html>
 """
 
 _ERROR_HTML = '<p class="err">{}</p>'
+
+_SSO_HTML = ('<p style="margin:1rem 0 0;text-align:center;font-size:.85rem;">'
+             '<a href="/admin/oidc/start?next={next}" '
+             'style="color:#4c7dff;">Sign in with Pocket ID</a></p>')
+
+
+def _sso_block(nxt: str) -> str:
+    """SSO link only when OIDC is fully configured (and not half-set)."""
+    try:
+        configured = admin_oidc.is_oidc_configured()
+    except admin_oidc.OIDCConfigError:
+        return ""
+    if not configured:
+        return ""
+    return _SSO_HTML.format(next=quote(nxt, safe="/"))
 
 
 def _safe_next(raw: str | None) -> str:
@@ -102,7 +119,8 @@ class AdminLoginEndpoints:
         if (params.get("failed") or [""])[0]:
             error = _ERROR_HTML.format(
                 "That token was not accepted. Check LCP_ADMIN_TOKEN and try again.")
-        body = _LOGIN_HTML.format(error=error, next=html.escape(nxt, quote=True))
+        body = _LOGIN_HTML.format(error=error, next=html.escape(nxt, quote=True),
+                                  sso=_sso_block(nxt))
         self._admin_send_html(body, 200)
 
     # ── POST /admin/login ───────────────────────────────────────────────────
