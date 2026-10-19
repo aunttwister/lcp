@@ -122,6 +122,17 @@ def main():
                      detail=str(exc))
         raise SystemExit(str(exc)) from exc
 
+    # ── OIDC SSO: refuse a PARTIAL configuration the same way ─────────────
+    # Fully absent = token-only login (fine). Half-set = someone started
+    # wiring SSO and stopped; that must not silently degrade to token-only.
+    from .api.admin_oidc import OIDCConfigError, assert_oidc_config
+    try:
+        assert_oidc_config()
+    except OIDCConfigError as exc:
+        logger.error("startup_refused", reason="oidc_partial_config",
+                     detail=str(exc))
+        raise SystemExit(str(exc)) from exc
+
     # ── Database (must exist before the DB-backed config can be read) ────
     assert db_path is not None
     engine = get_engine(db_path)

@@ -27,6 +27,7 @@ from ..api.alert_manager import get_alert_manager
 from ..api import inflight as in_flight
 from ..api import admin_auth
 from .admin_login import AdminLoginEndpoints
+from .admin_oidc_endpoints import AdminOIDCEndpoints
 from ..api import conv_store
 from ..api.runtime import resolve_service
 from ..api.models import Budget, ApiKey, get_session
@@ -135,6 +136,7 @@ class LCPHandler(
     MemoryEndpoints,
     WorkEndpoints,
     AdminLoginEndpoints,
+    AdminOIDCEndpoints,
     BaseHTTPRequestHandler,
 ):
     """HTTP request handler for LCP gateway."""
@@ -1019,6 +1021,10 @@ def _build_routes() -> RouteTable:
           lambda h, p: h._serve_admin_logout())
     t.post("api.admin.logout", exact("/admin/logout"),
            lambda h, p: h._serve_admin_logout())
+    t.get("page.admin.oidc.start", exact("/admin/oidc/start"),
+          lambda h, p: h._serve_admin_oidc_start())
+    t.get("page.admin.oidc.callback", exact("/admin/callback"),
+          lambda h, p: h._serve_admin_oidc_callback())
 
     # ── in-progress (JSON for the live section's own refresh loop) ──
     t.get("api.in_progress", exact("/api/in-progress"),
