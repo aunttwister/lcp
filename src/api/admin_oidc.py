@@ -55,6 +55,8 @@ CLIENT_ID_ENV = "LCP_OIDC_CLIENT_ID"
 CLIENT_SECRET_ENV = "LCP_OIDC_CLIENT_SECRET"
 REDIRECT_URI_ENV = "LCP_OIDC_REDIRECT_URI"
 ADMIN_USERS_ENV = "LCP_OIDC_ADMIN_USERS"
+ADMIN_CLAIM_ENV = "LCP_OIDC_ADMIN_CLAIM"
+DEFAULT_ADMIN_CLAIM = "preferred_username"
 
 SCOPE = "openid profile email"
 STATE_COOKIE = "lcp_oidc_flow"
@@ -110,6 +112,15 @@ def config() -> dict[str, str] | None:
         "client_secret": _env(CLIENT_SECRET_ENV) or "",
         "redirect_uri": _env(REDIRECT_URI_ENV) or "",
     }
+
+
+def admin_claim() -> str:
+    """The claim that identifies a user for the allow-list.
+
+    ``preferred_username`` (Pocket ID, and most IdPs) by default; override for
+    e.g. Keycloak's ``preferred_username`` variants or an email-based scheme.
+    """
+    return _env(ADMIN_CLAIM_ENV) or DEFAULT_ADMIN_CLAIM
 
 
 def admin_usernames() -> list[str]:
@@ -297,8 +308,11 @@ def fetch_userinfo(cfg: dict[str, str], access_token: str,
     finally:
         if own:
             client.close()
-    if not isinstance(claims, dict) or not claims.get("preferred_username"):
-        raise OIDCLoginError("userinfo lacked preferred_username")
+    if not isinstance(claims, dict):
+        raise OIDCLoginError("userinfo was not a claim set")
+    identity = claims.get(admin_claim()) or claims.get(DEFAULT_ADMIN_CLAIM)
+    if not identity:
+        raise OIDCLoginError(f"userinfo lacked {admin_claim()}")
     return claims
 
 
@@ -308,7 +322,8 @@ def decide_session(claims: dict[str, Any]) -> str | None:
     The deny is silent-by-page: the operator sees "not authorized", the log
     sees who, and nothing about the allow-list shape is exposed.
     """
-    username = str(claims.get("preferred_username") or "")
+    username = str(claims.get(admin_claim())
+                   or claims.get(DEFAULT_ADMIN_CLAIM) or "")
     if username in admin_usernames():
         return f"oidc:{username}"
     logger.warning("oidc_login_denied", preferred_username=username)

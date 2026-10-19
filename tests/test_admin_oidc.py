@@ -169,6 +169,19 @@ class TestDecideSession:
         monkeypatch.setenv("LCP_OIDC_ADMIN_USERS", "aunttwister")
         assert admin_oidc.decide_session({"sub": "x"}) is None
 
+    def test_custom_admin_claim(self, monkeypatch):
+        """Not-Pocket-ID IdPs (e.g. an email-claim scheme) work by env change."""
+        monkeypatch.setenv("LCP_OIDC_ADMIN_USERS", "pavle.curcic678@gmail.com")
+        monkeypatch.setenv("LCP_OIDC_ADMIN_CLAIM", "email")
+        assert admin_oidc.admin_claim() == "email"
+        actor = admin_oidc.decide_session({
+            "sub": "u-1", "email": "pavle.curcic678@gmail.com"})
+        assert actor == "oidc:pavle.curcic678@gmail.com"
+
+    def test_default_claim_is_preferred_username(self):
+        assert admin_oidc.DEFAULT_ADMIN_CLAIM == "preferred_username"
+        assert admin_oidc.admin_claim() == "preferred_username"
+
 
 # ── IdP interaction, faked ──────────────────────────────────────────────────
 
