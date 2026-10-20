@@ -28,6 +28,7 @@ from ..api import inflight as in_flight
 from ..api import admin_auth
 from .admin_login import AdminLoginEndpoints
 from .admin_oidc_endpoints import AdminOIDCEndpoints
+from ..api import audit as audit_log
 from ..api import conv_store
 from ..api.runtime import resolve_service
 from ..api.models import Budget, ApiKey, get_session
@@ -56,6 +57,7 @@ from .endpoints import (
     SettingsEndpoints,
     MemoryEndpoints,
     WorkEndpoints,
+    EvidenceEndpoints,
 )
 
 from .router import (
@@ -133,8 +135,10 @@ class LCPHandler(
     SettingsEndpoints,
     MemoryEndpoints,
     WorkEndpoints,
+    EvidenceEndpoints,
     AdminLoginEndpoints,
     AdminOIDCEndpoints,
+    audit_log.AuditEndpoints,
     BaseHTTPRequestHandler,
 ):
     """HTTP request handler for LCP gateway."""
@@ -269,6 +273,20 @@ class LCPHandler(
         return unquote(path.split("?")[0].split("/")[index]).replace("\u00a0", " ")
 
     # ── admin authentication ────────────────────────────────────────────
+    # ── Phase 5: change-history trail (guarded by the admin guard) ──────────
+    def _serve_audit_trail(self) -> None:
+        """GET /api/audit — newest-first change history (last 200)."""
+        limit = 200
+        try:
+            from urllib.parse import parse_qs
+            qs = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            limit = max(1, min(1000, int((qs.get("limit") or ["200"])[0])))
+        except (ValueError, IndexError):
+            pass
+        rows = audit_log.recent(limit=limit)
+        self._send_json({"ok": True, "count": len(rows), "entries": rows})
+
+
     def _admin_guard(self) -> bool:
         """Return True when the request may proceed; otherwise respond and False.
 
@@ -1047,6 +1065,14 @@ def _build_routes() -> RouteTable:
     t.get("metrics", exact("/metrics"), lambda h, p: h._serve_metrics())
     t.get("export", exact("/export"), lambda h, p: h._serve_export())
 
+    # ── evidence export (Phase 4 — admin-guarded via the global guard) ──
+    t.get("api.evidence.export", exact("/api/evidence/export"),
+          lambda h, p: h._serve_evidence_export())
+    t.post("api.evidence.export", exact("/api/evidence/export"),
+           lambda h, p: h._serve_evidence_export())
+    t.get("api.evidence.public_key", exact("/api/evidence/public-key"),
+          lambda h, p: h._serve_evidence_public_key())
+
     # ── settings / routing ──
     t.get("api.settings", exact("/api/settings"),
           lambda h, p: h._serve_settings_api())
@@ -1103,6 +1129,9 @@ def _build_routes() -> RouteTable:
     # ── keys ──
     t.get("api.keys.detail", regex(r"^/api/keys/(?P<id>[^/]+)$"),
           lambda h, p: h._serve_key_detail(h._path_part(h.path, 3)))
+    t.get("api.audit", exact("/api/audit"),
+          lambda h, p: h._serve_audit_trail())
+
     t.get("api.keys", exact("/api/keys"), lambda h, p: h._serve_keys_list())
 
     # ── alerts / budgets ──
