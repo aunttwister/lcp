@@ -12,6 +12,13 @@
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 210 40% 98%;
   --border: 217.2 32.6% 17.5%;
+  /* Focus/hover ring. Was referenced in two rules (.budget-card:hover and
+     .ack-btn:hover) but never declared, so hsl(var(--ring)) resolved to an
+     invalid colour and both hover borders silently rendered as nothing.
+     #3b82f6 = 5.44:1 on the canvas, 3.97:1 on --secondary, 5.15:1 on the
+     sidebar — above the 3:1 floor for a meaningful boundary (WCAG 1.4.11),
+     and identical to the fallback the .toggle focus rule already carried. */
+  --ring: 217.2 91.2% 59.8%;
   --radius: 0.5rem;
   --green-bg: 142.1 76.2% 6%;
   --green-fg: 142.1 70.6% 45.3%;
