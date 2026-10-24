@@ -23,6 +23,7 @@ from .exceptions import (
     ConfigError,
     ProviderAuthError,
     ProviderBadRequestError,
+    RequestUnsupportedError,
     ProviderCreditsError,
     ProviderInternalError,
     ProviderRateLimitError,
@@ -835,6 +836,11 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config,
     chain = [dict(step) for step in profile_cfg["chain"]]
     chain_len = len(chain)
     errors = []
+    # Count what actually went over the wire, and how many of those were the provider telling us
+    # the request body is invalid. If every attempt was a body rejection, the answer is 400, not
+    # 502 — see RequestUnsupportedError.
+    attempted = 0
+    rejected = 0
 
     # Per-chain memory of providers that rejected THIS request body as invalid.
     # Cleared here (concurrent chains each track their own) so a 400 on one
@@ -1025,6 +1031,7 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config,
             retry_cfg = {}
 
         try:
+            attempted += 1
             t0 = time.time()
             resp, status = call_with_retry(
                 lambda: forward_request(step_with_key, body, config, session_id=session_id),
@@ -1056,6 +1063,7 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config,
             # NOTE: deliberately NOT calling cb.record_failure() — a 400 caused
             # by a bad client body is not a provider outage, and counting it
             # against provider health would falsely degrade healthy providers.
+            rejected += 1
             reason = _remember_bad_request(provider_name, base_url, model, str(e))
             errors.append(f"{provider_name}/{model}: rejected as invalid: {reason}")
             logger.error(
@@ -1115,6 +1123,20 @@ def try_chain(profile_name: str, profile_cfg: dict, body: dict, config,
                 chain_len=chain_len,
                 error=str(e),
             )
+
+    if attempted and rejected == attempted:
+        # Every provider we actually reached answered "this body is invalid". That is a client
+        # error, not an outage: 502 tells the caller to retry a request that will fail again.
+        logger.error(
+            "all_providers_rejected_request",
+            profile=profile_name,
+            attempts=attempted,
+            rejected=rejected,
+        )
+        raise RequestUnsupportedError(
+            f"All {attempted} provider(s) in profile {profile_name} rejected the request as "
+            f"invalid: {'; '.join(errors)}"
+        )
 
     raise AllProvidersFailedError(f"All providers failed for {profile_name}: {'; '.join(errors)}")
 
