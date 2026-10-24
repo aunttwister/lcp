@@ -412,6 +412,25 @@ def _parse_multipart_upload(body: bytes, content_type: str) -> tuple[bytes, str,
 
 # ── Health / Monitoring Endpoints ────────────────────────────────────────────
 
+def _health_entry(h):
+    """Shape one provider's health for /health, with the disclosure guard applied."""
+    tripped_until = None
+    if h.get("tripped_until"):
+        tripped_until = datetime.fromtimestamp(h["tripped_until"], tz=timezone.utc).isoformat()
+    return {
+        "status": h["status"],
+        "failures": h["consecutive_failures"],
+        "last_success": h["last_success"],
+        "last_failure": h["last_failure"],
+        "tripped_until": tripped_until,
+        # base_url / last_failure_reason are intentionally REDACTED:
+        # /health is served unauthenticated (uptime checks, link
+        # checkers). The private provider endpoint map was disclosed
+        # through this route (CWE-200, Strix 09-10); status/failure
+        # counters are all the health consumers need.
+    }
+
+
 class HealthEndpoints:
     """Health, models, errors, cache stats, metrics, export."""
 
@@ -426,23 +445,52 @@ class HealthEndpoints:
     def _serve_health(self):
         provider_status = {}
         cb = resolve_service("circuit_breaker", fallback=get_circuit_breaker)
+
+        # One provider+profile pair can hold several rows, because the health map is keyed by
+        # (provider, base_url, profile) and a provider may be configured with more than one
+        # base_url over time. The payload key is only "provider/profile", so those rows collapse
+        # into one key — and which one wins used to depend on dict iteration order, which is
+        # insertion order of an in-memory dict seeded from the DB. Measured on prod 2026-10-24:
+        # 20 rows collapsed to 17 keys; `opencode/l2` had a stale `degraded/6` row and a live
+        # `dead/117` row, and the live one won by luck, not by rule.
+        #
+        # Rule now: the freshest row wins, judged by the most recent of last_success,
+        # last_failure and tripped_until. Ties go to the worse status, so a dead lane is never
+        # masked by a healthy one with the same timestamp.
+        candidates = {}
+        malformed = []
         for key, h in cb.get_all_health().items():
             provider, url, profile = key
-            tripped_until = None
+            # The payload key is "provider/profile". A row with an empty component would render
+            # as "/" or "/l1" or "provider/" — a phantom key that names no provider. Nothing
+            # legitimate creates one; skip it rather than publish it. (This is the "/" key that
+            # Phase 1 flagged: it is not load-bearing, it is a malformed row, and the right
+            # answer is to not emit it.)
+            if not provider or not profile:
+                malformed.append(key)
+                continue
+            slot = candidates.setdefault(f"{provider}/{profile}", [])
+            slot.append(h)
+
+        if malformed:
+            logger.warning(
+                "health: skipped %d malformed provider_health row(s) with an empty "
+                "provider or profile: %s", len(malformed), malformed,
+            )
+
+        severity = {"healthy": 0, "degraded": 1, "dead": 2}
+
+        def _freshness(h):
+            stamps = [h.get("last_success"), h.get("last_failure")]
             if h.get("tripped_until"):
-                tripped_until = datetime.fromtimestamp(h["tripped_until"], tz=timezone.utc).isoformat()
-            provider_status[f"{provider}/{profile}"] = {
-                "status": h["status"],
-                "failures": h["consecutive_failures"],
-                "last_success": h["last_success"],
-                "last_failure": h["last_failure"],
-                "tripped_until": tripped_until,
-                # base_url / last_failure_reason are intentionally REDACTED:
-                # /health is served unauthenticated (uptime checks, link
-                # checkers). The private provider endpoint map was disclosed
-                # through this route (CWE-200, Strix 09-10); status/failure
-                # counters are all the health consumers need.
-            }
+                stamps.append(
+                    datetime.fromtimestamp(h["tripped_until"], tz=timezone.utc).isoformat()
+                )
+            return max([s for s in stamps if s] or [""])
+
+        for name, rows in candidates.items():
+            chosen = max(rows, key=lambda h: (_freshness(h), severity.get(h.get("status"), 0)))
+            provider_status[name] = _health_entry(chosen)
         self._send_json({
             "status": "ok",
             "profiles": list(self.config.profiles.keys()),
