@@ -878,6 +878,91 @@ class HealthEndpoints:
 
 # ── Provider Configuration Endpoints ─────────────────────────────────────────
 
+def _fire_alert(rule: str, severity: str, title: str, message: str,
+                dedup_key: str = "") -> None:
+    """Best-effort alert. Alerting must never fail the operation that raised it."""
+    try:
+        from ..api.alert_manager import get_alert_manager
+        am = resolve_service("alert_manager", fallback=get_alert_manager)
+        if am is not None:
+            am.fire(rule=rule, severity=severity, title=title, message=message,
+                    dedup_key=dedup_key)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("alert_fire_failed", rule=rule, error=str(exc))
+
+
+def _strip_provider_from_registry(engine: Any, provider: str) -> tuple[int, int]:
+    """Remove *provider* from every model_registry provider mapping.
+
+    Returns ``(rows_changed, models_left_unserved)``. A logical model whose
+    mappings become empty is KEPT — its benchmark identity and capability scores
+    still mean something, it simply has no provider serving it right now. Deleting
+    the row would throw away the scoring history and force a re-seed later.
+    """
+    import json as _json
+    from ..api.models import ModelRegistryEntry, get_session
+
+    rows_changed = 0
+    unserved = 0
+    try:
+        with get_session(engine) as session:
+            for entry in session.query(ModelRegistryEntry).all():
+                try:
+                    mappings = _json.loads(entry.provider_mappings_json or "{}")
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(mappings, dict) or provider not in mappings:
+                    continue
+                mappings.pop(provider, None)
+                entry.provider_mappings_json = _json.dumps(mappings, sort_keys=True)
+                rows_changed += 1
+                if not mappings:
+                    unserved += 1
+            if rows_changed:
+                session.commit()
+    except Exception as exc:  # noqa: BLE001 — never fail a delete on registry cleanup
+        logger.warning("registry_strip_failed", provider=provider, error=str(exc))
+    return rows_changed, unserved
+
+
+def _rekey_provider_in_registry(engine: Any, old: str, new: str) -> int:
+    """Re-point model_registry mappings and persisted health from *old* to *new*.
+
+    A rename is a graph rewrite: every reference to the provider name has to move
+    with it. The delete path already cascades health rows; rename did not, which is
+    how `local-zgx` kept showing `degraded / 6 failures` in /health months after the
+    provider had been renamed to `local-sparks`.
+    """
+    import json as _json
+    from ..api.models import ModelRegistryEntry, ProviderHealth, get_session
+
+    changed = 0
+    try:
+        with get_session(engine) as session:
+            for entry in session.query(ModelRegistryEntry).all():
+                try:
+                    mappings = _json.loads(entry.provider_mappings_json or "{}")
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(mappings, dict) or old not in mappings:
+                    continue
+                mappings[new] = mappings.pop(old)
+                entry.provider_mappings_json = _json.dumps(mappings, sort_keys=True)
+                changed += 1
+            health_moved = 0
+            for row in session.query(ProviderHealth).filter(
+                    ProviderHealth.provider == old).all():
+                row.provider = new
+                health_moved += 1
+            if changed or health_moved:
+                session.commit()
+            logger.info("provider_rename_cascade", old=old, new=new,
+                        registry_rows=changed, health_rows=health_moved)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("registry_rekey_failed", old=old, new=new, error=str(exc))
+    return changed
+
+
 class ProviderEndpoints:
     """Provider CRUD, testing, chain reorder."""
 
@@ -982,6 +1067,28 @@ class ProviderEndpoints:
         if name not in cfg.providers:
             self._send_json({"error": f"provider '{name}' not found"}, 404)
             return
+        # ── Dependency check: which profiles would be left with NOTHING to try? ──
+        # Removing a provider from a chain is safe while another step remains.
+        # Emptying a chain is not: the config loader refuses an empty chain, and a
+        # request for that profile has no route at all. Refuse by default so a human
+        # can re-point the profile first; `?force=1` proceeds into the invalidated
+        # state, which is recorded and surfaced rather than silently wiped.
+        force = "force=1" in (self.path or "") or "force=true" in (self.path or "")
+        emptied = [
+            pname for pname, pcfg in (cfg.raw.get("profiles") or {}).items()
+            if (pcfg.get("chain") or [])
+            and all((step or {}).get("provider") == name for step in pcfg["chain"])
+        ]
+        if emptied and not force:
+            self._send_json({
+                "error": (f"provider '{name}' is the only route for profile(s) "
+                          f"{', '.join(sorted(emptied))}; deleting it would leave them "
+                          f"with no chain. Re-point the profile first, or retry with "
+                          f"?force=1 to delete and mark them invalid."),
+                "code": "provider_in_use",
+                "profiles_emptied": sorted(emptied),
+            }, 409)
+            return
         del cfg.raw["providers"][name]
         for pname, pcfg in cfg.raw["profiles"].items():
             pcfg["chain"] = [c for c in pcfg.get("chain", []) if c.get("provider") != name]
@@ -1001,10 +1108,30 @@ class ProviderEndpoints:
         except Exception as exc:  # noqa: BLE001 — never fail a delete on health bookkeeping
             logger.warning("provider_delete_health_cascade_failed",
                            provider=name, error=str(exc))
+        # Cascade: the model registry names this provider inside every logical
+        # model's provider_mappings. Left behind, the UI keeps advertising the
+        # deleted provider as serving those models and routing can resolve a
+        # mapping to a provider that no longer exists.
+        mappings_updated, models_unserved = _strip_provider_from_registry(self.engine, name)
+        if emptied:
+            logger.warning("provider_delete_invalidated_profiles",
+                           provider=name, profiles=sorted(emptied))
+            _fire_alert("profile_invalid", "critical",
+                        f"Profile(s) {', '.join(sorted(emptied))} left without a route",
+                        (f"Deleting provider '{name}' emptied the chain of "
+                         f"{', '.join(sorted(emptied))}. Those profiles now return "
+                         f"503 profile_invalid until a step is added."),
+                        dedup_key=f"profile_invalid:{name}")
         self._audit("provider.delete", provider=name,
-                    health_rows_removed=health_rows_removed)
+                    health_rows_removed=health_rows_removed,
+                    registry_mappings_updated=mappings_updated,
+                    models_unserved=models_unserved,
+                    profiles_emptied=sorted(emptied))
         self._send_json({"ok": True, "deleted": name,
-                         "health_rows_removed": health_rows_removed})
+                         "health_rows_removed": health_rows_removed,
+                         "registry_mappings_updated": mappings_updated,
+                         "models_unserved": models_unserved,
+                         "profiles_emptied": sorted(emptied)})
 
     def _serve_provider_rename(self, name: str):
         """POST /api/providers/{name}/rename  {new_name: "..."} — rename a provider.
@@ -1068,12 +1195,21 @@ class ProviderEndpoints:
         if refresher is not None:
             refresher.request_refresh(provider=new_name)
 
+        # Cascade the rename through the tables that key on the provider NAME:
+        # registry mappings and persisted circuit-breaker health. Without this the
+        # old name survives as a ghost provider in /health and keeps being listed
+        # as serving models that the new provider actually serves.
+        registry_rows = _rekey_provider_in_registry(self.engine, name, new_name)
+
         logger.info("provider_renamed", provider=name, new_name=new_name,
-                    chain_steps_updated=steps_updated)
+                    chain_steps_updated=steps_updated,
+                    registry_rows=registry_rows)
         self._audit("provider.rename", provider=name, new_name=new_name,
-                    chain_steps_updated=steps_updated)
+                    chain_steps_updated=steps_updated,
+                    registry_rows=registry_rows)
         self._send_json({"ok": True, "provider": new_name, "renamed": True,
-                         "chain_steps_updated": steps_updated})
+                         "chain_steps_updated": steps_updated,
+                         "registry_rows": registry_rows})
 
     def _serve_provider_test(self):
         import urllib.request

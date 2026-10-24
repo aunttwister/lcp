@@ -500,9 +500,16 @@ class Config:
                 self._data[section] = copy.deepcopy(self._seed[section])
             else:
                 self._data[section] = {}
-        # Validate required sections; fall back to seed on failure so boot and
-        # read paths never hard-fail from a corrupt DB section.
+        # Validate required sections. `profiles` is validated PER PROFILE and a bad
+        # profile is quarantined (kept, flagged, unroutable) instead of resetting the
+        # whole section: replacing `profiles` with SEED_CONFIG because ONE chain came
+        # out empty silently swapped every real profile for the defaults at the next
+        # restart. Proven 2026-10-23: an emptied `l2` chain made `blog` disappear.
+        self._invalid_profiles: dict[str, str] = {}
         for section in REQUIRED_SECTIONS:
+            if section == "profiles":
+                self._quarantine_invalid_profiles()
+                continue
             try:
                 _validate(section, self._data.get(section))
             except ConfigError as exc:
@@ -523,6 +530,51 @@ class Config:
         except Exception:  # noqa: BLE001
             pass
         logger.info("config_loaded", sections=sorted(self._data.keys()))
+
+    # ── Accessors ──────────────────────────────────────────────────────────
+    @property
+    def invalid_profiles(self) -> dict[str, str]:
+        """Profile name -> reason it cannot be routed. Empty when every profile is sane."""
+        return getattr(self, "_invalid_profiles", {})
+
+    def _quarantine_invalid_profiles(self) -> None:
+        """Validate each profile on its own and quarantine the broken ones.
+
+        A profile is quarantined when its chain is missing or empty, or when its
+        other fields fail validation. Quarantined profiles STAY in ``profiles`` so
+        the UI can show and repair them, but they are listed in ``invalid_profiles``
+        and refused at request time with a clear 503 — failing in routing instead
+        looks like a provider outage and hides the real cause.
+
+        Only a structurally unusable ``profiles`` section (not a dict) falls back to
+        the seed. One bad profile must never reset the whole estate.
+        """
+        profiles = self._data.get("profiles")
+        if not isinstance(profiles, dict):
+            logger.warning("config_section_invalid", section="profiles",
+                           error="'profiles' is not a mapping")
+            if "profiles" in self._seed:
+                import copy
+                self._data["profiles"] = copy.deepcopy(self._seed["profiles"])
+            return
+        for name, prof in list(profiles.items()):
+            if not isinstance(prof, dict):
+                self._invalid_profiles[name] = "profile is not a mapping"
+                continue
+            chain = prof.get("chain")
+            if not isinstance(chain, list) or not chain:
+                self._invalid_profiles[name] = (
+                    "chain is empty - every provider this profile referenced was "
+                    "removed; add a step to re-enable it")
+                continue
+            try:
+                validate_profile_fields(name, prof)
+            except ConfigError as exc:
+                self._invalid_profiles[name] = str(exc)
+        if self._invalid_profiles:
+            logger.warning("profiles_quarantined",
+                           count=len(self._invalid_profiles),
+                           profiles=sorted(self._invalid_profiles))
 
     # ── Accessors ──────────────────────────────────────────────────────────
 

@@ -402,6 +402,21 @@ class LCPHandler(
             self._send_json({"error": f"profile not found: {profile}"}, 400)
             return
 
+        # A profile whose chain was emptied by a provider removal is INVALID, not
+        # broken. Say so explicitly instead of letting the request fail inside the
+        # chain walk, where it would look like a provider outage.
+        _invalid = getattr(self.config, "invalid_profiles", None)
+        invalid_reason = _invalid.get(profile) if isinstance(_invalid, dict) else None
+        if invalid_reason:
+            logger.warning("profile_invalid", profile=profile, reason=invalid_reason,
+                           client_ip=self.client_address[0])
+            self._send_json({
+                "error": f"profile '{profile}' is invalid: {invalid_reason}",
+                "code": "profile_invalid",
+                "profile": profile,
+            }, 503)
+            return
+
         # Auth check — if profile requires API key, validate Authorization header
         try:
             if profile_cfg.get("auth_required", True):
