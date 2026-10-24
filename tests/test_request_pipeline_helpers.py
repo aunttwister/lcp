@@ -54,6 +54,7 @@ from src.api.request_pipeline import (
     try_chain,
 )
 from src.api.exceptions import (
+    RequestUnsupportedError,
     AllProvidersFailedError,
     ConfigError,
     ProviderAuthError,
@@ -975,11 +976,19 @@ class TestTryChainErrorPaths:
 
     def test_bad_request_on_all_providers_raises_with_real_message(self, chain_config):
         """When EVERY provider rejects the body, the real provider message is
-        surfaced in the final error rather than a bare generic 502."""
+        surfaced in the final error rather than a bare generic 502.
+
+        CONTRACT CHANGE 2026-10-24: this used to assert AllProvidersFailedError (502). That was
+        the bug: measured in prod, 24 of ~737 `l2` requests in 72h walked the whole chain, every
+        step answered 400, and the caller was told 502 "try again shortly" for a body that would
+        fail identically on retry. All-rejected now raises RequestUnsupportedError (LCP-3002, 400);
+        the message still carries the real provider text for the logs.
+        """
         with patch("src.api.request_pipeline.forward_request",
                    side_effect=ProviderBadRequestError("model x missing")):
-            with pytest.raises(AllProvidersFailedError) as exc:
+            with pytest.raises(RequestUnsupportedError) as exc:
                 try_chain("l2", chain_config.profiles["l2"], self._body(), chain_config)
+        assert exc.value.status_code == 400
         assert "rejected as invalid" in str(exc.value)
         assert "model x missing" in str(exc.value)
 
@@ -996,8 +1005,9 @@ class TestTryChainErrorPaths:
             {"provider": "first", "model": "m1"},
             {"provider": "first", "model": "m1"},
         ]
+        # CONTRACT CHANGE 2026-10-24: all-rejected is RequestUnsupportedError (400), not 502.
         with patch("src.api.request_pipeline.forward_request", side_effect=fake_forward):
-            with pytest.raises(AllProvidersFailedError):
+            with pytest.raises(RequestUnsupportedError):
                 try_chain("l2", chain_config.profiles["l2"], self._body(), chain_config)
         assert calls == [("first", "m1")]
 
