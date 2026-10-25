@@ -103,6 +103,15 @@ class TestResponseFormatIsAContract:
         _, _, skip = prepare_body("local-sparks", body, _cfg())
         assert skip and "json_object" in skip
 
+    def test_json_object_is_accepted_by_deepseek(self):
+        """Regression (2026-10-25): a {text}-only deepseek declaration killed every Hindsight
+        retain. deepseek accepts json_object; only json_schema is unavailable."""
+        body = {**BODY, "response_format": {"type": "json_object"}}
+        out, notes, skip = prepare_body("deepseek", body, _cfg())
+        assert skip is None, "json_object is supported by deepseek — skipping it is a false negative"
+        assert notes == []
+        assert out["response_format"] == {"type": "json_object"}
+
     def test_plain_text_is_accepted(self):
         body = {**BODY, "response_format": {"type": "text"}}
         out, notes, skip = prepare_body("deepseek", body, _cfg())

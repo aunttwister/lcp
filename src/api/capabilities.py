@@ -38,8 +38,12 @@ from typing import Any
 DEFAULT_CAPABILITIES: dict[str, dict[str, Any]] = {
     # Rejects reasoning_effort outside this enum with HTTP 400 (measured 2026-10-24, 48 events).
     "commandcode": {"reasoning_effort": {"off", "low", "medium", "high", "xhigh", "max"}},
-    # Rejects any response_format other than plain text (measured 2026-10-24, 24 events each).
-    "deepseek": {"response_format": {"text"}},
+    # Rejects json_schema ("This response_format type is unavailable now"), but ACCEPTS
+    # json_object — measured 2026-10-25 by sending the identical body to api.deepseek.com
+    # (200) and through the gateway (LCP-3002). The earlier {text} declaration was a false
+    # negative: the 2026-10-24 events were json_object failures caused by the *prompt* not
+    # containing the word "json" (a deepseek precondition), not by the type being unsupported.
+    "deepseek": {"response_format": {"text", "json_object"}},
     "local-sparks": {"response_format": {"text"}},
 }
 
