@@ -384,6 +384,42 @@ class TestProviderCrudEdges:
         h.do_POST()
         assert _status(h) == 400
 
+    def _ok_ctx(self, payload):
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=ctx)
+        ctx.__exit__ = MagicMock(return_value=False)
+        ctx.status = 200
+        ctx.read = MagicMock(return_value=json.dumps(payload).encode())
+        return ctx
+
+    def test_provider_test_sends_opencode_session_on_go_route(self, temp_db):
+        """OpenCode's Go route refuses a request with no x-opencode-session (400
+        MissingSessionID), so the Test button must carry it — otherwise a working
+        Go pair reads as broken. Verified live 2026-11-22."""
+        ctx = self._ok_ctx({"model": "deepseek-v4.1-flash"})
+        body = json.dumps({"api_base": "https://opencode.ai/inference/go/v1",
+                           "api_key": "k", "provider": "opencode",
+                           "model": "deepseek-v4.1-flash"})
+        h = TestHandler(path="/api/providers/test", method="POST", engine=temp_db, body=body)
+        with patch("urllib.request.urlopen", return_value=ctx) as mock_open:
+            h.do_POST()
+        req = mock_open.call_args[0][0]
+        assert req.headers.get("X-opencode-session") == "lcp-test-opencode"
+        assert _json_body(h)["ok"] is True
+
+    def test_provider_test_omits_opencode_session_for_other_providers(self, temp_db):
+        """Negative control: no header on a non-OpenCode destination, so no other
+        provider's probe changes."""
+        ctx = self._ok_ctx({"model": "m"})
+        body = json.dumps({"api_base": "https://api.commandcode.ai/provider/v1",
+                           "api_key": "k", "provider": "commandcode", "model": "m"})
+        h = TestHandler(path="/api/providers/test", method="POST", engine=temp_db, body=body)
+        with patch("urllib.request.urlopen", return_value=ctx) as mock_open:
+            h.do_POST()
+        req = mock_open.call_args[0][0]
+        assert req.headers.get("X-opencode-session") is None
+        assert _json_body(h)["ok"] is True
+
     def test_chain_reorder_preserves_url(self, temp_db):
         LCPHandler.config.raw["profiles"]["l2"]["chain"] = [
             {"provider": "deepseek", "model": "deepseek-v4-pro", "base_url": "https://old/v1"}

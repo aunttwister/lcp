@@ -1392,3 +1392,41 @@ class TestEnsureThinkingReasoningContent:
         messages = [{"role": "assistant", "content": "hi"}]
         result = ensure_thinking_reasoning_content(messages, "some-model", cfg)
         assert "reasoning_content" not in result[0]
+
+
+class TestOpenCodeSessionHeader:
+    """``opencode_session_header`` — the one gate every non-chat surface uses.
+
+    OpenCode's Go route (``/inference/go/v1``) answers a bare HTTP 400
+    ``{"type":"MissingSessionID"}`` to any request without ``x-opencode-session``
+    (verified live 2026-11-22). The chat path and the prober each implement the
+    rule inline; the provider Test button and the vision probe call this.
+    """
+
+    def test_go_destination_gets_a_stable_default(self):
+        from src.api.request_pipeline import opencode_session_header
+        assert opencode_session_header(
+            "opencode", "https://opencode.ai/inference/go/v1", purpose="test") == {
+            "x-opencode-session": "lcp-test-opencode"}
+
+    def test_provider_name_gate_covers_a_proxied_base_url(self):
+        """A step whose base_url override points at a proxy in front of the Go
+        route still needs the header, so the provider name is the fallback."""
+        from src.api.request_pipeline import opencode_session_header
+        assert opencode_session_header("opencode", "https://proxy.internal/v1") == {
+            "x-opencode-session": "lcp-opencode"}
+
+    def test_explicit_session_id_wins(self):
+        from src.api.request_pipeline import opencode_session_header
+        assert opencode_session_header(
+            "opencode", "https://opencode.ai/inference/go/v1",
+            session_id="conv_abc123") == {"x-opencode-session": "conv_abc123"}
+
+    def test_other_providers_are_untouched(self):
+        """Negative control — the OpenAI wire stays header-identical off-OpenCode."""
+        from src.api.request_pipeline import opencode_session_header
+        assert opencode_session_header("deepseek", "https://api.deepseek.com/v1") == {}
+        assert opencode_session_header(
+            "commandcode", "https://api.commandcode.ai/provider/v1") == {}
+        assert opencode_session_header(
+            "local-sparks", "http://192.168.1.107:18300/v1") == {}

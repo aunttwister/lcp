@@ -1785,6 +1785,13 @@ class ProviderEndpoints:
 
         start_ts = time.monotonic()
         headers = _browser_headers(api_base)
+        # OpenCode's Go route refuses a request with no x-opencode-session (400
+        # MissingSessionID), and that is a bare 400 with no fault hint — so a
+        # perfectly working Go pair would read as "broken" on the Test button.
+        # Same gate as the chat path and the prober; no other provider's headers
+        # change. Verified live 2026-11-22 on https://opencode.ai/inference/go/v1.
+        from ..api.request_pipeline import opencode_session_header
+        headers.update(opencode_session_header(provider, api_base, purpose="test"))
         if api_key:
             if test_anthropic:
                 headers["x-api-key"] = api_key
@@ -4390,8 +4397,15 @@ class DashboardEndpoints:
         if store is not None:
             api_key = store.get(provider) or None
         from ..api.model_capabilities import probe_vision
+        from ..api.request_pipeline import opencode_session_header
+        # An OpenCode Go destination 400s without the session header, which this
+        # probe would record as an error rather than a modality answer — the same
+        # trap as the Test button (see _serve_provider_test).
         result = probe_vision(api_base, api_key, model, timeout=60,
-                              browser_headers=_browser_headers(api_base))
+                              browser_headers=_browser_headers(
+                                  api_base,
+                                  opencode_session_header(provider, api_base,
+                                                          purpose="vision")))
         vision = result.get("status") == "vision"
         applied = False
         if body.get("apply") and result.get("status") in ("vision", "no_vision"):

@@ -88,6 +88,39 @@ def _needs_session_header(provider_name: str, base_url: str) -> bool:
             or provider_name.startswith("opencode"))
 
 
+def opencode_session_header(provider_name: str, base_url: str,
+                            session_id: str | None = None,
+                            purpose: str = "") -> dict:
+    """Return ``{"x-opencode-session": <id>}`` for an OpenCode destination, else ``{}``.
+
+    OpenCode's Go route (``/inference/go/v1``) refuses any inference request that
+    does not carry this header — HTTP 400 ``{"type":"MissingSessionID",
+    "message":"Request is missing x-opencode-session and cannot be routed
+    efficiently."}`` — so every surface that POSTs to a provider ``api_base``
+    must send it, not just the chat path and the health prober.
+
+    Single home for the rule: the chat path (``forward_request``) and the
+    prober (``health_prober._probe``) implement the same rule inline for
+    historical reasons; every other surface — the provider Test button, the
+    vision probe, anything added later — calls this. The gate is
+    ``_needs_session_header`` (destination host, plus the provider name as the
+    fallback for a step whose ``base_url`` override points at the same route),
+    so no other provider's headers change.
+
+    Values: an explicit ``session_id`` wins (a caller with a real conversation
+    id threads it through); otherwise the destination is OpenCode and the id is
+    ``lcp-<purpose>-<provider>`` — stable per (surface, provider), which is what
+    the vendor asks for (one stable id per conversation) and keeps a probe out
+    of the chat's own routing/cache bucket.
+    """
+    if session_id:
+        return {"x-opencode-session": session_id}
+    if not _needs_session_header(provider_name, base_url):
+        return {}
+    label = f"{purpose}-" if purpose else ""
+    return {"x-opencode-session": f"lcp-{label}{provider_name or 'provider'}"}
+
+
 def _upstream_read_timeout() -> float:
     """Return the upstream relay read timeout (seconds).
 
