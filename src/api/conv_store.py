@@ -163,6 +163,51 @@ def content_hash(role: Optional[str], content: Optional[str],
     return h.hexdigest()
 
 
+#: Names a deferred catalog leaves on a row when its arguments could not be read.
+#: Used only for REPORTING the residue — never to decide whether a row counts.
+_WRAPPER_NAMES = frozenset({"tool_call"})
+
+
+def _unwrap_deferred_tool_args(arguments: Any) -> Optional[str]:
+    """Return the real tool name when *arguments* is a deferred-catalog wrapper call.
+
+    A deferred catalog exposes ONE function (``tool_call``, ``process``, …) whose
+    arguments carry the real calls under ``calls[].name``. Storing that wrapper
+    name loses the tool: every MCP call collapses into ``tool_call`` and per-tool
+    accounting reads zero for that whole era.
+
+    Returns ``None`` when this is not a wrapper (leave the name alone), a
+    comma-joined list when the wrapper carried several calls, and the name
+    unchanged when the arguments cannot be parsed — a parse failure must never
+    drop a row.
+    """
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(arguments, dict):
+        return None
+    calls = arguments.get("calls")
+    if isinstance(calls, str):
+        try:
+            calls = json.loads(calls)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(calls, list):
+        return None
+    names: list[str] = []
+    for c in calls:
+        if not isinstance(c, dict):
+            continue
+        n = c.get("name")
+        if isinstance(n, str) and n and n not in names:
+            names.append(n)
+    if not names:
+        return None
+    return ",".join(names)
+
+
 def _tool_name_lookup(messages: Iterable[dict[str, Any]]) -> dict[str, str]:
     """Map a ``tool_call_id`` to its tool's name from a capture batch.
 
@@ -198,8 +243,21 @@ def _tool_name_lookup(messages: Iterable[dict[str, Any]]) -> dict[str, str]:
                 continue
             fn = tc.get("function") or {}
             name = (fn.get("name") if isinstance(fn, dict) else None) or tc.get("name")
-            if name:
-                lookup[tc_id] = name
+            if not name:
+                continue
+            # A deferred-catalog wrapper is not a tool: the real call lives in
+            # its arguments. Resolve it here so the row (and the map) carries the
+            # tool that actually ran. Unknown/unparseable shapes keep the wrapper
+            # name rather than losing the row.
+            if isinstance(fn, dict):
+                inner = _unwrap_deferred_tool_args(fn.get("arguments"))
+                if inner:
+                    name = inner
+            if isinstance(tc.get("name"), str) and tc.get("name") and tc.get("calls"):
+                inner = _unwrap_deferred_tool_args(tc.get("calls"))
+                if inner:
+                    name = inner
+            lookup[tc_id] = name
     return lookup
 
 
@@ -330,6 +388,152 @@ HISTORY_SORTS = (
     ("messages", "Most messages first", "message_count DESC, conversation_id DESC"),
     ("calls", "Most tool calls first", "tool_call_count DESC, conversation_id DESC"),
 )
+
+
+def tool_usage(params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Per-tool usage over the recorded conversations — LCP's own answer to
+    "which tools ran, how often, and how much did they return into context".
+
+    Reads only LCP's own table. ``result_bytes`` sums ``content_len`` on the tool
+    rows, i.e. what ACTUALLY entered the conversation; the counterfactual (bytes a
+    code-executing tool fetched and discarded) is not visible from here and is
+    reported separately by whoever ran that code.
+
+    Params: ``start``/``end`` (YYYY-MM-DD, inclusive), ``profile``, ``tool``
+    (exact name or a ``prefix*`` glob), ``limit`` (default 200, max 1000).
+    """
+    params = params or {}
+    start = str(params.get("start") or "").strip()
+    end = str(params.get("end") or "").strip()
+    profile_filter = str(params.get("profile") or "").strip()
+    tool_filter = str(params.get("tool") or "").strip()
+    try:
+        limit = min(max(int(params.get("limit") or 200), 1), 1000)
+    except (TypeError, ValueError):
+        limit = 200
+
+    con = _connect()
+    try:
+        # Which side of a row is it? A CALL is recorded on the assistant turn that
+        # requested it (`tool_calls[].function.name`, one row can carry several);
+        # a RESULT is a role='tool' row. They are counted from their own rows so a
+        # call with no stored result still appears (a crashed/failed tool is a fact
+        # worth seeing) and so bytes are never double-counted.
+        where = ["1=1"]
+        args: list[Any] = []
+        if start:
+            where.append("cm.ts >= ?")
+            args.append(start)
+        if end:
+            where.append("cm.ts <= ?")
+            args.append(end + "T23:59:59")
+        if profile_filter:
+            where.append("c.profile = ?")
+            args.append(profile_filter)
+        clause = " AND ".join(where)
+
+        rows = con.execute(
+            "SELECT cm.role AS role, cm.tool_name AS tool_name, "
+            "       cm.content_len AS content_len, cm.conversation_id AS cid, "
+            "       cm.tool_calls AS tool_calls "
+            "FROM conv_messages cm "
+            "LEFT JOIN conversations c ON c.conversation_id = cm.conversation_id "
+            "WHERE " + clause, args).fetchall()
+
+        calls: dict[str, int] = {}
+        bytes_by_tool: dict[str, int] = {}
+        max_by_tool: dict[str, int] = {}
+        convs: dict[str, set] = {}
+        unnamed_results = 0
+        unparsed_wrappers = 0
+
+        for r in rows:
+            role = r["role"]
+            if role == "assistant" and r["tool_calls"]:
+                for name in _names_in_tool_calls(r["tool_calls"]):
+                    if not name:
+                        continue
+                    calls[name] = calls.get(name, 0) + 1
+                    convs.setdefault(name, set()).add(r["cid"])
+                continue
+            if role != "tool":
+                continue
+            name = r["tool_name"]
+            if not name:
+                unnamed_results += 1
+                continue
+            if name in _WRAPPER_NAMES:
+                unparsed_wrappers += 1
+            length = int(r["content_len"] or 0)
+            bytes_by_tool[name] = bytes_by_tool.get(name, 0) + length
+            max_by_tool[name] = max(max_by_tool.get(name, 0), length)
+            convs.setdefault(name, set()).add(r["cid"])
+
+        names = {n for n in list(calls) + list(bytes_by_tool)}
+        if tool_filter:
+            if tool_filter.endswith("*"):
+                prefix = tool_filter[:-1]
+                names = {n for n in names if n.startswith(prefix)}
+            else:
+                names = {n for n in names if n == tool_filter}
+
+        out = []
+        for n in names:
+            c = calls.get(n, 0)
+            b = bytes_by_tool.get(n, 0)
+            out.append({
+                "tool": n,
+                "calls": c,
+                "result_bytes": b,
+                "avg_bytes": (b // c) if c else b,
+                "max_bytes": max_by_tool.get(n, 0),
+                "conversations": len(convs.get(n, ())),
+            })
+        out.sort(key=lambda d: (d["calls"], d["result_bytes"]), reverse=True)
+        return {
+            "tools": out[:limit],
+            "tool_count": len(out),
+            # Reported, never swallowed: a count that silently shrinks is worse
+            # than one that admits its gap.
+            "unnamed_result_rows": unnamed_results,
+            "wrapper_named_result_rows": unparsed_wrappers,
+            "window": {"start": start or None, "end": end or None,
+                       "profile": profile_filter or None},
+        }
+    finally:
+        con.close()
+
+
+def _names_in_tool_calls(tool_calls: Any) -> list[str]:
+    """Every tool name a stored ``tool_calls`` payload actually requested.
+
+    Handles the three shapes in the store: a JSON string (the normal case), an
+    already-parsed list, and a deferred-catalog wrapper whose real names live in
+    ``arguments.calls[].name``. Unparseable entries are skipped — this is a read
+    path and must never raise on old rows.
+    """
+    if isinstance(tool_calls, str):
+        try:
+            tool_calls = json.loads(tool_calls)
+        except (ValueError, TypeError):
+            return []
+    if not isinstance(tool_calls, list):
+        return []
+    names: list[str] = []
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") or {}
+        base = (fn.get("name") if isinstance(fn, dict) else None) or tc.get("name")
+        if not base:
+            continue
+        inner = _unwrap_deferred_tool_args(fn.get("arguments") if isinstance(fn, dict) else None)
+        if not inner and tc.get("calls"):
+            inner = _unwrap_deferred_tool_args(tc.get("calls"))
+        for n in (inner.split(",") if inner else [base]):
+            if n:
+                names.append(n)
+    return names
 
 
 def list_conversations(params: Optional[dict[str, Any]] = None) -> dict[str, Any]:

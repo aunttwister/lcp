@@ -3658,6 +3658,26 @@ class UsageEndpoints:
     end_headers: Any
     wfile: Any
 
+    def _serve_usage_tools_api(self):
+        """Per-tool usage: calls, bytes returned into the conversation, conversations.
+
+        Reads LCP's own message store through ``conv_store.tool_usage`` — no
+        external metrics service is involved, by design. Accepts
+        ``?start=YYYY-MM-DD&end=YYYY-MM-DD&profile=&tool=&limit=``.
+        """
+        from src.api import conv_store
+
+        qs = parse_qs(urlparse(self.path).query)
+        params = {k: qs.get(k, [""])[0] for k in ("start", "end", "profile", "tool", "limit")}
+        try:
+            payload = conv_store.tool_usage(params)
+        except Exception as exc:  # a read endpoint must never 500 the page
+            logger.warning("tool_usage query failed: %s", exc)
+            payload = {"tools": [], "tool_count": 0,
+                       "unnamed_result_rows": 0, "wrapper_named_result_rows": 0,
+                       "error": str(exc)}
+        self._send_json(payload)
+
     def _serve_usage_stats_api(self):
         """Return per-provider aggregates: daily spending, by-model, by-profile.
 
